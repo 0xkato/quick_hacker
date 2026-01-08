@@ -1,9 +1,12 @@
 """Anthropic provider implementation."""
 
 import json
+import logging
 from typing import AsyncGenerator, Optional
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, APIError, AuthenticationError, RateLimitError, APIConnectionError
+
+logger = logging.getLogger(__name__)
 
 from config import settings
 from models.schemas import ProviderConfig
@@ -63,9 +66,27 @@ class AnthropicProvider(BaseProvider):
         if system_prompt:
             kwargs["system"] = system_prompt
 
-        response = await self.client.messages.create(**kwargs)
-
-        return response.content[0].text if response.content else ""
+        try:
+            response = await self.client.messages.create(**kwargs)
+            return response.content[0].text if response.content else ""
+        except AuthenticationError as e:
+            logger.error(f"Anthropic authentication failed: {e}")
+            raise ValueError(
+                "Invalid Anthropic API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"Anthropic rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"Anthropic connection error: {e}")
+            raise ValueError(
+                "Failed to connect to Anthropic API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"Anthropic API error: {e}")
+            raise ValueError(f"Anthropic API error: {e.message}") from e
 
     async def generate_with_thinking(
         self,
@@ -112,7 +133,26 @@ class AnthropicProvider(BaseProvider):
             if self.temperature > 0:
                 kwargs["temperature"] = self.temperature
 
-        response = await self.client.messages.create(**kwargs)
+        try:
+            response = await self.client.messages.create(**kwargs)
+        except AuthenticationError as e:
+            logger.error(f"Anthropic authentication failed: {e}")
+            raise ValueError(
+                "Invalid Anthropic API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"Anthropic rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"Anthropic connection error: {e}")
+            raise ValueError(
+                "Failed to connect to Anthropic API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"Anthropic API error: {e}")
+            raise ValueError(f"Anthropic API error: {e.message}") from e
 
         # Extract thinking and text from response
         thinking_text = None
@@ -147,11 +187,30 @@ class AnthropicProvider(BaseProvider):
         if system_prompt:
             kwargs["system"] = system_prompt
 
-        async with self.client.messages.stream(**kwargs) as stream:
-            async for text in stream.text_stream:
-                yield StreamChunk(content=text, is_complete=False)
+        try:
+            async with self.client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    yield StreamChunk(content=text, is_complete=False)
 
-            yield StreamChunk(content="", is_complete=True)
+                yield StreamChunk(content="", is_complete=True)
+        except AuthenticationError as e:
+            logger.error(f"Anthropic authentication failed: {e}")
+            raise ValueError(
+                "Invalid Anthropic API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"Anthropic rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"Anthropic connection error: {e}")
+            raise ValueError(
+                "Failed to connect to Anthropic API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"Anthropic API error: {e}")
+            raise ValueError(f"Anthropic API error: {e.message}") from e
 
     async def chat_with_tools(
         self,
@@ -236,7 +295,26 @@ class AnthropicProvider(BaseProvider):
         if system_prompt:
             kwargs["system"] = system_prompt
 
-        response = await self.client.messages.create(**kwargs)
+        try:
+            response = await self.client.messages.create(**kwargs)
+        except AuthenticationError as e:
+            logger.error(f"Anthropic authentication failed: {e}")
+            raise ValueError(
+                "Invalid Anthropic API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"Anthropic rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"Anthropic connection error: {e}")
+            raise ValueError(
+                "Failed to connect to Anthropic API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"Anthropic API error: {e}")
+            raise ValueError(f"Anthropic API error: {e.message}") from e
 
         result = {
             "content": "",

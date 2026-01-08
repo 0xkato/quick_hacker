@@ -28,10 +28,10 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OLLAMA_BASE_URL=http://ollama:11434
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://quickhack:quickhack_dev@postgres:5432/quickhack
     depends_on:
-      - ollama
-      # Redis is optional - remove from depends_on if not needed
-      # - redis
+      - redis
+      - postgres
     networks:
       - quick_hack
     restart: unless-stopped
@@ -104,6 +104,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # ===================
+  # PostgreSQL (User Database)
+  # ===================
+  postgres:
+    image: postgres:16-alpine
+    container_name: quick_hack_postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: quickhack
+      POSTGRES_PASSWORD: quickhack_dev
+      POSTGRES_DB: quickhack
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quickhack"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - quick_hack
+
 volumes:
   repos_data:
     driver: local
@@ -112,6 +135,8 @@ volumes:
   ollama_data:
     driver: local
   redis_data:
+    driver: local
+  postgres_data:
     driver: local
 
 networks:

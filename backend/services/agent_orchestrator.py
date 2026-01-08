@@ -240,9 +240,31 @@ class AgentOrchestrator:
         return agent.to_schema()
 
     async def cancel_agent(self, agent_id: str) -> Agent:
-        """Cancel an agent."""
+        """Cancel an agent (in-memory or persisted)."""
         agent = self._agents.get(agent_id)
+
+        # If not in memory, check persisted state
         if not agent:
+            snapshot = persistence_service.load_agent_state(agent_id)
+            if snapshot:
+                # Update persisted state to cancelled
+                snapshot.status = AgentStatus.CANCELLED.value
+                persistence_service.save_agent_state(snapshot)
+                # Return a schema representation
+                return Agent(
+                    id=snapshot.agent_id,
+                    repo_id=snapshot.repo_id,
+                    name=f"Cancelled: {snapshot.agent_type}",
+                    agent_type=snapshot.agent_type,
+                    status=AgentStatus.CANCELLED,
+                    provider_config=ProviderConfig(
+                        provider=snapshot.provider_config.get("provider", "openai") if snapshot.provider_config else "openai",
+                        model=snapshot.provider_config.get("model", "unknown") if snapshot.provider_config else "unknown",
+                    ),
+                    created_at=snapshot.created_at,
+                    files_analyzed=snapshot.files_analyzed,
+                    findings_count=len(snapshot.findings) if snapshot.findings else 0,
+                )
             raise ValueError(f"Agent not found: {agent_id}")
 
         if agent.status in [AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED]:

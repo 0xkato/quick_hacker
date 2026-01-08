@@ -29,13 +29,18 @@ class AuthService:
             settings.jwt_secret_key.encode()
         ).digest()
 
+    def _truncate_password(self, password: str) -> str:
+        """Truncate password to 72 bytes (bcrypt limit)."""
+        # Bcrypt only uses the first 72 bytes of a password
+        return password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Verify a password against its hash."""
-        return pwd_context.verify(plain_password, hashed_password)
+        return pwd_context.verify(self._truncate_password(plain_password), hashed_password)
 
     def hash_password(self, password: str) -> str:
-        """Hash a password."""
-        return pwd_context.hash(password)
+        """Hash a password (truncated to 72 bytes for bcrypt)."""
+        return pwd_context.hash(self._truncate_password(password))
 
     def create_access_token(
         self,

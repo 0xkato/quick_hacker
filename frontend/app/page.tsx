@@ -27,8 +27,10 @@ import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
 import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualization';
 import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
 import { ReportModal } from '@/components/ReportPanel';
+import { AuthModal } from '@/components/Auth';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { files, agents as agentsApi, projects as projectsApi, initializeAuth, type Project } from '@/lib/api';
+import { useAuth } from '@/hooks/useAuth';
+import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, initializeAuth, setAuthFunctions, type Project } from '@/lib/api';
 import type {
   FileNode,
   FileContent,
@@ -36,6 +38,7 @@ import type {
   Finding,
   AgentProgress,
   InvestigationFlow,
+  CallTreeRoute,
   LLMInteraction,
   ToolDetail,
   InvestigationReport,
@@ -58,6 +61,12 @@ export default function Home() {
   const [agentProgress, setAgentProgress] = useState<Record<string, AgentProgress>>({});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentFlow, setAgentFlow] = useState<InvestigationFlow | null>(null);
+  const [diagramMode, setDiagramMode] = useState<'investigation' | 'calltree'>('investigation');
+  const [callTreeRoutes, setCallTreeRoutes] = useState<CallTreeRoute[]>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [callTreeFlow, setCallTreeFlow] = useState<InvestigationFlow | null>(null);
+  const [isCallTreeRoutesLoading, setIsCallTreeRoutesLoading] = useState(false);
+  const [isCallTreeLoading, setIsCallTreeLoading] = useState(false);
 
   // Observability state
   const [llmInteractions, setLlmInteractions] = useState<LLMInteraction[]>([]);
@@ -73,6 +82,15 @@ export default function Home() {
   const [showPanel, setShowPanel] = useState(true);
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Auth state
+  const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
+
+  // Set up API auth functions
+  useEffect(() => {
+    setAuthFunctions(getAccessToken, refreshToken);
+  }, [getAccessToken, refreshToken]);
 
   // WebSocket - only connect after auth is ready
   const { isConnected } = useWebSocket({
@@ -193,6 +211,79 @@ export default function Home() {
       }
     };
   }, [selectedAgentId, agents]);
+
+  // Load call-tree routes when enabled
+  useEffect(() => {
+    const projectId = currentProject?.id;
+    if (!projectId || diagramMode !== 'calltree') {
+      setCallTreeRoutes([]);
+      setSelectedRouteId(null);
+      setCallTreeFlow(null);
+      setIsCallTreeRoutesLoading(false);
+      setIsCallTreeLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsCallTreeRoutesLoading(true);
+
+    (async () => {
+      try {
+        const routes = await calltreeApi.listRoutes(projectId);
+        if (!cancelled) {
+          setCallTreeRoutes(routes);
+          setSelectedRouteId((prev) => {
+            if (!prev) return prev;
+            if (routes.some((r) => r.id === prev)) return prev;
+            setCallTreeFlow(null);
+            return null;
+          });
+        }
+      } catch (err) {
+        console.error('Failed to load call-tree routes:', err);
+        if (!cancelled) setCallTreeRoutes([]);
+      } finally {
+        if (!cancelled) setIsCallTreeRoutesLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject?.id, diagramMode]);
+
+  // Build call tree when a route is selected
+  useEffect(() => {
+    const projectId = currentProject?.id;
+    if (!projectId || diagramMode !== 'calltree' || !selectedRouteId) {
+      setCallTreeFlow(null);
+      setIsCallTreeLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsCallTreeLoading(true);
+
+    (async () => {
+      try {
+        const flow = await calltreeApi.getTree(projectId, selectedRouteId, {
+          maxDepth: 6,
+          maxNodes: 250,
+          includeExternal: true,
+        });
+        if (!cancelled) setCallTreeFlow(flow);
+      } catch (err) {
+        console.error('Failed to build call tree:', err);
+        if (!cancelled) setCallTreeFlow(null);
+      } finally {
+        if (!cancelled) setIsCallTreeLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject?.id, diagramMode, selectedRouteId]);
 
   // Initialize auth and check project status on mount
   useEffect(() => {
@@ -373,14 +464,36 @@ export default function Home() {
             )}
           </div>
         </div>
-        <button
-          onClick={handleProjectExit}
-          className="btn btn-secondary btn-sm flex items-center gap-1"
-          title="Exit project"
-        >
-          <LogOut className="w-3 h-3" />
-          Exit
-        </button>
+        <div className="flex items-center gap-3">
+          {isAuthenticated ? (
+            <div className="flex items-center gap-4">
+              <span className="text-gray-400">
+                {user?.username}
+              </span>
+              <button
+                onClick={logout}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded"
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium"
+            >
+              Login
+            </button>
+          )}
+          <button
+            onClick={handleProjectExit}
+            className="btn btn-secondary btn-sm flex items-center gap-1"
+            title="Exit project"
+          >
+            <LogOut className="w-3 h-3" />
+            Exit
+          </button>
+        </div>
       </header>
 
       {/* Main layout */}
@@ -522,25 +635,64 @@ export default function Home() {
           {/* Flow visualization view */}
           {activeView === 'flow' && (
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Agent selector for flow */}
+              {/* Diagram selector */}
               <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
                 <Network className="w-4 h-4 text-vsc-text-muted" />
-                <span className="text-vsc-sm text-vsc-text-muted">Investigation Flow</span>
                 <select
-                  value={selectedAgentId || ''}
-                  onChange={(e) => setSelectedAgentId(e.target.value || null)}
-                  className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+                  value={diagramMode}
+                  onChange={(e) => setDiagramMode(e.target.value as 'investigation' | 'calltree')}
+                  className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
                 >
-                  <option value="">Select agent...</option>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name} ({agent.status})
-                    </option>
-                  ))}
+                  <option value="investigation">Investigation Flow</option>
+                  <option value="calltree">Call Tree (FastAPI)</option>
                 </select>
+
+                {diagramMode === 'investigation' ? (
+                  <select
+                    value={selectedAgentId || ''}
+                    onChange={(e) => setSelectedAgentId(e.target.value || null)}
+                    className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+                  >
+                    <option value="">Select agent...</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name} ({agent.status})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={selectedRouteId || ''}
+                    onChange={(e) => setSelectedRouteId(e.target.value || null)}
+                    className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm min-w-[320px]"
+                    disabled={isCallTreeRoutesLoading}
+                  >
+                    <option value="">
+                      {isCallTreeRoutesLoading
+                        ? 'Loading routes...'
+                        : callTreeRoutes.length === 0
+                          ? 'No FastAPI routes found'
+                          : 'Select route...'}
+                    </option>
+                    {callTreeRoutes.map((route) => (
+                      <option key={route.id} value={route.id}>
+                        {(route.label || `${route.method} ${route.path}`)} ({route.handler})
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="flex-1">
-                <FlowVisualization agentId={selectedAgentId} flow={agentFlow} />
+                {diagramMode === 'investigation' ? (
+                  <FlowVisualization agentId={selectedAgentId} flow={agentFlow} />
+                ) : (
+                  <FlowVisualization
+                    agentId={selectedRouteId}
+                    flow={callTreeFlow}
+                    emptySelectionText="Select a route to view call tree"
+                    emptyFlowText={isCallTreeLoading ? 'Building call tree...' : 'No call tree data'}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -714,6 +866,12 @@ export default function Home() {
           onDownload={handleDownloadReport}
         />
       )}
+
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+      />
     </div>
   );
 }

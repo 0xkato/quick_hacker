@@ -25,6 +25,12 @@ class AnthropicProvider(BaseProvider):
         "claude-3-haiku-20240307",
     ]
 
+    # Models that support extended thinking
+    THINKING_MODELS = {
+        "claude-opus-4-5-20251101",
+        "claude-sonnet-4-20250514",
+    }
+
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
         # Sanitize API key to remove invisible Unicode characters
@@ -60,6 +66,66 @@ class AnthropicProvider(BaseProvider):
         response = await self.client.messages.create(**kwargs)
 
         return response.content[0].text if response.content else ""
+
+    async def generate_with_thinking(
+        self,
+        messages: list[Message],
+        system_prompt: Optional[str] = None,
+        thinking_budget: int = 10000,
+    ) -> tuple[str, Optional[str]]:
+        """
+        Generate a completion with extended thinking.
+
+        Args:
+            messages: Conversation messages
+            system_prompt: Optional system prompt
+            thinking_budget: Token budget for thinking (default 10000)
+
+        Returns:
+            Tuple of (response_text, thinking_text)
+            thinking_text is None if model doesn't support extended thinking
+        """
+        # Check if model supports extended thinking
+        supports_thinking = self.model in self.THINKING_MODELS
+
+        # Convert messages
+        anthropic_messages = self._convert_messages(messages)
+
+        kwargs = {
+            "model": self.model,
+            "messages": anthropic_messages,
+            "max_tokens": self.max_tokens,
+        }
+
+        if system_prompt:
+            kwargs["system"] = system_prompt
+
+        if supports_thinking:
+            # Use extended thinking parameters
+            # Extended thinking requires temperature=1
+            kwargs["temperature"] = 1.0
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget,
+            }
+        else:
+            if self.temperature > 0:
+                kwargs["temperature"] = self.temperature
+
+        response = await self.client.messages.create(**kwargs)
+
+        # Extract thinking and text from response
+        thinking_text = None
+        response_text = ""
+
+        for block in response.content:
+            if hasattr(block, 'type'):
+                if block.type == "thinking":
+                    thinking_text = block.thinking
+                elif block.type == "text":
+                    response_text = block.text
+
+        return response_text, thinking_text
 
     async def generate_stream(
         self,

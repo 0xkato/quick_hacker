@@ -245,3 +245,38 @@ async def delete_api_key(
             detail="API key not found"
         )
     return {"status": "ok"}
+
+
+@router.post("/api-keys/validate")
+async def validate_api_key(
+    request: APIKeyRequest,
+    user: User = Depends(get_current_user),
+):
+    """Validate an API key by making an actual API call."""
+    from providers import get_provider
+    from providers.base_provider import Message
+    from models.schemas import ProviderConfig, ProviderType
+
+    # Default models for validation (lightweight options)
+    default_models = {
+        "anthropic": "claude-3-5-haiku-20241022",
+        "openai": "gpt-4o-mini",
+        "ollama": "llama3.2:3b",
+    }
+
+    config = ProviderConfig(
+        provider=ProviderType(request.provider),
+        model=default_models[request.provider],
+        api_key=request.api_key,
+        max_tokens=1,  # Minimal response to reduce cost
+    )
+
+    try:
+        provider = get_provider(config)
+        # Make actual API call to validate the key
+        await provider.generate([Message(role="user", content="Hi")])
+        return {"valid": True, "provider": request.provider}
+    except ValueError as e:
+        return {"valid": False, "provider": request.provider, "error": str(e)}
+    except Exception as e:
+        return {"valid": False, "provider": request.provider, "error": f"Validation failed: {e}"}

@@ -520,7 +520,23 @@ export default function Home() {
           >
             <Bug className="w-6 h-6" />
             {runningAgents > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-vsc-success rounded-full" />
+              <span
+                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-vsc-accent scan-indicator"
+              />
+            )}
+            {runningAgents === 0 && agents.some(a => a.status === 'paused') && (
+              <span
+                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-vsc-accent scan-indicator-paused"
+              />
+            )}
+            {runningAgents === 0 && agents.some(a => a.status === 'completed' && a.findings_count > 0) &&
+             !agents.some(a => a.status === 'running' || a.status === 'paused') && (
+              <span
+                className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${
+                  findings.some(f => f.severity === 'critical') ? 'bg-sev-critical' :
+                  findings.some(f => f.severity === 'high') ? 'bg-sev-high' : 'bg-vsc-accent'
+                }`}
+              />
             )}
           </button>
           <button

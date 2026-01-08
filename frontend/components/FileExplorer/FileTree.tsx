@@ -3,7 +3,6 @@
 import { useState, useCallback } from 'react';
 import {
   ChevronRight,
-  ChevronDown,
   File,
   Folder,
   FolderOpen,
@@ -86,12 +85,14 @@ function TreeNode({
       >
         {node.is_dir ? (
           <>
-            <span className="text-vsc-text-muted">
-              {isExpanded ? (
-                <ChevronDown className="w-4 h-4" />
-              ) : (
-                <ChevronRight className="w-4 h-4" />
-              )}
+            <span
+              className="text-vsc-text-muted"
+              style={{
+                transition: 'transform 150ms ease-out',
+                transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)'
+              }}
+            >
+              <ChevronRight className="w-4 h-4" />
             </span>
             <span className="text-[#dcb67a]">
               {isExpanded ? (

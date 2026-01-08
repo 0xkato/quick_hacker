@@ -92,18 +92,24 @@ body {
   background: var(--vsc-selection);
 }
 
-/* File tree styles */
+/* File tree styles - softer */
 .file-tree-item {
-  @apply flex items-center gap-1.5 px-2 py-0.5 cursor-pointer text-vsc-sm;
-  border-radius: 0;
+  @apply flex items-center gap-1.5 py-0.5 cursor-pointer text-vsc-sm;
+  padding-left: 12px;
+  padding-right: 12px;
+  margin: 0 4px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition-default);
 }
 
 .file-tree-item:hover {
-  background: var(--vsc-hover);
+  background: var(--bg-hover-soft);
 }
 
 .file-tree-item.selected {
   background: var(--vsc-selection);
+  border-left: 2px solid var(--vsc-accent);
+  padding-left: 10px;
 }
 
 /* Severity badges - VSCode style */

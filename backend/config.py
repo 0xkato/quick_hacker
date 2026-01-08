@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Optional
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -11,6 +12,15 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "quick_hack"
     debug: bool = True
+
+    # JWT Auth
+    jwt_secret_key: str = Field(
+        default="CHANGE_ME_IN_PRODUCTION_USE_RANDOM_64_CHAR_STRING",
+        description="Secret key for JWT encoding"
+    )
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60 * 24  # 24 hours
+    jwt_refresh_token_expire_days: int = 30
 
     # Paths
     repos_dir: Path = Path("./repos")

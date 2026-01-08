@@ -4,7 +4,10 @@ import asyncio
 from datetime import datetime
 from typing import Callable, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from config import settings
+from middleware.auth import AuthContext, get_user_api_key_for_provider
 from models.schemas import (
     Agent,
     AgentCreateRequest,
@@ -73,8 +76,13 @@ class AgentOrchestrator:
             except Exception as e:
                 print(f"Callback error: {e}")
 
-    async def create_agent(self, request: AgentCreateRequest) -> Agent:
-        """Create a new agent."""
+    async def create_agent(
+        self,
+        request: AgentCreateRequest,
+        auth_context: AuthContext,
+        db: AsyncSession
+    ) -> Agent:
+        """Create a new agent instance."""
         # Get repo path - try project ID first, then fall back to repo ID
         repo_path = project_service.get_project_repo_path(request.repo_id)
         if not repo_path:
@@ -94,26 +102,38 @@ class AgentOrchestrator:
                 f"Maximum concurrent agents ({settings.max_concurrent_agents}) reached"
             )
 
-        # Resolve provider config - fill in API key from settings if not provided
+        # Resolve API key from user's stored keys
         provider_config = request.provider_config
         if provider_config and not provider_config.api_key:
-            app_settings = await settings_service.get_settings()
-            provider_name = provider_config.provider.value if hasattr(provider_config.provider, 'value') else str(provider_config.provider)
-            provider_settings = app_settings.providers.get(provider_name)
+            provider_name = (
+                provider_config.provider.value
+                if hasattr(provider_config.provider, 'value')
+                else str(provider_config.provider)
+            )
 
-            if provider_settings and provider_settings.api_key:
-                # Create a new config with the API key from settings
+            # Get API key from user's stored keys
+            api_key = await get_user_api_key_for_provider(
+                provider_name,
+                auth_context,
+                db
+            )
+
+            if not api_key and provider_name != "ollama":
+                raise ValueError(
+                    f"No {provider_name.capitalize()} API key found. "
+                    f"Please add your API key in Settings."
+                )
+
+            if api_key:
                 request.provider_config = ProviderConfig(
                     provider=provider_config.provider,
-                    model=provider_config.model or provider_settings.default_model,
-                    api_key=provider_settings.api_key,
-                    base_url=provider_config.base_url or provider_settings.base_url,
+                    model=provider_config.model,
+                    api_key=api_key,
+                    base_url=provider_config.base_url,
                     temperature=provider_config.temperature,
                     max_tokens=provider_config.max_tokens,
                 )
-                print(f"[Orchestrator] Using API key from settings for {provider_name}")
-            else:
-                raise ValueError(f"{provider_name.capitalize()} API key not provided and not found in settings")
+                print(f"[Orchestrator] Using API key for {provider_name}")
 
         # Create agent instance
         agent_class = AGENT_CLASSES.get(request.agent_type)

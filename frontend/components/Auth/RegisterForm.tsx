@@ -80,6 +80,9 @@ export function RegisterForm({ onSwitchToLogin, onSuccess }: RegisterFormProps) 
           onChange={(e) => setEmail(e.target.value)}
           className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500"
           required
+          placeholder="you@example.com"
+          pattern=".+@.+\\..+"
+          title="Use a full email like you@example.com"
         />
       </div>
 

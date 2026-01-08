@@ -27,6 +27,47 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const ACCESS_TOKEN_KEY = 'quick_hack_access_token';
 const REFRESH_TOKEN_KEY = 'quick_hack_refresh_token';
 
+type FastAPIValidationErrorDetail = {
+  loc?: Array<string | number>;
+  msg?: string;
+  type?: string;
+};
+
+type FastAPIErrorResponse = {
+  detail?: string | FastAPIValidationErrorDetail[];
+};
+
+async function getErrorMessage(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as FastAPIErrorResponse;
+    const { detail } = body;
+
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => {
+          const loc = Array.isArray(item.loc)
+            ? item.loc.filter((p) => p !== 'body').join('.')
+            : '';
+          const msg = item.msg || 'Invalid value';
+          return loc ? `${loc}: ${msg}` : msg;
+        })
+        .filter(Boolean);
+
+      if (messages.length > 0) {
+        return messages.join('\n');
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return response.statusText || 'Request failed';
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -95,8 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Login failed');
+      throw new Error(await getErrorMessage(response));
     }
 
     const data = await response.json();
@@ -113,8 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Registration failed');
+      throw new Error(await getErrorMessage(response));
     }
 
     const data = await response.json();

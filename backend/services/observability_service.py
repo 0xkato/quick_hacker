@@ -44,22 +44,37 @@ def format_messages_summary(messages: list[dict]) -> str:
 
 def format_tool_args_summary(tool_name: str, args: dict) -> str:
     """Create a human-readable summary of tool arguments."""
-    if tool_name == "read_file":
-        return f"Read: {args.get('file_path', 'unknown')}"
-    elif tool_name == "list_files":
-        return f"List: {args.get('path', '.')}"
-    elif tool_name == "search_code":
+    # Normalize tool name (some providers use different naming)
+    name_lower = tool_name.lower()
+
+    if name_lower in ("read_file", "readfile", "read"):
+        # Check multiple possible key names
+        path = args.get('path') or args.get('file_path') or args.get('file') or 'unknown'
+        start = args.get('start_line')
+        end = args.get('end_line')
+        if start and end:
+            return f"Read: {path}:{start}-{end}"
+        return f"Read: {path}"
+    elif name_lower in ("list_files", "listfiles", "list_directory"):
+        return f"List: {args.get('path', args.get('directory', '.'))}"
+    elif name_lower in ("search_code", "searchcode", "search"):
         return f"Search: {args.get('pattern', args.get('query', 'unknown'))}"
-    elif tool_name == "grep_search":
-        return f"Grep: {args.get('pattern', 'unknown')}"
-    elif tool_name == "find_definition":
-        return f"Find def: {args.get('symbol', 'unknown')}"
-    elif tool_name == "report_finding":
+    elif name_lower in ("grep_search", "grep", "ripgrep"):
+        return f"Grep: {args.get('pattern', args.get('query', 'unknown'))}"
+    elif name_lower in ("find_definition", "finddefinition", "goto_definition"):
+        return f"Find def: {args.get('symbol', args.get('name', 'unknown'))}"
+    elif name_lower in ("report_finding", "reportfinding", "create_finding"):
         severity = args.get("severity", "unknown")
         title = args.get("title", "unknown")
         return f"Finding ({severity}): {truncate_for_summary(title, 50)}"
+    elif name_lower in ("write_file", "writefile", "write"):
+        path = args.get('path') or args.get('file_path') or args.get('file') or 'unknown'
+        return f"Write: {path}"
+    elif name_lower in ("execute", "run_command", "shell"):
+        cmd = args.get('command', args.get('cmd', 'unknown'))
+        return f"Execute: {truncate_for_summary(cmd, 50)}"
     else:
-        # Generic summary
+        # Generic summary - show first few args
         arg_strs = [f"{k}={truncate_for_summary(str(v), 30)}" for k, v in list(args.items())[:3]]
         return f"{tool_name}({', '.join(arg_strs)})"
 

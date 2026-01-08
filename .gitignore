@@ -35,5 +35,11 @@ coverage/
 .coverage
 htmlcov/
 
+# Runtime data
+backend/data/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
 # Worktrees
 .worktrees/

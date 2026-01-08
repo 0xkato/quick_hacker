@@ -267,6 +267,10 @@ AGENT_TOOLS = [
 ]
 
 
+# Build tool definition lookup for validation
+TOOL_DEFINITIONS = {tool["name"]: tool for tool in AGENT_TOOLS}
+
+
 class ToolExecutor:
     """Executes tools for the security research agent."""
 
@@ -290,6 +294,19 @@ class ToolExecutor:
             method = getattr(self, f"_tool_{tool_name}", None)
             if not method:
                 return ToolResult(False, None, f"Unknown tool: {tool_name}")
+
+            # Validate required arguments
+            tool_def = TOOL_DEFINITIONS.get(tool_name)
+            if tool_def:
+                required = tool_def.get("parameters", {}).get("required", [])
+                missing = [arg for arg in required if arg not in arguments]
+                if missing:
+                    return ToolResult(
+                        False, None,
+                        f"Missing required argument(s): {', '.join(missing)}. "
+                        f"Tool {tool_name} requires: {', '.join(required)}"
+                    )
+
             return await method(**arguments)
         except Exception as e:
             return ToolResult(False, None, str(e))

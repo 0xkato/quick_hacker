@@ -132,6 +132,10 @@ MEMORY_PATTERNS = {
         r"printf\s*\(\s*\w+\s*\)",  # printf with variable as format
         r"sprintf\s*\([^,]+,\s*\w+\s*\)",
     ],
+    "integer_overflow": [
+        r"\w+\s*\*\s*\w+",  # Multiplication (heuristic)
+        r"\w+\s*\+\s*\w+\s*<\s*\w+",  # Addition comparison pattern
+    ],
 }
 
 # Input vector patterns for finding user input sources
@@ -334,6 +338,7 @@ class SecurityDetectors:
             "memory_leak": "medium",
             "null_pointer": "high",
             "format_string": "high",
+            "integer_overflow": "high",
         }
 
         for file_path in self._get_all_files():
@@ -359,6 +364,7 @@ class SecurityDetectors:
                                 "line": line_num,
                                 "code": line.strip()[:100],
                                 "severity": severity_map.get(issue_type, "medium"),
+                                "pattern": pattern,
                             })
                             break  # Only report first pattern match per issue type
                     else:

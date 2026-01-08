@@ -178,7 +178,11 @@ export type FlowNodeType =
   | 'finding'
   | 'code_read'
   | 'search'
-  | 'scan';
+  | 'scan'
+  | 'entry_point'
+  | 'function'
+  | 'external'
+  | 'cycle';
 
 export type FlowNodeStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -204,6 +208,19 @@ export interface InvestigationFlow {
   nodes: FlowNode[];
   edges: FlowEdge[];
   current_node_id?: string;
+}
+
+// === Call Tree ===
+
+export interface CallTreeRoute {
+  id: string;
+  method: string;
+  path: string;
+  handler: string;
+  file: string;
+  line?: number;
+  framework?: string;
+  label?: string;
 }
 
 // === Observability ===

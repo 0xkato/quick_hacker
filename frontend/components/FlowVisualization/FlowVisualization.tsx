@@ -25,6 +25,7 @@ import {
   XCircle,
   Brain,
   Scan,
+  Network,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
@@ -61,6 +62,8 @@ interface InvestigationFlow {
 interface FlowVisualizationProps {
   agentId: string | null;
   flow: InvestigationFlow | null;
+  emptySelectionText?: string;
+  emptyFlowText?: string;
 }
 
 // Get border color based on confidence score
@@ -90,6 +93,10 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
     code_read: <FileText className="w-4 h-4" />,
     search: <Search className="w-4 h-4" />,
     scan: <Scan className="w-4 h-4" />,
+    entry_point: <Network className="w-4 h-4" />,
+    function: <Code className="w-4 h-4" />,
+    external: <FileText className="w-4 h-4" />,
+    cycle: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
   };
 
   const statusIcons = {
@@ -162,7 +169,12 @@ const nodeTypes = {
   flowNode: FlowNodeComponent,
 };
 
-export function FlowVisualization({ agentId, flow }: FlowVisualizationProps) {
+export function FlowVisualization({
+  agentId,
+  flow,
+  emptySelectionText,
+  emptyFlowText,
+}: FlowVisualizationProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNode, setSelectedNode] = useState<FlowNode | null>(null);
@@ -251,7 +263,7 @@ export function FlowVisualization({ agentId, flow }: FlowVisualizationProps) {
       <div className="h-full flex items-center justify-center text-vsc-text-muted">
         <div className="text-center">
           <Brain className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p>Select an agent to view investigation flow</p>
+          <p>{emptySelectionText || 'Select an agent to view investigation flow'}</p>
         </div>
       </div>
     );
@@ -262,7 +274,7 @@ export function FlowVisualization({ agentId, flow }: FlowVisualizationProps) {
       <div className="h-full flex items-center justify-center text-vsc-text-muted">
         <div className="text-center">
           <Loader2 className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p>Waiting for investigation to start...</p>
+          <p>{emptyFlowText || 'Waiting for investigation to start...'}</p>
         </div>
       </div>
     );
@@ -319,6 +331,14 @@ export function FlowVisualization({ agentId, flow }: FlowVisualizationProps) {
       <div className="absolute bottom-4 left-4 bg-vsc-sidebar border border-vsc-border rounded-lg p-3 text-vsc-xs">
         <div className="font-medium mb-2 text-vsc-text-muted">Node Types</div>
         <div className="space-y-1.5 text-vsc-text">
+          <div className="flex items-center gap-2">
+            <Network className="w-3 h-3 text-vsc-text-muted" />
+            <span>Entry Point</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Code className="w-3 h-3 text-vsc-text-muted" />
+            <span>Function</span>
+          </div>
           <div className="flex items-center gap-2">
             <MessageSquare className="w-3 h-3 text-vsc-text-muted" />
             <span>User Input</span>

@@ -36,6 +36,10 @@ export function FlowNodePopover({ node, position, onClose }: FlowNodePopoverProp
     code_read: 'Code Read',
     search: 'Search',
     scan: 'Scan',
+    entry_point: 'Entry Point',
+    function: 'Function',
+    external: 'External Call',
+    cycle: 'Cycle',
   };
 
   const statusColors: Record<FlowNode['status'], string> = {

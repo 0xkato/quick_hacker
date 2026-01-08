@@ -201,6 +201,12 @@ class WSMessageType(str, Enum):
     TOOL_DETAIL = "tool_detail"  # Detailed tool execution info
     STATE_SYNC = "state_sync"  # Full state snapshot on pause/stop
     REPORT_READY = "report_ready"  # Report generated, ready for download
+    # Ultrathink events
+    ULTRATHINK_CASCADE_START = "ultrathink_cascade_start"
+    ULTRATHINK_GATE_START = "ultrathink_gate_start"
+    ULTRATHINK_GATE_COMPLETE = "ultrathink_gate_complete"
+    ULTRATHINK_THINKING_UPDATE = "ultrathink_thinking_update"
+    ULTRATHINK_CASCADE_COMPLETE = "ultrathink_cascade_complete"
 
 
 class WSMessage(BaseModel):

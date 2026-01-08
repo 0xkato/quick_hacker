@@ -41,5 +41,8 @@ backend/data/
 # TypeScript incremental build info
 *.tsbuildinfo
 
+# Plans (keep local/untracked)
+docs/plans/
+
 # Worktrees
 .worktrees/

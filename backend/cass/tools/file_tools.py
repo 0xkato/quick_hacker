@@ -34,7 +34,14 @@ class FileTools:
     """Tools for exploring the file system."""
 
     def __init__(self, repo_path: str):
-        self.repo_path = Path(repo_path)
+        self.repo_path = Path(repo_path).resolve()
+
+    def _validate_path(self, path: str) -> Path:
+        """Validate and resolve path, ensuring it stays within repo_path."""
+        full_path = (self.repo_path / path).resolve()
+        if not full_path.is_relative_to(self.repo_path):
+            raise ValueError(f"Path traversal detected: {path}")
+        return full_path
 
     def read_file(
         self,
@@ -43,7 +50,7 @@ class FileTools:
         end_line: Optional[int] = None,
     ) -> str:
         """Read file contents, optionally a specific line range."""
-        full_path = self.repo_path / path
+        full_path = self._validate_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
@@ -64,7 +71,7 @@ class FileTools:
         include_hidden: bool = False,
     ) -> list[dict]:
         """List directory contents."""
-        full_path = self.repo_path / path
+        full_path = self._validate_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"Directory not found: {path}")
 
@@ -94,7 +101,7 @@ class FileTools:
         max_results: int = 100,
     ) -> list[dict]:
         """Search for regex pattern in files."""
-        full_path = self.repo_path / path
+        full_path = self._validate_path(path)
         results = []
         regex = re.compile(pattern)
 
@@ -125,7 +132,7 @@ class FileTools:
 
     def get_file_info(self, path: str) -> dict:
         """Get file metadata."""
-        full_path = self.repo_path / path
+        full_path = self._validate_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
@@ -148,6 +155,6 @@ class FileTools:
         path: str = ".",
     ) -> list[str]:
         """Find files matching a glob pattern."""
-        full_path = self.repo_path / path
+        full_path = self._validate_path(path)
         matches = list(full_path.glob(pattern))
         return [str(m.relative_to(self.repo_path)) for m in matches if m.is_file()]

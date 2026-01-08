@@ -56,3 +56,32 @@ def test_get_file_info(temp_project):
     info = tools.get_file_info("src/main.py")
     assert info["language"] == "python"
     assert info["line_count"] == 2
+
+
+def test_find_files(temp_project):
+    """Can find files matching glob pattern."""
+    tools = FileTools(temp_project)
+    results = tools.find_files("**/*.py", "src")
+    assert len(results) >= 2  # main.py, auth.py
+    assert all(r.endswith(".py") for r in results)
+
+
+def test_read_file_line_range(temp_project):
+    """Can read specific line range."""
+    tools = FileTools(temp_project)
+    content = tools.read_file("src/main.py", start_line=1, end_line=1)
+    assert "def main():" in content
+
+
+def test_read_file_not_found(temp_project):
+    """Raises FileNotFoundError for missing file."""
+    tools = FileTools(temp_project)
+    with pytest.raises(FileNotFoundError):
+        tools.read_file("nonexistent.py")
+
+
+def test_path_traversal_blocked(temp_project):
+    """Path traversal attempts should be blocked."""
+    tools = FileTools(temp_project)
+    with pytest.raises(ValueError, match="Path traversal"):
+        tools.read_file("../../../etc/passwd")

@@ -133,12 +133,24 @@ export default function Home() {
       return;
     }
 
+    let errorCount = 0;
+    const maxErrors = 3; // Stop polling after 3 consecutive errors
+    let intervalId: NodeJS.Timeout | null = null;
+
     const loadFlow = async () => {
       try {
         const flow = await agentsApi.getFlow(selectedAgentId);
         setAgentFlow(flow);
+        errorCount = 0; // Reset on success
       } catch (err) {
         console.error('Failed to load flow:', err);
+        errorCount++;
+        // Stop polling after too many errors (agent likely doesn't exist)
+        if (errorCount >= maxErrors && intervalId) {
+          console.log('Stopping flow polling due to repeated errors');
+          clearInterval(intervalId);
+          intervalId = null;
+        }
       }
     };
 
@@ -157,10 +169,30 @@ export default function Home() {
 
     loadFlow();
     loadObservability();
-    // Poll for updates while agent is running
-    const interval = setInterval(loadFlow, 2000);
-    return () => clearInterval(interval);
-  }, [selectedAgentId]);
+
+    // Check if selected agent exists and get its status
+    const selectedAgent = agents.find(a => a.id === selectedAgentId);
+
+    // If agents are loaded but selected agent doesn't exist, clear selection
+    if (agents.length > 0 && !selectedAgent) {
+      console.log('Selected agent not found, clearing selection');
+      setSelectedAgentId(null);
+      return;
+    }
+
+    // Only poll if the selected agent is running
+    const isRunning = selectedAgent?.status === 'running' || selectedAgent?.status === 'pending';
+
+    if (isRunning) {
+      intervalId = setInterval(loadFlow, 2000);
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [selectedAgentId, agents]);
 
   // Initialize auth and check project status on mount
   useEffect(() => {
@@ -533,7 +565,7 @@ export default function Home() {
                   ))}
                 </select>
               </div>
-              <div className="flex-1">
+              <div className="flex-1 overflow-hidden min-h-0">
                 <LLMInteractionPanel
                   agentId={selectedAgentId}
                   interactions={llmInteractions}

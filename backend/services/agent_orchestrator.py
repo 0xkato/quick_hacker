@@ -15,12 +15,10 @@ from models.schemas import (
     ProviderConfig,
 )
 from agents.base_agent import BaseAgent
-from agents.deep_scan_agent import DeepScanAgent, DataFlowAgent
 from agents.quick_audit_agent import QuickAuditAgent
-from agents.custom_agent import CustomAgent, FocusedAgent
-from agents.strict_analysis_agent import StrictAnalysisAgent, UltraStrictAgent
 from agents.react_agent import ReActSecurityAgent
 from agents.deep_audit_agent import DeepAuditAgent
+from agents.ultrathink_agent import UltrathinkAgent
 from services import git_service
 from services.project_service import project_service
 from services.settings_service import settings_service
@@ -29,16 +27,14 @@ from services.report_service import report_service
 
 
 # Agent type to class mapping
-# Use ReAct agent for deep and strict modes (proper investigation)
-# Use legacy agents for quick audit (pattern matching)
-# Use DeepAudit for 3-layer prompt architecture with AUDIT_JSONL logging
 AGENT_CLASSES = {
-    AgentType.DEEP_SCAN: ReActSecurityAgent,  # ReAct for thorough investigation
-    AgentType.QUICK_AUDIT: QuickAuditAgent,   # Pattern matching (legacy)
-    AgentType.CUSTOM: ReActSecurityAgent,     # ReAct for custom investigation
-    AgentType.STRICT_ANALYSIS: ReActSecurityAgent,  # ReAct for strict mode
-    AgentType.ULTRA_STRICT: ReActSecurityAgent,     # ReAct for ultra strict
-    AgentType.DEEP_AUDIT: DeepAuditAgent,     # 3-layer architecture + AUDIT_JSONL
+    AgentType.DEEP_SCAN: ReActSecurityAgent,      # ReAct for thorough investigation
+    AgentType.QUICK_AUDIT: QuickAuditAgent,       # Pattern matching
+    AgentType.CUSTOM: ReActSecurityAgent,         # ReAct for custom investigation
+    AgentType.STRICT_ANALYSIS: ReActSecurityAgent,# ReAct for strict mode
+    AgentType.ULTRA_STRICT: ReActSecurityAgent,   # ReAct for ultra strict
+    AgentType.DEEP_AUDIT: DeepAuditAgent,         # 3-layer architecture
+    AgentType.ULTRATHINK: UltrathinkAgent,        # Maximum cognitive depth
 }
 
 
@@ -149,17 +145,31 @@ class AgentOrchestrator:
         if agent.status not in [AgentStatus.PENDING, AgentStatus.PAUSED]:
             raise ValueError(f"Agent cannot be started (status: {agent.status})")
 
+        print(f"[Orchestrator] Starting agent {agent_id} (type: {type(agent).__name__})")
+
         # Create task for agent execution
         task = asyncio.create_task(self._run_agent(agent))
         self._tasks[agent_id] = task
 
+        print(f"[Orchestrator] Task created for agent {agent_id}")
         return agent.to_schema()
 
     async def _run_agent(self, agent: BaseAgent):
         """Run agent and handle completion."""
+        print(f"[Orchestrator] _run_agent started for {agent.id}")
         try:
             findings = await agent.run()
+            print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")
             self._findings[agent.id] = findings
+
+            # Save state on successful completion (for persistence)
+            if hasattr(agent, 'get_state_snapshot'):
+                try:
+                    snapshot = agent.get_state_snapshot()
+                    persistence_service.save_agent_state(snapshot)
+                    print(f"[Orchestrator] Saved state for completed agent {agent.id}")
+                except Exception as e:
+                    print(f"[Orchestrator] Failed to save state on completion: {e}")
 
             # Generate report on successful completion (for ReAct agents)
             if hasattr(agent, 'get_state_snapshot'):
@@ -168,6 +178,7 @@ class AgentOrchestrator:
                 except Exception as e:
                     print(f"[Orchestrator] Failed to generate report: {e}")
         except asyncio.CancelledError:
+            print(f"[Orchestrator] Agent {agent.id} cancelled")
             agent.status = AgentStatus.CANCELLED
             # Save state on cancellation
             if hasattr(agent, 'get_state_snapshot'):
@@ -177,9 +188,20 @@ class AgentOrchestrator:
                 except Exception as e:
                     print(f"[Orchestrator] Failed to save state on cancel: {e}")
         except Exception as e:
+            print(f"[Orchestrator] Agent {agent.id} FAILED with error: {e}")
+            import traceback
+            traceback.print_exc()
             agent.status = AgentStatus.FAILED
             agent.error_message = str(e)
+            # Save state on failure for debugging/resume
+            if hasattr(agent, 'get_state_snapshot'):
+                try:
+                    snapshot = agent.get_state_snapshot()
+                    persistence_service.save_agent_state(snapshot)
+                except Exception as save_err:
+                    print(f"[Orchestrator] Failed to save state on failure: {save_err}")
         finally:
+            print(f"[Orchestrator] _run_agent cleanup for {agent.id}")
             # Cleanup task reference
             if agent.id in self._tasks:
                 del self._tasks[agent.id]

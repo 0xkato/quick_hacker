@@ -55,14 +55,15 @@ export async function initializeAuth(): Promise<string> {
   // Prevent multiple concurrent fetches
   if (_tokenFetchPromise) return _tokenFetchPromise;
 
-  _tokenFetchPromise = (async () => {
+  _tokenFetchPromise = (async (): Promise<string> => {
     try {
       const response = await fetch(`${API_BASE}/api/auth/token`);
       if (response.ok) {
         const data = await response.json();
-        _sessionToken = data.token;
+        const token: string = data.token || '';
+        _sessionToken = token;
         console.log('[Auth] Token initialized');
-        return _sessionToken;
+        return token;
       }
     } catch (err) {
       console.error('Failed to initialize auth:', err);

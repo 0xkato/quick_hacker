@@ -169,6 +169,12 @@ class ReActSecurityAgent:
         self.investigation_notes: list[dict] = []
         self.files_examined: set[str] = set()
 
+        # Duplicate detection - track recent tool calls to prevent loops
+        self._recent_tool_calls: dict[str, int] = {}  # hash -> count
+        self._max_duplicate_calls = 2  # Max times same call can be made
+        self._consecutive_duplicates = 0  # Track consecutive duplicate iterations
+        self._max_consecutive_duplicates = 3  # Force move on after this many
+
         # Control
         self._paused = asyncio.Event()
         self._paused.set()  # Not paused initially
@@ -447,9 +453,30 @@ Continue following the main audit instructions above."""
             for tool in AGENT_TOOLS
         ]
 
+    def _hash_tool_call(self, tool_name: str, arguments: dict) -> str:
+        """Create a hash of a tool call for duplicate detection."""
+        import hashlib
+        # Normalize arguments by sorting keys
+        sorted_args = json.dumps(arguments, sort_keys=True, default=str)
+        call_str = f"{tool_name}:{sorted_args}"
+        return hashlib.md5(call_str.encode()).hexdigest()[:12]
+
+    def _is_duplicate_call(self, tool_name: str, arguments: dict) -> tuple[bool, int]:
+        """Check if this tool call is a duplicate. Returns (is_dup, count)."""
+        call_hash = self._hash_tool_call(tool_name, arguments)
+        count = self._recent_tool_calls.get(call_hash, 0)
+        is_duplicate = count >= self._max_duplicate_calls
+        return is_duplicate, count
+
+    def _record_tool_call(self, tool_name: str, arguments: dict):
+        """Record a tool call for duplicate detection."""
+        call_hash = self._hash_tool_call(tool_name, arguments)
+        self._recent_tool_calls[call_hash] = self._recent_tool_calls.get(call_hash, 0) + 1
+
     async def _process_tool_calls(self, tool_calls: list[dict]):
         """Process tool calls from LLM."""
         tool_results = []
+        all_duplicates = True  # Track if ALL calls in this batch are duplicates
 
         for i, call in enumerate(tool_calls[:self.max_tool_calls_per_iteration]):
             tool_name = call.get("name") or call.get("function", {}).get("name")
@@ -461,6 +488,23 @@ Continue following the main audit instructions above."""
                 arguments = json.loads(args_str) if isinstance(args_str, str) else args_str
             except json.JSONDecodeError:
                 arguments = {}
+
+            # Check for duplicate call
+            is_duplicate, call_count = self._is_duplicate_call(tool_name, arguments)
+            if is_duplicate:
+                self._log(f"Skipping duplicate tool call: {tool_name} (called {call_count} times)", "warning")
+                # Return a message telling the LLM to try something different
+                tool_results.append({
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "content": f"DUPLICATE CALL BLOCKED: You've already called {tool_name} with these exact arguments {call_count} times. The result won't change. Please try a DIFFERENT approach - use different arguments, a different tool, or move on to investigate other areas of the codebase."
+                })
+                continue
+            else:
+                all_duplicates = False
+
+            # Record this call
+            self._record_tool_call(tool_name, arguments)
 
             self._log(f"Tool: {tool_name}({list(arguments.keys())})")
 
@@ -555,6 +599,22 @@ Continue following the main audit instructions above."""
         # Then add tool results
         self.messages.extend(tool_results)
 
+        # Track consecutive duplicate iterations
+        if all_duplicates and len(tool_calls) > 0:
+            self._consecutive_duplicates += 1
+            self._log(f"Consecutive duplicate iterations: {self._consecutive_duplicates}", "warning")
+
+            if self._consecutive_duplicates >= self._max_consecutive_duplicates:
+                # Force the LLM to change strategy
+                self._log("Forcing strategy change due to repeated duplicates", "warning")
+                self.messages.append({
+                    "role": "user",
+                    "content": "IMPORTANT: You appear to be stuck in a loop, repeatedly trying the same tool calls. This is not productive. Please:\n1. Review what you've already discovered\n2. Choose a COMPLETELY DIFFERENT investigation approach\n3. Try different files, different search patterns, or different tools\n4. If you've found no vulnerabilities after thorough investigation, say 'AUDIT_COMPLETE'\n\nDo NOT repeat the same tool calls again."
+                })
+                self._consecutive_duplicates = 0  # Reset after intervention
+        else:
+            self._consecutive_duplicates = 0  # Reset on successful unique calls
+
     def _build_code_context(self, arguments: dict, result: ToolResult) -> Optional[dict]:
         """Build code context from a read_file result for observability."""
         if not result.success or not result.data:
@@ -645,20 +705,63 @@ Continue following the main audit instructions above."""
             self._log(f"Failed to create finding: {e}", "error")
 
     def _compact_messages(self):
-        """Compact conversation history to stay within limits."""
-        # Keep system message and last 20 messages
-        if len(self.messages) > 25:
-            system_msg = self.messages[0]
-            recent = self.messages[-20:]
+        """Compact conversation history to stay within limits.
 
-            # Add summary
-            summary = {
-                "role": "user",
-                "content": f"[Previous investigation summarized: Examined {len(self.files_examined)} files, found {len(self.findings)} vulnerabilities. Continue investigation.]"
-            }
+        IMPORTANT: Must preserve complete turns to avoid OpenAI error:
+        "messages with role 'tool' must be a response to a preceeding message with 'tool_calls'"
+        """
+        if len(self.messages) <= 25:
+            return
 
-            self.messages = [system_msg, summary] + recent
-            self._log("Conversation history compacted")
+        system_msg = self.messages[0]
+
+        # Find complete turns from recent messages
+        # A complete turn is either:
+        # 1. A user message
+        # 2. An assistant message (with or without tool_calls)
+        # 3. Tool results (must follow their assistant message)
+        recent_messages = []
+        i = len(self.messages) - 1
+        target_count = 15  # Keep fewer messages to leave room for new ones
+
+        while i > 0 and len(recent_messages) < target_count:
+            msg = self.messages[i]
+
+            if msg.get("role") == "tool":
+                # This is a tool result - find its corresponding assistant message with tool_calls
+                tool_results = [msg]
+                j = i - 1
+
+                # Collect all consecutive tool results
+                while j > 0 and self.messages[j].get("role") == "tool":
+                    tool_results.insert(0, self.messages[j])
+                    j -= 1
+
+                # The message before tool results should be assistant with tool_calls
+                if j > 0 and self.messages[j].get("role") == "assistant" and self.messages[j].get("tool_calls"):
+                    recent_messages = [self.messages[j]] + tool_results + recent_messages
+                    i = j - 1
+                else:
+                    # Skip orphaned tool results
+                    i -= 1
+            elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+                # Assistant with tool_calls - need to include subsequent tool results
+                # But we process from the end, so this shouldn't happen often
+                # Skip it - we'll catch it when we see the tool results
+                i -= 1
+            else:
+                # User message or assistant without tool_calls - safe to include
+                recent_messages.insert(0, msg)
+                i -= 1
+
+        # Add summary
+        summary = {
+            "role": "user",
+            "content": f"[Previous investigation summarized: Examined {len(self.files_examined)} files, found {len(self.findings)} vulnerabilities. Continue investigation.]"
+        }
+
+        self.messages = [system_msg, summary] + recent_messages
+        self._log(f"Conversation history compacted to {len(self.messages)} messages")
 
     def pause(self):
         """Pause the agent."""

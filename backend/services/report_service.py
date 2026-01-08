@@ -112,11 +112,15 @@ class ReportService:
         elif agent.started_at:
             duration_seconds = int((datetime.utcnow() - agent.started_at).total_seconds())
 
+        # Handle different agent types (files_examined vs files_analyzed)
+        files_examined = getattr(agent, 'files_examined', None)
+        files_count = len(files_examined) if files_examined else getattr(agent, 'files_analyzed', 0)
+
         # Generate executive summary
         executive_summary = self._generate_executive_summary(
             agent,
             findings_by_severity,
-            len(agent.files_examined),
+            files_count,
             duration_seconds,
         )
 
@@ -138,7 +142,7 @@ class ReportService:
             findings_summary=findings_summary,
             findings_by_severity=findings_by_severity,
             findings_by_type=findings_by_type,
-            total_files=len(agent.files_examined),
+            total_files=files_count,
             files_with_findings=list(files_with_findings),
             timeline=timeline,
             total_prompt_tokens=usage.prompt_tokens,

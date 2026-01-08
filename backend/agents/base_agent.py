@@ -236,6 +236,43 @@ class BaseAgent(ABC):
         """Perform the actual analysis. Must be implemented by subclasses."""
         pass
 
+    def get_state_snapshot(self):
+        """
+        Create a state snapshot for persistence.
+        Allows agents to be restored after restart.
+        """
+        from models.observability import AgentStateSnapshot
+
+        return AgentStateSnapshot(
+            id=str(uuid.uuid4())[:12],
+            agent_id=self.id,
+            repo_id=self.repo_id,
+            repo_path=self.repo_path,
+            agent_type=self.agent_type.value if hasattr(self.agent_type, 'value') else str(self.agent_type),
+            provider_config={
+                "provider": self.provider_config.provider if self.provider_config else "unknown",
+                "model": self.provider_config.model if self.provider_config else "unknown",
+            } if self.provider_config else {},
+            custom_prompt=self.custom_prompt,
+            status=self.status.value if hasattr(self.status, 'value') else str(self.status),
+            files_analyzed=self.files_analyzed,
+            total_files=0,
+            current_file=None,
+            findings=[f.model_dump(mode='json') for f in self.findings],
+            conversation_history=[],  # BaseAgent doesn't track conversation
+            flow_nodes=[],
+            flow_edges=[],
+            current_flow_node_id=None,
+            investigation_context={
+                "focus_areas": self.focus_areas,
+                "target_files": self.target_files,
+            },
+            total_prompt_tokens=0,
+            total_completion_tokens=0,
+            total_api_calls=0,
+            last_error=self.error_message,
+        )
+
     async def analyze_file(self, file_path: str, content: str) -> list[Finding]:
         """Analyze a single file for vulnerabilities."""
         # Use multi-stage pipeline if enabled

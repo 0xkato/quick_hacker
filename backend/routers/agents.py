@@ -73,13 +73,48 @@ async def cancel_agent(agent_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("", response_model=list[Agent])
+@router.get("")
 async def list_agents(
     repo_id: Optional[str] = Query(None, description="Filter by repository"),
     status: Optional[AgentStatus] = Query(None, description="Filter by status"),
+    include_persisted: bool = Query(True, description="Include persisted/saved agents"),
 ):
-    """List all agents with optional filtering."""
-    return await orchestrator.list_agents(repo_id, status)
+    """List all agents with optional filtering, including persisted agents."""
+    from models.schemas import ProviderConfig
+
+    # Get in-memory agents
+    agents = await orchestrator.list_agents(repo_id, status)
+    agent_ids = {a.id for a in agents}
+
+    # Include persisted agents that aren't in memory
+    if include_persisted:
+        saved_states = persistence_service.list_saved_states()
+        for state in saved_states:
+            if state.get("agent_id") not in agent_ids:
+                # Filter by repo_id if specified
+                if repo_id and state.get("repo_id") != repo_id:
+                    continue
+                # Filter by status if specified
+                state_status = state.get("status")
+                if status and state_status != status.value:
+                    continue
+
+                # Convert saved state to Agent schema
+                agents.append(Agent(
+                    id=state.get("agent_id", ""),
+                    repo_id=state.get("repo_id", ""),
+                    name=f"Saved: {state.get('agent_type', 'unknown')}",
+                    agent_type=state.get("agent_type", "deep_scan"),
+                    status=AgentStatus(state_status) if state_status else AgentStatus.COMPLETED,
+                    provider_config=ProviderConfig(provider="openai", model="unknown"),
+                    created_at=state.get("created_at"),
+                    files_analyzed=state.get("files_analyzed", 0),
+                    findings_count=state.get("findings_count", 0),
+                ))
+
+    # Sort by creation time (newest first)
+    agents.sort(key=lambda a: a.created_at if a.created_at else "", reverse=True)
+    return agents
 
 
 @router.get("/stats")
@@ -94,37 +129,101 @@ async def get_available_models():
     return list_all_models()
 
 
-@router.get("/{agent_id}", response_model=Agent)
+@router.get("/{agent_id}")
 async def get_agent(agent_id: str):
-    """Get agent by ID."""
+    """Get agent by ID (from memory or persisted state)."""
+    from models.schemas import ProviderConfig
+
+    # Try in-memory first
     agent = await orchestrator.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
+    if agent:
+        return agent
+
+    # Try persisted state
+    snapshot = persistence_service.load_agent_state(agent_id)
+    if snapshot:
+        return Agent(
+            id=snapshot.agent_id,
+            repo_id=snapshot.repo_id,
+            name=f"Saved: {snapshot.agent_type}",
+            agent_type=snapshot.agent_type,
+            status=AgentStatus(snapshot.status) if snapshot.status else AgentStatus.COMPLETED,
+            provider_config=ProviderConfig(
+                provider=snapshot.provider_config.get("provider", "openai") if snapshot.provider_config else "openai",
+                model=snapshot.provider_config.get("model", "unknown") if snapshot.provider_config else "unknown",
+            ),
+            created_at=snapshot.created_at,
+            files_analyzed=snapshot.files_analyzed,
+            findings_count=len(snapshot.findings) if snapshot.findings else 0,
+            error_message=snapshot.last_error,
+        )
+
+    raise HTTPException(status_code=404, detail="Agent not found")
 
 
 @router.delete("/{agent_id}", response_model=APIResponse)
 async def delete_agent(agent_id: str):
-    """Delete an agent and its findings."""
+    """Delete an agent, its findings, and persisted state."""
+    # Delete from orchestrator (in-memory)
     success = await orchestrator.delete_agent(agent_id)
-    if not success:
+
+    # Also delete persisted state if exists
+    state_deleted = persistence_service.delete_agent_state(agent_id)
+
+    # Clear observability data
+    observability_service.clear_agent(agent_id)
+
+    # Clear flow data
+    flow_service.clear_flow(agent_id)
+
+    if not success and not state_deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return APIResponse(success=True, message="Agent deleted")
+    return APIResponse(success=True, message="Agent and all associated data deleted")
 
 
 @router.get("/{agent_id}/findings", response_model=list[Finding])
 async def get_agent_findings(agent_id: str):
-    """Get findings for a specific agent."""
+    """Get findings for a specific agent (from memory or persisted state)."""
+    # Try in-memory first
     findings = await orchestrator.get_findings(agent_id=agent_id)
-    return findings
+    if findings:
+        return findings
+
+    # Try persisted state
+    snapshot = persistence_service.load_agent_state(agent_id)
+    if snapshot and snapshot.findings:
+        return [Finding(**f) for f in snapshot.findings]
+
+    return []
 
 
 @router.get("/findings/all", response_model=list[Finding])
 async def get_all_findings(
     repo_id: Optional[str] = Query(None, description="Filter by repository"),
 ):
-    """Get all findings with optional filtering."""
-    return await orchestrator.get_findings(repo_id=repo_id)
+    """Get all findings with optional filtering (from memory and persisted states)."""
+    # Get in-memory findings
+    findings = await orchestrator.get_findings(repo_id=repo_id)
+    finding_ids = {(f.agent_id, f.id) for f in findings}
+
+    # Add findings from persisted states
+    saved_states = persistence_service.list_saved_states()
+    for state_meta in saved_states:
+        if repo_id and state_meta.get("repo_id") != repo_id:
+            continue
+        # Load full state to get findings
+        snapshot = persistence_service.load_agent_state(state_meta.get("agent_id"))
+        if snapshot and snapshot.findings:
+            for f_data in snapshot.findings:
+                f_key = (f_data.get("agent_id"), f_data.get("id"))
+                if f_key not in finding_ids:
+                    findings.append(Finding(**f_data))
+                    finding_ids.add(f_key)
+
+    # Sort by severity
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    findings.sort(key=lambda f: (severity_order.get(f.severity.value, 5), f.created_at))
+    return findings
 
 
 # === Observability Endpoints ===

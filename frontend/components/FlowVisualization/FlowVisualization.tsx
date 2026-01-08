@@ -438,25 +438,25 @@ function calculateLayout(
 
   // Group nodes by level
   const byLevel = new Map<number, string[]>();
-  for (const [id, level] of levels) {
+  Array.from(levels.entries()).forEach(([id, level]) => {
     if (!byLevel.has(level)) byLevel.set(level, []);
     byLevel.get(level)!.push(id);
-  }
+  });
 
   // Position nodes
   const levelWidth = 220;
   const nodeHeight = 80;
 
-  for (const [level, nodeIds] of byLevel) {
+  Array.from(byLevel.entries()).forEach(([level, nodeIds]) => {
     const levelY = (nodeIds.length - 1) * nodeHeight * -0.5;
 
-    nodeIds.forEach((id, index) => {
+    nodeIds.forEach((id: string, index: number) => {
       positions.set(id, {
         x: level * levelWidth,
         y: levelY + index * nodeHeight,
       });
     });
-  }
+  });
 
   return positions;
 }

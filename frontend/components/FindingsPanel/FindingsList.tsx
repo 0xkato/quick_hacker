@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   AlertCircle,
   Info,
-  ChevronDown,
   ChevronRight,
   FileCode,
   ExternalLink,
@@ -36,30 +35,43 @@ interface FindingCardProps {
 
 function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProps) {
   return (
-    <div className="border border-vsc-border-subtle rounded overflow-hidden bg-vsc-bg">
+    <div className="soft-card" style={{ padding: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div
-        className="flex items-start gap-2 p-2 cursor-pointer hover:bg-vsc-hover"
+        className="flex items-start gap-2 p-3 cursor-pointer hover:bg-vsc-hover"
         onClick={onToggle}
+        style={{ transition: 'var(--transition-default)' }}
       >
-        <button className="mt-0.5 text-vsc-text-muted hover:text-vsc-text">
-          {isExpanded ? (
-            <ChevronDown className="w-4 h-4" />
-          ) : (
-            <ChevronRight className="w-4 h-4" />
-          )}
+        <button
+          className="mt-0.5 text-vsc-text-muted hover:text-vsc-text"
+          style={{ transition: 'transform 150ms ease-out', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
+        >
+          <ChevronRight className="w-4 h-4" />
         </button>
 
-        {SEVERITY_ICONS[finding.severity]}
-
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className={clsx('severity-badge', finding.severity)}>
-              {finding.severity}
+          <div className="flex items-center gap-2 mb-1">
+            <span
+              className="text-vsc-xs px-2 py-0.5 font-medium"
+              style={{
+                borderRadius: 'var(--radius-sm)',
+                background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
+                  : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
+                  : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
+                  : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
+                  : 'rgba(117, 190, 255, 0.25)',
+                color: finding.severity === 'critical' ? 'var(--sev-critical)'
+                  : finding.severity === 'high' ? 'var(--sev-high)'
+                  : finding.severity === 'medium' ? 'var(--sev-medium)'
+                  : finding.severity === 'low' ? 'var(--sev-low)'
+                  : 'var(--sev-info)',
+              }}
+            >
+              {finding.severity.toUpperCase()}
             </span>
-            <span className="text-vsc-sm truncate">{finding.title}</span>
+            <span className="text-vsc-sm truncate text-vsc-text">{finding.title}</span>
           </div>
-          <div className="flex items-center gap-2 mt-1 text-vsc-xs text-vsc-text-muted">
+          <div className="flex items-center gap-2 text-vsc-xs text-vsc-text-muted">
             <FileCode className="w-3 h-3" />
             <span className="truncate">{finding.file_path}</span>
             <span className="text-vsc-text-link">L{finding.line_start}</span>
@@ -101,7 +113,12 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
               <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
                 Code
               </h4>
-              <pre className="code-snippet whitespace-pre-wrap">{finding.code_snippet}</pre>
+              <pre
+                className="code-snippet whitespace-pre-wrap"
+                style={{ borderRadius: 'var(--radius-md)' }}
+              >
+                {finding.code_snippet}
+              </pre>
             </div>
           )}
 
@@ -195,17 +212,31 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
               onClick={() => setFilterSeverity(sev)}
               disabled={counts[sev] === 0}
               className={clsx(
-                'px-1.5 py-0.5 rounded text-vsc-xs transition-colors',
-                filterSeverity === sev
-                  ? sev === 'all'
-                    ? 'bg-vsc-accent text-white'
-                    : `bg-sev-${sev}/20 text-sev-${sev}`
-                  : 'bg-vsc-input hover:bg-vsc-border text-vsc-text-muted',
+                'px-3 py-1.5 text-vsc-xs transition-all',
                 counts[sev] === 0 && 'opacity-50 cursor-not-allowed'
               )}
+              style={{
+                borderRadius: 'var(--radius-full)',
+                border: filterSeverity === sev
+                  ? `1px solid ${sev === 'all' ? 'var(--vsc-accent)' : sev === 'critical' ? 'var(--sev-critical)' : sev === 'high' ? 'var(--sev-high)' : sev === 'medium' ? 'var(--sev-medium)' : sev === 'low' ? 'var(--sev-low)' : 'var(--sev-info)'}`
+                  : '1px solid #3c3c3c',
+                background: filterSeverity === sev
+                  ? sev === 'all'
+                    ? 'rgba(0, 120, 212, 0.2)'
+                    : sev === 'critical' ? 'rgba(241, 76, 76, 0.2)'
+                    : sev === 'high' ? 'rgba(204, 167, 0, 0.2)'
+                    : sev === 'medium' ? 'rgba(233, 167, 0, 0.2)'
+                    : sev === 'low' ? 'rgba(55, 148, 255, 0.2)'
+                    : 'rgba(117, 190, 255, 0.2)'
+                  : 'transparent',
+                color: filterSeverity === sev
+                  ? sev === 'all' ? 'var(--vsc-accent)' : `var(--sev-${sev})`
+                  : 'var(--vsc-text-muted)',
+                transition: 'var(--transition-default)',
+              }}
             >
               {sev === 'all' ? 'All' : sev.charAt(0).toUpperCase() + sev.slice(1)}{' '}
-              <span className="opacity-70">({counts[sev]})</span>
+              <span style={{ opacity: 0.7 }}>({counts[sev]})</span>
             </button>
           ))}
         </div>

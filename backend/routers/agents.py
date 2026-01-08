@@ -2,8 +2,11 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from database import get_db
+from middleware.auth import AuthContext, require_auth
 from models.schemas import (
     Agent,
     AgentCreateRequest,
@@ -24,10 +27,14 @@ router = APIRouter()
 
 
 @router.post("", response_model=Agent)
-async def create_agent(request: AgentCreateRequest):
+async def create_agent(
+    request: AgentCreateRequest,
+    auth_context: AuthContext = Depends(require_auth),
+    db: AsyncSession = Depends(get_db)
+):
     """Create a new security auditing agent."""
     try:
-        agent = await orchestrator.create_agent(request)
+        agent = await orchestrator.create_agent(request, auth_context, db)
         return agent
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

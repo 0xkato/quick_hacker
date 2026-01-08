@@ -1,185 +1,120 @@
-"""
-Simple session-based authentication for quick_hack.
-
-This provides basic protection against unauthorized access.
-For a local development tool, this prevents casual attackers from:
-- Modifying API keys
-- Viewing security findings
-- Controlling agents
-
-In production, consider implementing proper JWT-based auth.
-"""
-
+"""Authentication middleware supporting both legacy tokens and JWT."""
 import os
 import secrets
-import hashlib
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from fastapi import HTTPException, Header
-from fastapi.security import HTTPBearer
+
+from fastapi import Request, HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database import get_db
+from database.models import User
+from services.auth_service import auth_service
 
 
-# Token file path - persists across restarts
-TOKEN_FILE = Path(os.environ.get("DATA_DIR", "data")) / ".session_token"
+security = HTTPBearer(auto_error=False)
 
 
-class SessionStore:
-    """Session storage with persistent master token."""
+class AuthContext(BaseModel):
+    """Authentication context for requests."""
+    user_id: Optional[uuid.UUID] = None
+    username: Optional[str] = None
+    is_authenticated: bool = False
+    is_legacy_token: bool = False
 
-    def __init__(self):
-        self._sessions: dict[str, datetime] = {}
-        self._master_token: Optional[str] = None
-        self._session_duration = timedelta(hours=24)
-        # Load or generate master token on init
-        self._load_or_generate_master_token()
-
-    def _load_or_generate_master_token(self):
-        """Load master token from file or generate new one."""
-        try:
-            TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                TOKEN_FILE.parent.chmod(0o700)
-            except Exception:
-                pass
-
-            if TOKEN_FILE.exists():
-                if TOKEN_FILE.is_symlink():
-                    raise RuntimeError("Refusing to read session token from symlink")
-                self._master_token = TOKEN_FILE.read_text().strip()
-                if self._master_token:
-                    print(f"[Auth] Loaded existing session token")
-                    return
-        except Exception as e:
-            print(f"[Auth] Error loading token: {e}")
-
-        # Generate new token
-        self._master_token = secrets.token_urlsafe(32)
-        try:
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
-            fd = os.open(str(TOKEN_FILE), flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(self._master_token)
-            try:
-                TOKEN_FILE.chmod(0o600)
-            except Exception:
-                pass
-            print(f"[Auth] Generated new session token")
-        except Exception as e:
-            print(f"[Auth] Warning: Could not persist token: {e}")
-
-    def generate_master_token(self) -> str:
-        """Get the master token (already loaded/generated in __init__)."""
-        if self._master_token is None:
-            self._load_or_generate_master_token()
-        return self._master_token
-
-    def get_master_token(self) -> Optional[str]:
-        """Get the current master token."""
-        return self._master_token
-
-    def create_session(self) -> str:
-        """Create a new session token."""
-        token = secrets.token_urlsafe(32)
-        self._sessions[token] = datetime.utcnow()
-        return token
-
-    def validate_session(self, token: str) -> bool:
-        """Validate a session token."""
-        if not token:
-            return False
-
-        # Check if it's the master token
-        if self._master_token and secrets.compare_digest(token, self._master_token):
-            return True
-
-        # Check session tokens
-        if token in self._sessions:
-            created_at = self._sessions[token]
-            if datetime.utcnow() - created_at < self._session_duration:
-                return True
-            else:
-                # Expired - remove it
-                del self._sessions[token]
-
-        return False
-
-    def revoke_session(self, token: str) -> bool:
-        """Revoke a session token."""
-        if token in self._sessions:
-            del self._sessions[token]
-            return True
-        return False
-
-    def cleanup_expired(self):
-        """Remove expired sessions."""
-        now = datetime.utcnow()
-        expired = [
-            token for token, created_at in self._sessions.items()
-            if now - created_at >= self._session_duration
-        ]
-        for token in expired:
-            del self._sessions[token]
+    class Config:
+        arbitrary_types_allowed = True
 
 
-# Global session store
-_session_store = SessionStore()
+async def get_auth_context(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db)
+) -> AuthContext:
+    """
+    Get authentication context from request.
+    Supports both JWT Bearer tokens and legacy X-Session-Token header.
+    """
+    # Try JWT Bearer token first
+    if credentials:
+        payload = auth_service.decode_token(credentials.credentials)
+        if payload and payload.get("type") == "access":
+            user_id = uuid.UUID(payload["sub"])
+            user = await auth_service.get_user_by_id(db, user_id)
+            if user and user.is_active:
+                return AuthContext(
+                    user_id=user.id,
+                    username=user.username,
+                    is_authenticated=True,
+                    is_legacy_token=False
+                )
 
-
-def get_session_token() -> str:
-    """Get or generate the master session token."""
-    return _session_store.generate_master_token()
-
-
-def verify_session(token: str) -> bool:
-    """Verify a session token is valid."""
-    return _session_store.validate_session(token)
-
-
-def create_new_session() -> str:
-    """Create a new session token."""
-    return _session_store.create_session()
-
-
-class SessionAuth:
-    """FastAPI dependency for session authentication."""
-
-    def __init__(self, optional: bool = False):
-        self.optional = optional
-
-    async def __call__(
-        self,
-        x_session_token: Optional[str] = Header(None, alias="X-Session-Token"),
-    ) -> Optional[str]:
-        """
-        Validate session token from header.
-
-        Header: X-Session-Token: <token>
-        """
-        auth_token = x_session_token
-
-        if not auth_token:
-            if self.optional:
-                return None
-            raise HTTPException(
-                status_code=401,
-                detail="Missing authentication token. Use X-Session-Token header.",
-                headers={"WWW-Authenticate": "Bearer"},
+    # Fall back to legacy X-Session-Token (for backwards compatibility during migration)
+    legacy_token = request.headers.get("X-Session-Token")
+    if legacy_token:
+        # Validate against master token (legacy behavior)
+        master_token = _get_master_token()
+        if master_token and secrets.compare_digest(legacy_token, master_token):
+            return AuthContext(
+                is_authenticated=True,
+                is_legacy_token=True
             )
 
-        if not verify_session(auth_token):
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid or expired session token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        return auth_token
+    return AuthContext(is_authenticated=False)
 
 
-# Dependency instances
-require_auth = SessionAuth(optional=False)
-optional_auth = SessionAuth(optional=True)
+async def require_auth(
+    auth_context: AuthContext = Depends(get_auth_context)
+) -> AuthContext:
+    """Dependency that requires authentication."""
+    if not auth_context.is_authenticated:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return auth_context
+
+
+async def get_current_user_from_context(
+    auth_context: AuthContext = Depends(require_auth),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """Get User object from auth context (None for legacy tokens)."""
+    if auth_context.is_legacy_token or not auth_context.user_id:
+        return None
+    return await auth_service.get_user_by_id(db, auth_context.user_id)
+
+
+def _get_master_token() -> Optional[str]:
+    """Get master token from file (legacy support)."""
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    token_file = data_dir / ".session_token"
+    try:
+        if token_file.exists() and not token_file.is_symlink():
+            return token_file.read_text().strip()
+    except Exception:
+        pass
+    return None
+
+
+# Helper to get user's API key for a provider
+async def get_user_api_key_for_provider(
+    provider: str,
+    auth_context: AuthContext,
+    db: AsyncSession
+) -> Optional[str]:
+    """Get the decrypted API key for a user and provider."""
+    if auth_context.is_legacy_token or not auth_context.user_id:
+        # For legacy tokens, fall back to environment variables
+        if provider == "anthropic":
+            return os.environ.get("ANTHROPIC_API_KEY")
+        elif provider == "openai":
+            return os.environ.get("OPENAI_API_KEY")
+        return None
+
+    return await auth_service.get_user_api_key(db, auth_context.user_id, provider)

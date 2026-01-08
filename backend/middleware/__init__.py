@@ -1,5 +1,17 @@
 """Middleware package for quick_hack."""
 
-from .auth import get_session_token, verify_session, SessionAuth
+from .auth import (
+    AuthContext,
+    get_auth_context,
+    require_auth,
+    get_current_user_from_context,
+    get_user_api_key_for_provider,
+)
 
-__all__ = ["get_session_token", "verify_session", "SessionAuth"]
+__all__ = [
+    "AuthContext",
+    "get_auth_context",
+    "require_auth",
+    "get_current_user_from_context",
+    "get_user_api_key_for_provider",
+]

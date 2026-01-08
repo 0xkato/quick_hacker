@@ -1,8 +1,11 @@
 """OpenAI provider implementation."""
 
+import logging
 from typing import AsyncGenerator, Optional
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIError, AuthenticationError, RateLimitError, APIConnectionError
+
+logger = logging.getLogger(__name__)
 
 from config import settings
 from models.schemas import ProviderConfig
@@ -45,14 +48,32 @@ class OpenAIProvider(BaseProvider):
         """Generate a completion (non-streaming)."""
         openai_messages = self._convert_messages(messages, system_prompt)
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=openai_messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-
-        return response.choices[0].message.content or ""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=openai_messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+            return response.choices[0].message.content or ""
+        except AuthenticationError as e:
+            logger.error(f"OpenAI authentication failed: {e}")
+            raise ValueError(
+                "Invalid OpenAI API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"OpenAI rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"OpenAI connection error: {e}")
+            raise ValueError(
+                "Failed to connect to OpenAI API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"OpenAI API error: {e}")
+            raise ValueError(f"OpenAI API error: {e.message}") from e
 
     async def generate_stream(
         self,
@@ -62,23 +83,42 @@ class OpenAIProvider(BaseProvider):
         """Generate a completion with streaming."""
         openai_messages = self._convert_messages(messages, system_prompt)
 
-        stream = await self.client.chat.completions.create(
-            model=self.model,
-            messages=openai_messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=True,
-        )
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.model,
+                messages=openai_messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield StreamChunk(
-                    content=chunk.choices[0].delta.content,
-                    is_complete=False,
-                )
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield StreamChunk(
+                        content=chunk.choices[0].delta.content,
+                        is_complete=False,
+                    )
 
-            if chunk.choices[0].finish_reason:
-                yield StreamChunk(content="", is_complete=True)
+                if chunk.choices[0].finish_reason:
+                    yield StreamChunk(content="", is_complete=True)
+        except AuthenticationError as e:
+            logger.error(f"OpenAI authentication failed: {e}")
+            raise ValueError(
+                "Invalid OpenAI API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"OpenAI rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"OpenAI connection error: {e}")
+            raise ValueError(
+                "Failed to connect to OpenAI API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"OpenAI API error: {e}")
+            raise ValueError(f"OpenAI API error: {e.message}") from e
 
     async def chat_with_tools(
         self,
@@ -96,44 +136,63 @@ class OpenAIProvider(BaseProvider):
                     clean_msg['content'] = ''
             clean_messages.append(clean_msg)
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=clean_messages,
-            tools=tools if tools else None,
-            tool_choice="auto" if tools else None,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=clean_messages,
+                tools=tools if tools else None,
+                tool_choice="auto" if tools else None,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
 
-        result = {
-            "content": response.choices[0].message.content or "",
-            "tool_calls": None,
-            "usage": None,
-        }
-
-        # Capture token usage from response
-        if response.usage:
-            result["usage"] = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
+            result = {
+                "content": response.choices[0].message.content or "",
+                "tool_calls": None,
+                "usage": None,
             }
 
-        # Extract tool calls if present - format for re-submission to OpenAI
-        if response.choices[0].message.tool_calls:
-            result["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    }
+            # Capture token usage from response
+            if response.usage:
+                result["usage"] = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
                 }
-                for tc in response.choices[0].message.tool_calls
-            ]
 
-        return result
+            # Extract tool calls if present - format for re-submission to OpenAI
+            if response.choices[0].message.tool_calls:
+                result["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        }
+                    }
+                    for tc in response.choices[0].message.tool_calls
+                ]
+
+            return result
+        except AuthenticationError as e:
+            logger.error(f"OpenAI authentication failed: {e}")
+            raise ValueError(
+                "Invalid OpenAI API key. Please check your API key in Settings."
+            ) from e
+        except RateLimitError as e:
+            logger.warning(f"OpenAI rate limit hit: {e}")
+            raise ValueError(
+                "Rate limit exceeded. Please wait a moment and try again."
+            ) from e
+        except APIConnectionError as e:
+            logger.error(f"OpenAI connection error: {e}")
+            raise ValueError(
+                "Failed to connect to OpenAI API. Please check your internet connection."
+            ) from e
+        except APIError as e:
+            logger.error(f"OpenAI API error: {e}")
+            raise ValueError(f"OpenAI API error: {e.message}") from e
 
     async def count_tokens(self, text: str) -> int:
         """Count tokens using tiktoken (approximate)."""

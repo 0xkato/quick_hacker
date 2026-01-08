@@ -119,6 +119,20 @@ async def register(
         )
         await db.commit()
     except ValueError as e:
+        # Development-friendly behavior: if the account already exists, treat register as login
+        # to avoid forcing users to switch forms.
+        for identifier in (request.username, request.email):
+            existing_user = await auth_service.authenticate_user(
+                db,
+                username=identifier,
+                password=request.password,
+            )
+            if existing_user:
+                return TokenResponse(
+                    access_token=auth_service.create_access_token(existing_user.id, existing_user.username),
+                    refresh_token=auth_service.create_refresh_token(existing_user.id),
+                )
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)

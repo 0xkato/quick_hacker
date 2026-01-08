@@ -398,85 +398,116 @@ function AgentCard({
   const isCompleted = agent.status === 'completed';
   const isFinished = ['completed', 'failed', 'cancelled'].includes(agent.status);
 
+  // Get agent type label
+  const agentTypeLabel = AGENT_TYPES.find(t => t.value === agent.agent_type)?.label || agent.agent_type;
+
+  // Truncate file path from left to show filename
+  const truncateFromLeft = (path: string, maxLen: number = 30) => {
+    if (path.length <= maxLen) return path;
+    return '...' + path.slice(-(maxLen - 3));
+  };
+
   return (
-    <div className="border border-vsc-border-subtle rounded p-2 bg-vsc-bg hover:bg-vsc-hover transition-colors">
-      <div className="flex items-start justify-between mb-1.5">
-        <div className="flex items-center gap-2">
-          <Bug className="w-4 h-4 text-vsc-accent" />
-          <span className="font-medium text-vsc-sm">{agent.name}</span>
-        </div>
-        <span className={clsx('agent-status', agent.status)}>{agent.status}</span>
+    <div className="soft-card">
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="font-medium text-vsc-sm text-vsc-text truncate flex-1 mr-2">
+          {agent.name}
+        </span>
+        <span
+          className="text-vsc-xs px-2 py-0.5 rounded bg-vsc-accent/30 text-vsc-accent"
+          style={{ borderRadius: 'var(--radius-sm)' }}
+        >
+          {agentTypeLabel}
+        </span>
       </div>
 
+      {/* Progress section - only when running */}
       {progress && isRunning && (
-        <div className="mb-2">
-          <div className="flex justify-between text-vsc-xs text-vsc-text-muted mb-1">
-            <span>
-              {progress.current}/{progress.total} files
-            </span>
-            <span>{Math.round((progress.current / progress.total) * 100)}%</span>
-          </div>
-          <div className="progress-bar">
+        <div className="mb-3">
+          <div className="progress-bar mb-1.5">
             <div
               className="progress-bar-fill"
               style={{ width: `${(progress.current / progress.total) * 100}%` }}
             />
           </div>
-          {progress.file && (
-            <p className="text-vsc-xs text-vsc-text-muted mt-1 truncate">{progress.file}</p>
-          )}
+          <div className="flex justify-between text-vsc-xs text-vsc-text-muted">
+            <span>{progress.current}/{progress.total} files</span>
+            <span>{Math.round((progress.current / progress.total) * 100)}%</span>
+          </div>
         </div>
       )}
 
-      <div className="flex items-center justify-between text-vsc-xs text-vsc-text-muted">
-        <span>{agent.findings_count} findings</span>
-        <div className="flex gap-0.5">
-          {isRunning && (
-            <button
-              onClick={() => onAction('pause')}
-              className="btn-icon"
-              title="Pause"
-            >
-              <Pause className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {isPaused && (
-            <button
-              onClick={() => onAction('resume')}
-              className="btn-icon"
-              title="Resume"
-            >
-              <Play className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {(isRunning || isPaused) && (
-            <button
-              onClick={() => onAction('cancel')}
-              className="btn-icon hover:text-vsc-error"
-              title="Cancel"
-            >
-              <Square className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {isCompleted && onViewReport && (
-            <button
-              onClick={onViewReport}
-              className="btn-icon hover:text-vsc-accent"
-              title="View Report"
-            >
-              <FileText className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {isFinished && (
-            <button
-              onClick={() => onAction('delete')}
-              className="btn-icon hover:text-vsc-error"
-              title="Delete"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
+      {/* Current file - only when running */}
+      {progress?.file && isRunning && (
+        <div
+          className="mb-3 px-2 py-1.5 font-mono text-vsc-xs text-vsc-text-muted truncate"
+          style={{
+            background: '#333333',
+            borderRadius: 'var(--radius-sm)'
+          }}
+        >
+          {truncateFromLeft(progress.file)}
         </div>
+      )}
+
+      {/* Status badge for non-running states */}
+      {!isRunning && (
+        <div className="mb-3">
+          <span className={clsx('agent-status', agent.status)}>{agent.status}</span>
+          <span className="text-vsc-xs text-vsc-text-muted ml-2">
+            {agent.findings_count} findings
+          </span>
+        </div>
+      )}
+
+      {/* Controls row */}
+      <div className="flex items-center gap-2">
+        {isRunning && (
+          <button
+            onClick={() => onAction('pause')}
+            className="btn-icon"
+            title="Pause"
+          >
+            <Pause className="w-4 h-4" />
+          </button>
+        )}
+        {isPaused && (
+          <button
+            onClick={() => onAction('resume')}
+            className="btn-icon"
+            title="Resume"
+          >
+            <Play className="w-4 h-4" />
+          </button>
+        )}
+        {(isRunning || isPaused) && (
+          <button
+            onClick={() => onAction('cancel')}
+            className="btn-icon hover:text-vsc-error"
+            title="Cancel"
+          >
+            <Square className="w-4 h-4" />
+          </button>
+        )}
+        {isCompleted && onViewReport && (
+          <button
+            onClick={onViewReport}
+            className="btn-icon hover:text-vsc-accent"
+            title="View Report"
+          >
+            <FileText className="w-4 h-4" />
+          </button>
+        )}
+        {isFinished && (
+          <button
+            onClick={() => onAction('delete')}
+            className="btn-icon hover:text-vsc-error"
+            title="Delete"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   );

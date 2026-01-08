@@ -8,10 +8,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from routers import git, files, agents, websocket, projects, flow
+from routers import git, files, agents, websocket, projects, flow, auth
 from routers import settings as settings_router
 from routers import chat as chat_router
 from routers.websocket import set_main_loop
+from database import init_db
 from services.settings_service import settings_service
 from services.project_service import project_service
 from middleware.auth import create_new_session, get_session_token, require_auth, verify_session
@@ -28,6 +29,10 @@ async def lifespan(app: FastAPI):
     # Store main event loop for WebSocket broadcasts from agents
     set_main_loop(asyncio.get_running_loop())
     print("Main event loop registered")
+
+    # Initialize database
+    await init_db()
+    print("Database initialized")
 
     # Initialize services
     await settings_service.initialize()
@@ -101,6 +106,7 @@ app.include_router(
     dependencies=[Depends(require_auth)],
 )
 app.include_router(websocket.router, prefix="/ws", tags=["WebSocket"])
+app.include_router(auth.router)
 
 
 @app.get("/")

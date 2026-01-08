@@ -1,4 +1,4 @@
-from .connection import get_db, engine, AsyncSessionLocal
+from .connection import get_db, engine, AsyncSessionLocal, init_db
 from .models import Base, User, UserAPIKey
 
-__all__ = ["get_db", "engine", "AsyncSessionLocal", "Base", "User", "UserAPIKey"]
+__all__ = ["get_db", "engine", "AsyncSessionLocal", "init_db", "Base", "User", "UserAPIKey"]

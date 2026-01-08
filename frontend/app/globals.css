@@ -187,7 +187,36 @@ body {
 }
 
 .btn-icon {
-  @apply p-1.5 rounded hover:bg-vsc-hover text-vsc-text-muted hover:text-vsc-text;
+  @apply p-1.5 text-vsc-text-muted hover:text-vsc-text;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: transparent;
+  transition: var(--transition-default);
+}
+
+.btn-icon:hover {
+  background: #3c3c3c;
+}
+
+.btn-icon:active {
+  transform: scale(0.97);
+}
+
+/* Soft card container */
+.soft-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 12px;
+  transition: var(--transition-default);
+}
+
+.soft-card:hover {
+  background: #323232;
 }
 
 /* VSCode-style inputs */
@@ -294,13 +323,16 @@ body {
   @apply flex justify-end gap-2 px-4 py-3 border-t border-vsc-border-subtle;
 }
 
-/* Progress bar */
+/* Progress bar - softer */
 .progress-bar {
-  @apply h-1 bg-vsc-border-subtle rounded-full overflow-hidden;
+  @apply h-1.5 bg-vsc-border-subtle overflow-hidden;
+  border-radius: var(--radius-sm);
 }
 
 .progress-bar-fill {
-  @apply h-full bg-vsc-accent transition-all duration-300;
+  @apply h-full bg-vsc-accent;
+  border-radius: var(--radius-sm);
+  transition: width 300ms ease-out;
 }
 
 /* VSCode-style list */

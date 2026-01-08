@@ -110,15 +110,52 @@ npm run dev
 
 Frontend runs at `http://localhost:3000`
 
-### 5. Get Auth Token
+### 5. Authentication
 
-The API requires authentication. Get your session token:
+The app uses JWT-based authentication with per-user API key storage.
+
+#### Register and Login
+
+1. Open `http://localhost:3000` and click **Register**
+2. Create an account with email and password
+3. Login to receive a JWT token (stored automatically in cookies)
+
+#### Configure API Keys
+
+After logging in, configure your LLM provider API keys:
+
+1. Go to **Settings** (gear icon in the header)
+2. Add your API keys:
+   - **Anthropic** - For Claude models (recommended for Ultrathink)
+   - **OpenAI** - For GPT-4 models
+   - **Ollama** - URL for local models (default: `http://localhost:11434`)
+3. Keys are encrypted and stored per-user in the database
+
+> **Note:** API keys in Settings override any keys in `.env`. The `.env` file is only used as a fallback.
+
+#### API Authentication
+
+For programmatic access, include the JWT token in requests:
 
 ```bash
-curl http://localhost:8000/api/auth/token
+# Login to get token
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "yourpassword"}'
+
+# Use token in subsequent requests
+curl http://localhost:8000/api/projects \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
 
-Use this token in the `X-Session-Token` header for API requests.
+#### Migration from Legacy Token Auth
+
+If you were using the old `X-Session-Token` header authentication:
+
+1. The `/api/auth/token` endpoint is deprecated
+2. Create an account and login to get a JWT token
+3. Replace `X-Session-Token: TOKEN` with `Authorization: Bearer JWT_TOKEN`
+4. Move API keys from `.env` to the Settings page for better security
 
 ## Docker Compose (Alternative)
 
@@ -149,13 +186,13 @@ This starts:
 # Clone a repo
 curl -X POST http://localhost:8000/api/projects/clone \
   -H "Content-Type: application/json" \
-  -H "X-Session-Token: YOUR_TOKEN" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -d '{"url": "https://github.com/user/repo"}'
 
 # Start Ultrathink agent
 curl -X POST http://localhost:8000/api/agents/create \
   -H "Content-Type: application/json" \
-  -H "X-Session-Token: YOUR_TOKEN" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -d '{
     "repo_id": "repo-id",
     "agent_type": "ultrathink",
@@ -168,7 +205,7 @@ curl -X POST http://localhost:8000/api/agents/create \
 
 ### WebSocket Events
 
-Connect to `ws://localhost:8000/ws?token=YOUR_TOKEN` for real-time updates:
+Connect to `ws://localhost:8000/ws?token=YOUR_JWT_TOKEN` for real-time updates:
 
 ```javascript
 // Ultrathink cascade events

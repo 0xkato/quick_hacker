@@ -18,6 +18,40 @@
   --vsc-statusbar: #007acc;
 }
 
+/* Soft UI Design Tokens */
+:root {
+  /* Border radius scale */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 12px;
+
+  /* Shadows */
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  /* Transitions */
+  --transition-default: all 150ms ease-out;
+
+  /* Card background */
+  --bg-card: #2d2d2d;
+  --bg-hover-soft: rgba(55, 55, 61, 0.8);
+}
+
+/* Scan indicator animation */
+@keyframes scan-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.scan-indicator {
+  animation: scan-pulse 2s ease-in-out infinite;
+}
+
+.scan-indicator-paused {
+  opacity: 0.7;
+}
+
 html {
   font-size: 13px;
 }
@@ -30,10 +64,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* VSCode-style scrollbar */
+/* Refined scrollbar - thinner and rounder */
 ::-webkit-scrollbar {
-  width: 14px;
-  height: 14px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -41,16 +75,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(121, 121, 121, 0.4);
-  border-radius: 7px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
+  background: #424242;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 100, 100, 0.7);
-  border: 3px solid transparent;
-  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-corner {

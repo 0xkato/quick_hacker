@@ -13,11 +13,54 @@ import type {
   Finding,
   AgentStats,
   InvestigationFlow,
+  CallTreeRoute,
   LLMInteraction,
   ToolDetail,
   InvestigationReport,
   AgentStateSnapshot,
 } from '@/types';
+
+// Token management
+let getAccessToken: (() => string | null) | null = null;
+let refreshTokenFn: (() => Promise<boolean>) | null = null;
+
+export function setAuthFunctions(
+  getToken: () => string | null,
+  refresh: () => Promise<boolean>
+) {
+  getAccessToken = getToken;
+  refreshTokenFn = refresh;
+}
+
+async function fetchWithAuth(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = getAccessToken?.();
+  const headers: HeadersInit = {
+    ...options.headers,
+  };
+
+  if (token) {
+    (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+  }
+
+  let response = await fetch(url, { ...options, headers });
+
+  // If unauthorized, try to refresh token and retry
+  if (response.status === 401 && refreshTokenFn) {
+    const refreshed = await refreshTokenFn();
+    if (refreshed) {
+      const newToken = getAccessToken?.();
+      if (newToken) {
+        (headers as Record<string, string>)['Authorization'] = `Bearer ${newToken}`;
+        response = await fetch(url, { ...options, headers });
+      }
+    }
+  }
+
+  return response;
+}
 
 export interface ObservabilityStats {
   total_interactions: number;
@@ -116,7 +159,7 @@ async function request<T>(
     headers['X-Session-Token'] = _sessionToken;
   }
 
-  const response = await fetch(url, {
+  const response = await fetchWithAuth(url, {
     ...options,
     headers,
   });
@@ -188,6 +231,33 @@ export const files = {
     return request(
       `/api/files/${repoId}/search?pattern=${encodeURIComponent(pattern)}&max_results=${maxResults}`
     );
+  },
+};
+
+// === Call Tree API ===
+
+export const calltree = {
+  async listRoutes(repoId: string): Promise<CallTreeRoute[]> {
+    return request<CallTreeRoute[]>(`/api/calltree/${repoId}/routes`);
+  },
+
+  async getTree(
+    repoId: string,
+    routeId: string,
+    options?: {
+      maxDepth?: number;
+      maxNodes?: number;
+      includeExternal?: boolean;
+    }
+  ): Promise<InvestigationFlow> {
+    const params = new URLSearchParams();
+    params.set('route_id', routeId);
+    if (options?.maxDepth !== undefined) params.set('max_depth', String(options.maxDepth));
+    if (options?.maxNodes !== undefined) params.set('max_nodes', String(options.maxNodes));
+    if (options?.includeExternal !== undefined) {
+      params.set('include_external', String(options.includeExternal));
+    }
+    return request<InvestigationFlow>(`/api/calltree/${repoId}/tree?${params.toString()}`);
   },
 };
 
@@ -298,7 +368,7 @@ export const agents = {
 
   async downloadReport(agentId: string, format: 'md' | 'json' | 'svg'): Promise<Blob> {
     const url = `${API_BASE}/api/agents/${agentId}/report/download?format=${format}`;
-    const response = await fetch(url, {
+    const response = await fetchWithAuth(url, {
       headers: _sessionToken ? { 'X-Session-Token': _sessionToken } : {},
     });
     if (!response.ok) {
@@ -466,7 +536,7 @@ export const chat = {
     provider?: string,
     model?: string
   ): AsyncGenerator<string, void, unknown> {
-    const response = await fetch(`${API_BASE}/api/chat/stream`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

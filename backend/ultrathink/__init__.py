@@ -10,6 +10,7 @@ from .gates import (
     GateResult,
     create_gate,
 )
+from .cascade import UltrathinkCascade, CascadeResult
 
 __all__ = [
     "UltrathinkConfig",
@@ -24,4 +25,6 @@ __all__ = [
     "FinalGate",
     "GateResult",
     "create_gate",
+    "UltrathinkCascade",
+    "CascadeResult",
 ]

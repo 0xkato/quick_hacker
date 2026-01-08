@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   settings,
+  authApiKeys,
   type AppSettings,
   type ProviderSettings,
   type AgentDefaults,
@@ -38,6 +39,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, { status: string; message: string }>>({});
+  const [validationResults, setValidationResults] = useState<Record<string, { status: string; message: string }>>({});
+  const [isValidating, setIsValidating] = useState<Record<string, boolean>>({});
 
   // Form state
   const [providerForms, setProviderForms] = useState<Record<string, Partial<ProviderSettings>>>({});
@@ -74,14 +77,70 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   };
 
+  // Validate API key before saving
+  const validateApiKey = async (provider: string, apiKey: string): Promise<boolean> => {
+    if (!apiKey || apiKey.trim() === '') {
+      return true; // Empty key is valid (user may want to clear it)
+    }
+
+    setIsValidating((prev) => ({ ...prev, [provider]: true }));
+    setValidationResults((prev) => ({ ...prev, [provider]: { status: 'loading', message: 'Validating...' } }));
+
+    try {
+      const result = await authApiKeys.validate(provider, apiKey);
+      if (result.valid) {
+        setValidationResults((prev) => ({ ...prev, [provider]: { status: 'success', message: 'API key is valid' } }));
+        return true;
+      } else {
+        setValidationResults((prev) => ({
+          ...prev,
+          [provider]: { status: 'error', message: result.error || 'Invalid API key' }
+        }));
+        return false;
+      }
+    } catch (error) {
+      setValidationResults((prev) => ({
+        ...prev,
+        [provider]: { status: 'error', message: error instanceof Error ? error.message : 'Validation failed' }
+      }));
+      return false;
+    } finally {
+      setIsValidating((prev) => ({ ...prev, [provider]: false }));
+    }
+  };
+
   // Save provider settings
   const saveProvider = async (provider: string) => {
     setIsSaving(true);
     try {
-      await settings.updateProvider(provider, providerForms[provider] || {});
+      const providerData = providerForms[provider] || {};
+      const apiKey = providerData.api_key;
+
+      // If API key is provided and has changed, validate and save it using the auth endpoint
+      if (apiKey && apiKey.trim() !== '' && !apiKey.startsWith('sk-...')) {
+        // Validate the API key first
+        const isValid = await validateApiKey(provider, apiKey);
+        if (!isValid) {
+          setIsSaving(false);
+          return; // Don't save if validation failed
+        }
+
+        // Save API key using the per-user auth endpoint
+        await authApiKeys.save(provider, apiKey);
+      }
+
+      // Save other provider settings (excluding api_key which is handled separately)
+      const { api_key: _, ...otherSettings } = providerData;
+      await settings.updateProvider(provider, otherSettings);
+
       await loadSettings();
+      setValidationResults((prev) => ({ ...prev, [provider]: { status: 'success', message: 'Settings saved' } }));
     } catch (error) {
       console.error('Failed to save provider:', error);
+      setValidationResults((prev) => ({
+        ...prev,
+        [provider]: { status: 'error', message: error instanceof Error ? error.message : 'Failed to save' }
+      }));
     } finally {
       setIsSaving(false);
     }
@@ -240,6 +299,25 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 </button>
                               </div>
                             </div>
+                            {validationResults[name] && (
+                              <p
+                                className={`text-xs mt-1 flex items-center gap-1 ${
+                                  validationResults[name].status === 'success'
+                                    ? 'text-vsc-success'
+                                    : validationResults[name].status === 'error'
+                                    ? 'text-vsc-error'
+                                    : 'text-vsc-text-muted'
+                                }`}
+                              >
+                                {validationResults[name].status === 'success' && <CheckCircle className="w-3 h-3" />}
+                                {validationResults[name].status === 'error' && <XCircle className="w-3 h-3" />}
+                                {validationResults[name].status === 'loading' && <Loader2 className="w-3 h-3 animate-spin" />}
+                                {validationResults[name].message}
+                              </p>
+                            )}
+                            <p className="text-xs text-vsc-text-muted mt-1">
+                              API keys are stored securely per-user. They will be validated before saving.
+                            </p>
                           </div>
                         )}
 

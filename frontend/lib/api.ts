@@ -683,4 +683,36 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
+// === Auth API Keys ===
+
+export interface ApiKeyValidationResult {
+  valid: boolean;
+  provider: string;
+  error?: string;
+}
+
+export const authApiKeys = {
+  async save(provider: string, apiKey: string): Promise<void> {
+    await request('/api/auth/api-keys', {
+      method: 'PUT',
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    });
+  },
+
+  async validate(provider: string, apiKey: string): Promise<ApiKeyValidationResult> {
+    return request<ApiKeyValidationResult>('/api/auth/api-keys/validate', {
+      method: 'POST',
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    });
+  },
+
+  async get(provider: string): Promise<{ has_key: boolean; masked_key?: string }> {
+    return request(`/api/auth/api-keys/${provider}`);
+  },
+
+  async delete(provider: string): Promise<void> {
+    await request(`/api/auth/api-keys/${provider}`, { method: 'DELETE' });
+  },
+};
+
 export { APIError, API_BASE };

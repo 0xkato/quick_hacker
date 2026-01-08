@@ -40,6 +40,23 @@ class ProviderType(str, Enum):
     OLLAMA = "ollama"
 
 
+class ThinkingMode(str, Enum):
+    """How to invoke extended thinking."""
+    NATIVE = "native"      # Use provider's native extended thinking (Claude)
+    SIMULATED = "simulated"  # Simulate via chain-of-thought prompting (GPT-4)
+    STRUCTURED = "structured"  # Structured reasoning prompts (open source)
+    AUTO = "auto"          # Auto-detect based on model
+
+
+class UltrathinkGate(str, Enum):
+    """Gates in the hierarchical verification cascade."""
+    TRIAGE = "triage"
+    DEEP_ANALYSIS = "deep_analysis"
+    DEVILS_ADVOCATE = "devils_advocate"
+    PROOF_GENERATOR = "proof_generator"
+    FINAL_GATE = "final_gate"
+
+
 # === Repository ===
 
 class RepoCloneRequest(BaseModel):

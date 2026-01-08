@@ -32,6 +32,7 @@ class AgentType(str, Enum):
     STRICT_ANALYSIS = "strict_analysis"  # Zero false positive tolerance
     ULTRA_STRICT = "ultra_strict"  # Double verification, maximum precision
     DEEP_AUDIT = "deep_audit"  # 3-layer prompt architecture with AUDIT_JSONL logging
+    ULTRATHINK = "ultrathink"  # Maximum cognitive depth with hierarchical cascade
 
 
 class ProviderType(str, Enum):

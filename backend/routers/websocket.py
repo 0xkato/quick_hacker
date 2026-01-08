@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from models.schemas import WSMessage
 from services.agent_orchestrator import orchestrator
 from services.observability_service import observability_service
-from middleware.auth import verify_session
+from middleware.auth import verify_ws_token
 
 
 router = APIRouter()
@@ -113,7 +113,8 @@ async def websocket_endpoint(
 
     Authentication:
     - Pass token as query parameter: /ws?token=<your_token>
-    - Get token from /api/auth/token endpoint
+    - Legacy session token from /api/auth/token (localhost-only by default)
+    - OR a JWT access token from /api/auth/login
 
     Receives:
     - subscribe: { repo_id?: string, agent_id?: string }
@@ -130,15 +131,12 @@ async def websocket_endpoint(
     # Validate authentication token
     if not token:
         print("[WS] Connection rejected: No token provided")
-        await websocket.close(code=4001, reason="Authentication required. Use ?token=<session_token>")
+        await websocket.close(code=4001, reason="Authentication required. Use ?token=<token>")
         return
 
-    if not verify_session(token):
-        # Log more details for debugging
-        from middleware.auth import get_session_token
-        expected = get_session_token()
-        print(f"[WS] Token mismatch - received: {token[:8]}... expected: {expected[:8]}...")
-        await websocket.close(code=4001, reason="Invalid or expired token. Refresh the page to get a new token.")
+    if not verify_ws_token(token):
+        print(f"[WS] Token rejected - prefix: {token[:8]}...")
+        await websocket.close(code=4001, reason="Invalid or expired token.")
         return
 
     await manager.connect(websocket)

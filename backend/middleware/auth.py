@@ -1,6 +1,7 @@
 """Authentication middleware supporting both legacy tokens and JWT."""
 import os
 import secrets
+import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,11 @@ from services.auth_service import auth_service
 
 
 security = HTTPBearer(auto_error=False)
+
+_MASTER_TOKEN_CACHE: Optional[str] = None
+_LEGACY_SESSION_TOKENS: dict[str, datetime] = {}
+_LEGACY_LOCK = threading.Lock()
+_LEGACY_SESSION_TTL = timedelta(hours=24)
 
 
 class AuthContext(BaseModel):
@@ -56,9 +62,8 @@ async def get_auth_context(
     # Fall back to legacy X-Session-Token (for backwards compatibility during migration)
     legacy_token = request.headers.get("X-Session-Token")
     if legacy_token:
-        # Validate against master token (legacy behavior)
-        master_token = _get_master_token()
-        if master_token and secrets.compare_digest(legacy_token, master_token):
+        # Validate against master token or active sessions (legacy behavior)
+        if verify_session(legacy_token):
             return AuthContext(
                 is_authenticated=True,
                 is_legacy_token=True
@@ -100,6 +105,80 @@ def _get_master_token() -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def get_session_token() -> str:
+    """
+    Get (and if needed, create) the legacy master session token.
+
+    This supports the existing frontend bootstrapping flow while JWT auth is being adopted.
+    """
+    global _MASTER_TOKEN_CACHE
+    if _MASTER_TOKEN_CACHE:
+        return _MASTER_TOKEN_CACHE
+
+    token = _get_master_token()
+    if token:
+        _MASTER_TOKEN_CACHE = token
+        return token
+
+    # Best-effort: create and persist a token; fall back to in-memory token if writes are blocked.
+    token = secrets.token_urlsafe(32)
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    token_file = data_dir / ".session_token"
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        if token_file.exists() and token_file.is_symlink():
+            # Refuse to follow symlinks for token files.
+            _MASTER_TOKEN_CACHE = token
+            return token
+        token_file.write_text(token)
+    except Exception:
+        pass
+
+    _MASTER_TOKEN_CACHE = token
+    return token
+
+
+def create_new_session(expires_in: timedelta = _LEGACY_SESSION_TTL) -> str:
+    """Create a new legacy session token (ephemeral, in-memory)."""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + expires_in
+    with _LEGACY_LOCK:
+        _LEGACY_SESSION_TOKENS[token] = expires_at
+    return token
+
+
+def verify_session(token: str) -> bool:
+    """Verify a legacy session token (master token or ephemeral session)."""
+    if not token:
+        return False
+
+    master = get_session_token()
+    if master and secrets.compare_digest(token, master):
+        return True
+
+    now = datetime.utcnow()
+    with _LEGACY_LOCK:
+        expires_at = _LEGACY_SESSION_TOKENS.get(token)
+        if not expires_at:
+            return False
+        if expires_at <= now:
+            _LEGACY_SESSION_TOKENS.pop(token, None)
+            return False
+        return True
+
+
+def verify_ws_token(token: str) -> bool:
+    """Verify a WebSocket auth token (legacy session token or JWT access token)."""
+    if not token:
+        return False
+
+    if verify_session(token):
+        return True
+
+    payload = auth_service.decode_token(token)
+    return bool(payload and payload.get("type") == "access")
 
 
 # Helper to get user's API key for a provider

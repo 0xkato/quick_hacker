@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quick-hack.local/schemas/evidence_pack_v1.json",
+  "title": "EVIDENCE_PACK v1 (wire)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "items"],
+  "properties": {
+    "v": { "type": "integer", "const": 1 },
+    "items": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "k", "src_seq"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^EVID-[a-f0-9]{8,16}$" },
+          "k": {
+            "type": "string",
+            "enum": ["fs", "sh", "sc", "cfg", "rt"],
+            "description": "kind: file_slice/search_hits/scan/config/runtime"
+          },
+          "src_seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000,
+            "description": "audit.jsonl seq for tool_result"
+          },
+          "p": { "type": "string", "maxLength": 220, "description": "path (relative) when applicable" },
+          "r": {
+            "type": "string",
+            "pattern": "^[0-9]+-[0-9]+$",
+            "description": "line range start-end when applicable"
+          },
+          "lang": { "type": "string", "maxLength": 16 },
+          "h": { "type": "string", "maxLength": 80, "description": "sha256 or stable hash of payload" },
+          "t": {
+            "type": "string",
+            "maxLength": 35000,
+            "description": "text payload (only for fs/cfg; keep small)"
+          },
+          "q": { "type": "string", "maxLength": 200, "description": "search query for sh items" },
+          "hits": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["p", "l", "x"],
+              "properties": {
+                "p": { "type": "string", "maxLength": 220 },
+                "l": { "type": "integer", "minimum": 1, "maximum": 2000000 },
+                "x": { "type": "string", "maxLength": 200 }
+              }
+            }
+          },
+          "tool": { "type": "string", "maxLength": 40, "description": "optional tool name" },
+          "meta": { "type": "object", "additionalProperties": true, "description": "optional metadata" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,326 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* VSCode Dark+ Theme Variables */
+:root {
+  --vsc-bg: #1e1e1e;
+  --vsc-sidebar: #252526;
+  --vsc-activitybar: #333333;
+  --vsc-input: #3c3c3c;
+  --vsc-border: #454545;
+  --vsc-border-subtle: #3c3c3c;
+  --vsc-text: #cccccc;
+  --vsc-text-muted: #858585;
+  --vsc-accent: #0078d4;
+  --vsc-hover: #2a2d2e;
+  --vsc-selection: #264f78;
+  --vsc-statusbar: #007acc;
+}
+
+html {
+  font-size: 13px;
+}
+
+body {
+  background-color: var(--vsc-bg);
+  color: var(--vsc-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* VSCode-style scrollbar */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(121, 121, 121, 0.4);
+  border-radius: 7px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 100, 0.7);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Selection */
+::selection {
+  background: var(--vsc-selection);
+}
+
+/* File tree styles */
+.file-tree-item {
+  @apply flex items-center gap-1.5 px-2 py-0.5 cursor-pointer text-vsc-sm;
+  border-radius: 0;
+}
+
+.file-tree-item:hover {
+  background: var(--vsc-hover);
+}
+
+.file-tree-item.selected {
+  background: var(--vsc-selection);
+}
+
+/* Severity badges - VSCode style */
+.severity-badge {
+  @apply inline-flex items-center px-1.5 py-0.5 rounded text-vsc-xs font-medium;
+}
+
+.severity-badge.critical {
+  @apply bg-sev-critical/20 text-sev-critical;
+}
+
+.severity-badge.high {
+  @apply bg-sev-high/20 text-sev-high;
+}
+
+.severity-badge.medium {
+  @apply bg-sev-medium/20 text-sev-medium;
+}
+
+.severity-badge.low {
+  @apply bg-sev-low/20 text-sev-low;
+}
+
+.severity-badge.info {
+  @apply bg-sev-info/20 text-sev-info;
+}
+
+/* Agent status badges */
+.agent-status {
+  @apply inline-flex items-center px-1.5 py-0.5 rounded text-vsc-xs font-medium;
+}
+
+.agent-status.running {
+  @apply bg-vsc-success/20 text-vsc-success;
+}
+
+.agent-status.pending {
+  @apply bg-vsc-warning/20 text-vsc-warning;
+}
+
+.agent-status.paused {
+  @apply bg-vsc-text-link/20 text-vsc-text-link;
+}
+
+.agent-status.completed {
+  @apply bg-vsc-text-muted/20 text-vsc-text-muted;
+}
+
+.agent-status.failed {
+  @apply bg-vsc-error/20 text-vsc-error;
+}
+
+.agent-status.cancelled {
+  @apply bg-vsc-border/40 text-vsc-text-muted;
+}
+
+/* VSCode-style buttons */
+.btn {
+  @apply inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded text-vsc-sm font-normal transition-colors;
+  @apply disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-primary {
+  @apply bg-vsc-accent hover:bg-vsc-accent-hover text-white;
+}
+
+.btn-secondary {
+  @apply bg-vsc-input hover:bg-vsc-border text-vsc-text;
+}
+
+.btn-ghost {
+  @apply bg-transparent hover:bg-vsc-hover text-vsc-text-muted hover:text-vsc-text;
+}
+
+.btn-danger {
+  @apply bg-vsc-error hover:bg-vsc-error/80 text-white;
+}
+
+.btn-sm {
+  @apply px-2 py-0.5 text-vsc-xs;
+}
+
+.btn-icon {
+  @apply p-1.5 rounded hover:bg-vsc-hover text-vsc-text-muted hover:text-vsc-text;
+}
+
+/* VSCode-style inputs */
+.input {
+  @apply w-full px-2 py-1 bg-vsc-input border border-vsc-border-subtle rounded text-vsc-sm text-vsc-text;
+  @apply focus:outline-none focus:border-vsc-accent placeholder:text-vsc-text-muted;
+}
+
+.input:focus {
+  box-shadow: 0 0 0 1px var(--vsc-accent);
+}
+
+.select {
+  @apply w-full px-2 py-1 bg-vsc-input border border-vsc-border-subtle rounded text-vsc-sm text-vsc-text;
+  @apply focus:outline-none focus:border-vsc-accent;
+}
+
+.select:focus {
+  box-shadow: 0 0 0 1px var(--vsc-accent);
+}
+
+/* Panel styles */
+.panel {
+  @apply bg-vsc-sidebar;
+}
+
+.panel-header {
+  @apply flex items-center justify-between px-3 py-1.5 border-b border-vsc-border-subtle;
+  @apply text-vsc-xs font-semibold uppercase tracking-wider text-vsc-text-muted;
+}
+
+.panel-content {
+  @apply p-2;
+}
+
+/* Code snippet */
+.code-snippet {
+  @apply font-mono text-vsc-sm bg-vsc-bg p-2 rounded border border-vsc-border-subtle overflow-x-auto;
+  line-height: 1.4;
+}
+
+/* Activity bar icon button */
+.activity-icon {
+  @apply flex items-center justify-center w-12 h-12 text-vsc-text-muted hover:text-vsc-text cursor-pointer;
+  @apply relative;
+}
+
+.activity-icon.active {
+  @apply text-vsc-text;
+}
+
+.activity-icon.active::before {
+  content: '';
+  @apply absolute left-0 top-0 bottom-0 w-0.5 bg-vsc-accent;
+}
+
+/* Tab bar styles */
+.tab {
+  @apply flex items-center gap-1.5 px-3 py-1.5 text-vsc-sm text-vsc-text-muted cursor-pointer;
+  @apply border-t-2 border-transparent;
+  background: var(--vsc-sidebar);
+}
+
+.tab:hover {
+  @apply text-vsc-text;
+}
+
+.tab.active {
+  @apply text-vsc-text bg-vsc-bg;
+  border-top-color: var(--vsc-accent);
+}
+
+/* Breadcrumb */
+.breadcrumb {
+  @apply flex items-center gap-1 px-3 py-1 text-vsc-sm text-vsc-text-muted bg-vsc-bg;
+}
+
+.breadcrumb-item {
+  @apply hover:text-vsc-text cursor-pointer;
+}
+
+.breadcrumb-separator {
+  @apply text-vsc-border mx-0.5;
+}
+
+/* Modal overlay */
+.modal-overlay {
+  @apply fixed inset-0 bg-black/60 flex items-center justify-center z-50;
+}
+
+.modal-content {
+  @apply bg-vsc-sidebar border border-vsc-border rounded-lg shadow-vsc-widget max-w-2xl w-full mx-4;
+}
+
+.modal-header {
+  @apply flex items-center justify-between px-4 py-3 border-b border-vsc-border-subtle;
+}
+
+.modal-body {
+  @apply p-4;
+}
+
+.modal-footer {
+  @apply flex justify-end gap-2 px-4 py-3 border-t border-vsc-border-subtle;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply h-1 bg-vsc-border-subtle rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full bg-vsc-accent transition-all duration-300;
+}
+
+/* VSCode-style list */
+.list-item {
+  @apply flex items-center gap-2 px-2 py-1 text-vsc-sm cursor-pointer;
+  @apply hover:bg-vsc-hover rounded;
+}
+
+.list-item.selected {
+  @apply bg-vsc-selection;
+}
+
+/* Tooltip */
+.tooltip {
+  @apply absolute z-50 px-2 py-1 text-vsc-xs bg-vsc-sidebar border border-vsc-border rounded shadow-vsc-dropdown;
+  @apply text-vsc-text whitespace-nowrap;
+}
+
+/* Notification toast */
+.toast {
+  @apply fixed bottom-4 right-4 px-4 py-2 rounded shadow-vsc-dropdown;
+  @apply flex items-center gap-2 text-vsc-sm;
+}
+
+.toast-error {
+  @apply bg-vsc-error text-white;
+}
+
+.toast-success {
+  @apply bg-vsc-success text-vsc-bg;
+}
+
+.toast-warning {
+  @apply bg-vsc-warning text-vsc-bg;
+}
+
+/* Divider */
+.divider {
+  @apply border-t border-vsc-border-subtle my-2;
+}
+
+/* Empty state */
+.empty-state {
+  @apply flex flex-col items-center justify-center py-8 text-vsc-text-muted;
+}
+
+.empty-state-icon {
+  @apply w-12 h-12 mb-3 opacity-40;
+}
+
+.empty-state-text {
+  @apply text-vsc-sm text-center;
+}

@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quick-hack.local/schemas/run_state_v1.json",
+  "title": "RUN_STATE_JSON v1 (wire)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "run", "it", "ph", "obj", "bud", "cand", "cov", "q", "flg", "ptr"],
+  "properties": {
+    "v": { "type": "integer", "const": 1 },
+    "run": { "type": "string", "minLength": 6, "maxLength": 64, "description": "run_id" },
+    "it": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "iteration counter" },
+    "ph": {
+      "type": "string",
+      "enum": ["index", "harvest", "trace", "validate", "variants", "coverage", "finalize"],
+      "description": "current phase"
+    },
+    "obj": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600,
+      "description": "single-turn objective (what to do next)"
+    },
+    "bud": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tc_rem", "lr_max", "sr_max", "ev_max", "tok_max"],
+      "properties": {
+        "tc_rem": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "tool calls remaining for this run or tranche"
+        },
+        "lr_max": { "type": "integer", "minimum": 20, "maximum": 500, "description": "max lines per read_file" },
+        "sr_max": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 200,
+          "description": "max search hits returned"
+        },
+        "ev_max": { "type": "integer", "minimum": 1, "maximum": 5, "description": "max evidence items per turn" },
+        "tok_max": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 200000,
+          "description": "max tokens for model output (soft budget)"
+        }
+      }
+    },
+    "cand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cnt", "top"],
+      "properties": {
+        "cnt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["open", "val", "hard", "clr", "def"],
+          "properties": {
+            "open": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "val": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "hard": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "clr": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "def": { "type": "integer", "minimum": 0, "maximum": 100000 }
+          }
+        },
+        "top": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 10,
+          "description": "Top-N candidate cards (only what’s needed to keep continuity)",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "cls", "comp", "st", "pri", "need"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^CAND-[a-f0-9]{8,16}$" },
+              "cls": { "type": "string", "minLength": 2, "maxLength": 64 },
+              "comp": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "component/risk_cluster"
+              },
+              "st": { "type": "string", "enum": ["open", "val", "hard", "clr", "def"] },
+              "pri": { "type": "integer", "minimum": 0, "maximum": 100, "description": "priority (0=highest)" },
+              "need": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 240,
+                "description": "next evidence needed (one-liner: read/search/scan request)"
+              },
+              "where": {
+                "type": "string",
+                "maxLength": 120,
+                "description": "optional pointer like path:lines or symbol"
+              }
+            }
+          }
+        }
+      }
+    },
+    "cov": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "description": "Coverage summary rows (compact)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["c", "p", "s", "e", "miss"],
+        "properties": {
+          "c": { "type": "string", "minLength": 1, "maxLength": 80, "description": "component" },
+          "p": { "type": "string", "minLength": 1, "maxLength": 80, "description": "profile/class bucket" },
+          "s": { "type": "integer", "minimum": 0, "maximum": 100, "description": "sink coverage %" },
+          "e": { "type": "integer", "minimum": 0, "maximum": 100, "description": "entry coverage %" },
+          "miss": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "items": { "type": "string", "maxLength": 60 },
+            "description": "missing sink families or entrypoints (names only)"
+          },
+          "st": {
+            "type": "string",
+            "enum": ["ok", "insufficient_depth"],
+            "description": "optional status"
+          }
+        }
+      }
+    },
+    "q": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "description": "Open questions / missing evidence (actionable)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["k", "txt", "pri"],
+        "properties": {
+          "k": {
+            "type": "string",
+            "enum": ["need_slice", "need_search", "need_config", "need_runtime", "need_variant_scan"]
+          },
+          "txt": { "type": "string", "minLength": 1, "maxLength": 220 },
+          "pri": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "ref": { "type": "string", "maxLength": 120, "description": "optional pointer: path:lines or candidate id" }
+        }
+      }
+    },
+    "flg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dflt", "net", "jail"],
+      "properties": {
+        "dflt": { "type": "integer", "enum": [0, 1], "description": "defaults-only enforced" },
+        "net": { "type": "integer", "enum": [0, 1], "description": "external network allowed" },
+        "jail": { "type": "integer", "enum": [0, 1], "description": "audit jail enforced" }
+      }
+    },
+    "ptr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["a_seq", "a_tail"],
+      "properties": {
+        "a_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000,
+          "description": "last appended audit.jsonl seq number"
+        },
+        "a_tail": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 6,
+          "items": { "type": "integer", "minimum": 0, "maximum": 100000000 },
+          "description": "last few audit seq numbers mentioned in evidence pack"
+        }
+      }
+    }
+  }
+}

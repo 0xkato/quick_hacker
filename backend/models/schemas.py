@@ -208,6 +208,10 @@ class WSMessageType(str, Enum):
     ULTRATHINK_GATE_COMPLETE = "ultrathink_gate_complete"
     ULTRATHINK_THINKING_UPDATE = "ultrathink_thinking_update"
     ULTRATHINK_CASCADE_COMPLETE = "ultrathink_cascade_complete"
+    # Session hibernation events
+    SESSION_PAUSING = "session_pausing"
+    SESSION_PAUSED = "session_paused"
+    SESSION_RESUMED = "session_resumed"
 
 
 class WSMessage(BaseModel):

@@ -267,6 +267,53 @@ AGENT_TOOLS = [
 ]
 
 
+# Tool schema for reporting trace path verdicts (used for coverage visibility)
+TRACE_PATH_VERDICT_SCHEMA = {
+    "name": "trace_path_verdict",
+    "description": "Report the conclusion of tracing a data flow path from entry point to sink. Call this after investigating each potential vulnerability path.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "entry_point_file": {
+                "type": "string",
+                "description": "File path of the entry point"
+            },
+            "entry_point_line": {
+                "type": "integer",
+                "description": "Line number of the entry point"
+            },
+            "sink_file": {
+                "type": "string",
+                "description": "File path of the dangerous sink"
+            },
+            "sink_line": {
+                "type": "integer",
+                "description": "Line number of the dangerous sink"
+            },
+            "verdict": {
+                "type": "string",
+                "enum": ["safe", "vulnerable", "blocked", "inconclusive"],
+                "description": "Conclusion: safe (no vuln), vulnerable (finding reported), blocked (defenses prevent exploitation), inconclusive (need more context)"
+            },
+            "reasoning": {
+                "type": "string",
+                "description": "1-2 sentence explanation of why this verdict"
+            },
+            "files_examined": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of files read while tracing this path"
+            },
+            "finding_id": {
+                "type": "string",
+                "description": "If verdict is 'vulnerable', the ID of the reported finding"
+            }
+        },
+        "required": ["entry_point_file", "entry_point_line", "sink_file", "sink_line", "verdict", "reasoning", "files_examined"]
+    }
+}
+
+
 # Build tool definition lookup for validation
 TOOL_DEFINITIONS = {tool["name"]: tool for tool in AGENT_TOOLS}
 

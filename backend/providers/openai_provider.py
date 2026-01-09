@@ -25,12 +25,15 @@ class OpenAIProvider(BaseProvider):
         "gpt-4-turbo-preview",
         "gpt-4",
         "gpt-3.5-turbo",
+        "gpt-5.2",
         "o1",
         "o1-preview",
         "o1-mini",
     ]
 
-    _REASONING_MODEL_RE = re.compile(r"^o\d", re.IGNORECASE)
+    _NO_STREAMING_MODEL_RE = re.compile(r"^o\d", re.IGNORECASE)
+    _MAX_COMPLETION_TOKENS_MODEL_RE = re.compile(r"^(o\d|gpt-5)", re.IGNORECASE)
+    _GPT5_MODEL_RE = re.compile(r"^gpt-5", re.IGNORECASE)
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
@@ -44,15 +47,27 @@ class OpenAIProvider(BaseProvider):
             base_url=sanitize_string(config.base_url),
         )
 
-    def _is_reasoning_model(self) -> bool:
+    def _supports_streaming(self) -> bool:
         model = (self.model or "").strip()
-        return bool(self._REASONING_MODEL_RE.match(model))
+        return not bool(self._NO_STREAMING_MODEL_RE.match(model))
+
+    def _needs_max_completion_tokens(self) -> bool:
+        model = (self.model or "").strip()
+        return bool(self._MAX_COMPLETION_TOKENS_MODEL_RE.match(model))
+
+    def _default_reasoning_effort(self) -> Optional[str]:
+        model = (self.model or "").strip()
+        if self._GPT5_MODEL_RE.match(model):
+            return "none"
+        return None
 
     def _get_generation_kwargs(self) -> dict:
-        if self._is_reasoning_model():
-            return {
-                "max_completion_tokens": self.max_tokens,
-            }
+        if self._needs_max_completion_tokens():
+            kwargs = {"max_completion_tokens": self.max_tokens}
+            reasoning_effort = self._default_reasoning_effort()
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
+            return kwargs
 
         return {
             "temperature": self.temperature,
@@ -102,7 +117,7 @@ class OpenAIProvider(BaseProvider):
         openai_messages = self._convert_messages(messages, system_prompt)
 
         # Some OpenAI reasoning models don't support streaming. Fall back to a single buffered response.
-        if self._is_reasoning_model():
+        if not self._supports_streaming():
             content = await self.generate(messages, system_prompt)
             if content:
                 yield StreamChunk(content=content, is_complete=False)

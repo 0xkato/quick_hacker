@@ -84,7 +84,7 @@ class AppSettings(BaseModel):
     providers: dict[str, ProviderSettings] = {
         "openai": ProviderSettings(
             default_model="gpt-4o",
-            available_models=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini"]
+            available_models=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-5.2", "o1", "o1-mini"]
         ),
         "anthropic": ProviderSettings(
             default_model="claude-sonnet-4-20250514",

@@ -18,6 +18,8 @@ import type {
   ToolDetail,
   InvestigationReport,
   AgentStateSnapshot,
+  SnapshotInfo,
+  SessionSnapshot,
 } from '@/types';
 
 // Token management
@@ -712,6 +714,51 @@ export const authApiKeys = {
 
   async delete(provider: string): Promise<void> {
     await request(`/api/auth/api-keys/${provider}`, { method: 'DELETE' });
+  },
+};
+
+// === Session API ===
+
+export const session = {
+  async getSnapshotInfo(): Promise<SnapshotInfo | null> {
+    try {
+      return await request<SnapshotInfo>('/api/session/snapshot');
+    } catch (err) {
+      if (err instanceof APIError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  async pause(uiState?: {
+    active_view: string;
+    selected_file: string | null;
+    open_panels: string[];
+    selected_agent_id: string | null;
+  }): Promise<{
+    status: string;
+    snapshot_path: string;
+    agents_paused: number;
+    findings_saved: number;
+  }> {
+    return request('/api/session/pause', {
+      method: 'POST',
+      body: JSON.stringify(uiState ? { ui_state: uiState } : {}),
+    });
+  },
+
+  async resume(): Promise<{
+    status: string;
+    snapshot: SessionSnapshot;
+  }> {
+    return request('/api/session/resume', {
+      method: 'POST',
+    });
+  },
+
+  async deleteSnapshot(): Promise<void> {
+    await request('/api/session/snapshot', { method: 'DELETE' });
   },
 };
 

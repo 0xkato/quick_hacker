@@ -827,6 +827,32 @@ class DeepAuditAgent:
                 arguments = {}
 
             tool_name = str(tool_name or "")
+
+            # Handle trace_path_verdict specially (coverage tracking)
+            if tool_name == "trace_path_verdict":
+                from agents.tools import handle_trace_path_verdict
+
+                def broadcast_coverage(event_type: str, data: dict):
+                    self._broadcast(WSMessageType.PROGRESS, {"type": event_type, **data})
+
+                result_msg = handle_trace_path_verdict(
+                    arguments,
+                    self.coverage_tracker,
+                    broadcast_coverage
+                )
+
+                # Log the verdict
+                self._log_audit_event("path_verdict", {
+                    "entry": f"{arguments.get('entry_point_file')}:{arguments.get('entry_point_line')}",
+                    "sink": f"{arguments.get('sink_file')}:{arguments.get('sink_line')}",
+                    "verdict": arguments.get("verdict"),
+                    "reasoning": arguments.get("reasoning")
+                })
+
+                # Update budgets
+                self.state.budgets["tc_rem"] = max(0, int(self.state.budgets.get("tc_rem", 0)) - 1)
+                continue  # Skip normal tool execution
+
             arguments = self._apply_tool_budgets(tool_name, arguments)
 
             # Log tool call

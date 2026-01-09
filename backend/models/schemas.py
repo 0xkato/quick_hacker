@@ -63,6 +63,18 @@ class HandoffMode(str, Enum):
     SINK_IDENTIFICATION = "sink_identification"
 
 
+class FindingClassification(str, Enum):
+    """Classification of a finding for gate filtering."""
+    SECURITY_ISSUE = "security_issue"
+    BUG = "bug"
+    MISCONFIGURATION = "misconfiguration"
+    HARDENING = "hardening"
+
+
+# Type alias for fix types
+FixType = Literal["code", "config", "docs", "warning"]
+
+
 # === Repository ===
 
 class RepoCloneRequest(BaseModel):
@@ -177,6 +189,14 @@ class Finding(BaseModel):
     source_trace: Optional[list[str]] = None  # Source-to-sink trace steps
     created_at: datetime
     metadata: dict[str, Any] = {}
+    # Classification gate fields
+    classification: FindingClassification = FindingClassification.SECURITY_ISSUE
+    config_dependent: bool = False
+    config_flag: Optional[str] = None
+    default_secure: Optional[bool] = None
+    contradiction_present: bool = False
+    fix_type: FixType = "code"
+    classification_reasoning: str = ""
 
 
 class FindingCreate(BaseModel):
@@ -196,6 +216,14 @@ class FindingCreate(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     source_trace: Optional[list[str]] = None  # Source-to-sink trace steps
     metadata: dict[str, Any] = {}
+    # Classification gate fields
+    classification: FindingClassification = FindingClassification.SECURITY_ISSUE
+    config_dependent: bool = False
+    config_flag: Optional[str] = None
+    default_secure: Optional[bool] = None
+    contradiction_present: bool = False
+    fix_type: FixType = "code"
+    classification_reasoning: str = ""
 
 
 # === Dual-Model Handoff ===

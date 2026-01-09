@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from models.schemas import AgentType, Severity, FindingCreate
+from models.schemas import AgentType, Severity, FindingCreate, FindingClassification
 from services import file_service
 from .base_agent import BaseAgent
 
@@ -154,6 +154,12 @@ class QuickAuditAgent(BaseAgent):
                     attack_scenario="Attacker could extract credentials from source code.",
                     recommended_fix="Move secrets to environment variables or a secure vault.",
                     confidence=0.7,
+                    # Classification fields for pattern matches
+                    classification=FindingClassification.SECURITY_ISSUE,
+                    config_dependent=False,
+                    contradiction_present=False,
+                    fix_type="code",
+                    classification_reasoning="Pattern match detected potential secret. Manual review required.",
                 )
 
                 f = self.add_finding(finding)
@@ -180,6 +186,12 @@ class QuickAuditAgent(BaseAgent):
                     vulnerability_type=vuln_type,
                     recommended_fix=self._get_fix_suggestion(vuln_type),
                     confidence=0.5,  # Lower confidence for pattern matching
+                    # Classification fields for pattern matches
+                    classification=FindingClassification.SECURITY_ISSUE,
+                    config_dependent=False,
+                    contradiction_present=False,
+                    fix_type="code",
+                    classification_reasoning="Pattern match detected - manual review required.",
                 )
 
                 f = self.add_finding(finding)

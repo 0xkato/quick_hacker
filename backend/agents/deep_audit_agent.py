@@ -36,6 +36,7 @@ from providers import get_provider
 from prompts import (
     get_hard_rules_prompt,
     get_developer_prompt,
+    get_classification_gate_prompt,
 )
 from services.attack_surface_service import attack_surface_service
 from services.flow_service import flow_service
@@ -359,7 +360,21 @@ class DeepAuditAgent:
 
     async def _audit_loop(self):
         """Main audit loop implementing the workflow engine."""
+        # Get threat model from project (default to AB)
+        threat_model = "AB"
+        try:
+            project = await project_service.get_project(self.repo_id)
+            if project and getattr(project, "threat_model", None):
+                threat_model = project.threat_model
+        except Exception:
+            threat_model = "AB"
+
+        # Build system prompt with classification gate
         system_prompt = get_hard_rules_prompt() + "\n\n" + get_developer_prompt()
+
+        # Inject classification gate prompt
+        classification_prompt = get_classification_gate_prompt(threat_model)
+        system_prompt += "\n\n" + classification_prompt
 
         self._log_audit_event("plan", {
             "action": "initialize_audit",

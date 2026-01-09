@@ -14,6 +14,7 @@ from models.schemas import (
     AgentStatus,
     AgentType,
     Finding,
+    FindingClassification,
     FindingCreate,
     Severity,
     WSMessage,
@@ -720,6 +721,23 @@ CONFIDENCE: [0.0-1.0]
                 attack = f"""Payload: {poc.get('payload', 'N/A')}
 Expected Result: {poc.get('expected_result', 'N/A')}"""
 
+                # Extract classification fields from agent output
+                classification_str = f.get("classification", "security_issue")
+                try:
+                    classification = FindingClassification(classification_str)
+                except ValueError:
+                    classification = FindingClassification.SECURITY_ISSUE
+
+                config_dependent = f.get("config_dependent", False)
+                config_flag = f.get("config_flag")
+                default_secure = f.get("default_secure")
+                contradiction_present = f.get("contradiction_present", False)
+                fix_type = f.get("fix_type", "code")
+                # Validate fix_type is one of the allowed values
+                if fix_type not in ("code", "config", "docs", "warning"):
+                    fix_type = "code"
+                classification_reasoning = f.get("classification_reasoning", "")
+
                 finding = FindingCreate(
                     severity=severity,
                     title=f.get("title", "Unknown Issue"),
@@ -733,6 +751,14 @@ Expected Result: {poc.get('expected_result', 'N/A')}"""
                     confidence=min(max(f.get("confidence", 0.5), 0.0), 1.0),
                     vulnerable_code=f.get("sink", {}).get("vulnerable_code"),
                     cwe_id=f.get("cwe"),
+                    # Classification gate fields
+                    classification=classification,
+                    config_dependent=config_dependent,
+                    config_flag=config_flag,
+                    default_secure=default_secure,
+                    contradiction_present=contradiction_present,
+                    fix_type=fix_type,
+                    classification_reasoning=classification_reasoning,
                 )
                 findings.append(finding)
 
@@ -778,6 +804,37 @@ Expected Result: {poc.get('expected_result', 'N/A')}"""
                     except ValueError:
                         confidence = 0.5
 
+                    # Parse classification fields from legacy format
+                    classification_str = current_finding.get("CLASSIFICATION", "security_issue").lower()
+                    try:
+                        classification = FindingClassification(classification_str)
+                    except ValueError:
+                        classification = FindingClassification.SECURITY_ISSUE
+
+                    config_dependent_str = current_finding.get("CONFIG_DEPENDENT", "false").lower()
+                    config_dependent = config_dependent_str in ("true", "yes", "1")
+
+                    config_flag = current_finding.get("CONFIG_FLAG")
+                    if config_flag == "":
+                        config_flag = None
+
+                    default_secure_str = current_finding.get("DEFAULT_SECURE", "")
+                    if default_secure_str.lower() in ("true", "yes", "1"):
+                        default_secure = True
+                    elif default_secure_str.lower() in ("false", "no", "0"):
+                        default_secure = False
+                    else:
+                        default_secure = None
+
+                    contradiction_str = current_finding.get("CONTRADICTION_PRESENT", "false").lower()
+                    contradiction_present = contradiction_str in ("true", "yes", "1")
+
+                    fix_type = current_finding.get("FIX_TYPE", "code").lower()
+                    if fix_type not in ("code", "config", "docs", "warning"):
+                        fix_type = "code"
+
+                    classification_reasoning = current_finding.get("CLASSIFICATION_REASONING", "")
+
                     finding = FindingCreate(
                         severity=severity,
                         title=current_finding.get("TITLE", "Unknown Issue"),
@@ -789,6 +846,14 @@ Expected Result: {poc.get('expected_result', 'N/A')}"""
                         attack_scenario=current_finding.get("ATTACK"),
                         recommended_fix=current_finding.get("FIX"),
                         confidence=min(max(confidence, 0.0), 1.0),
+                        # Classification gate fields
+                        classification=classification,
+                        config_dependent=config_dependent,
+                        config_flag=config_flag,
+                        default_secure=default_secure,
+                        contradiction_present=contradiction_present,
+                        fix_type=fix_type,
+                        classification_reasoning=classification_reasoning,
                     )
                     findings.append(finding)
 
@@ -801,7 +866,13 @@ Expected Result: {poc.get('expected_result', 'N/A')}"""
                 key, _, value = line.partition(":")
                 key = key.strip().upper()
                 value = value.strip()
-                if key in ["SEVERITY", "TITLE", "TYPE", "LINES", "DESCRIPTION", "ATTACK", "FIX", "CONFIDENCE"]:
+                # Include classification gate fields in accepted keys
+                accepted_keys = [
+                    "SEVERITY", "TITLE", "TYPE", "LINES", "DESCRIPTION", "ATTACK", "FIX", "CONFIDENCE",
+                    "CLASSIFICATION", "CONFIG_DEPENDENT", "CONFIG_FLAG", "DEFAULT_SECURE",
+                    "CONTRADICTION_PRESENT", "FIX_TYPE", "CLASSIFICATION_REASONING",
+                ]
+                if key in accepted_keys:
                     current_finding[key] = value
 
         return findings

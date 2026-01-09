@@ -11,7 +11,22 @@ import {
   Shield,
 } from 'lucide-react';
 import clsx from 'clsx';
-import type { Finding, Severity } from '@/types';
+import type { Finding, Severity, FindingClassification } from '@/types';
+
+// Classification badge colors and labels
+const CLASSIFICATION_COLORS: Record<FindingClassification, string> = {
+  security_issue: 'rgba(220, 38, 38, 0.85)',  // red-600
+  bug: 'rgba(202, 138, 4, 0.85)',             // yellow-600
+  misconfiguration: 'rgba(234, 88, 12, 0.85)', // orange-500
+  hardening: 'rgba(59, 130, 246, 0.85)',      // blue-500
+};
+
+const CLASSIFICATION_LABELS: Record<FindingClassification, string> = {
+  security_issue: 'Security Issue',
+  bug: 'Bug',
+  misconfiguration: 'Misconfiguration',
+  hardening: 'Hardening',
+};
 
 interface FindingsListProps {
   findings: Finding[];
@@ -69,6 +84,17 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
             >
               {finding.severity.toUpperCase()}
             </span>
+            {finding.classification && (
+              <span
+                className="text-vsc-xs px-2 py-0.5 font-medium text-white"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  background: CLASSIFICATION_COLORS[finding.classification],
+                }}
+              >
+                {CLASSIFICATION_LABELS[finding.classification]}
+              </span>
+            )}
             <span className="text-vsc-sm truncate text-vsc-text">{finding.title}</span>
           </div>
           <div className="flex items-center gap-2 text-vsc-xs text-vsc-text-muted">

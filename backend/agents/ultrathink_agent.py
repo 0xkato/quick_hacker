@@ -27,6 +27,8 @@ from ultrathink.cascade import CascadeResult
 from ultrathink.events import UltrathinkEventEmitter
 from ultrathink.gates import GateResult
 from prompts.strict_prompts import get_strict_system_prompt
+from prompts.classification_gate import get_classification_gate_prompt
+from services.project_service import project_service
 
 
 class UltrathinkAgent(BaseAgent):
@@ -79,6 +81,9 @@ class UltrathinkAgent(BaseAgent):
         # Initialize tracking variable
         self._current_finding: Optional[Finding] = None
 
+        # Threat model for classification gate
+        self._threat_model: str = "AB"
+
     def _on_gate_start(self, gate):
         """Callback when a gate starts."""
         if self._current_finding:
@@ -94,6 +99,14 @@ class UltrathinkAgent(BaseAgent):
         await self.emit_log("Starting ULTRATHINK analysis. Maximum cognitive depth mode.")
         await self.emit_log(f"Thinking mode: {self.ultrathink_config.thinking_mode.value}")
         await self.emit_log(f"Gates: {[g.name for g in self.ultrathink_config.gates]}")
+
+        # Get threat model from project for classification gate
+        try:
+            project = await project_service.get_project(self.repo_id)
+            if project and getattr(project, "threat_model", None):
+                self._threat_model = project.threat_model
+        except Exception:
+            self._threat_model = "AB"
 
         # Get files to analyze
         file_tree = await file_service.get_file_tree(self.repo_path)
@@ -229,6 +242,10 @@ class UltrathinkAgent(BaseAgent):
         language = lang_map.get(ext, "")
 
         system_prompt = get_strict_system_prompt(language)
+
+        # Inject classification gate prompt
+        classification_prompt = get_classification_gate_prompt(self._threat_model)
+        system_prompt += "\n\n" + classification_prompt
 
         # Truncate large files
         max_lines = 1500

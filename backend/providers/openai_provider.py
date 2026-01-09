@@ -1,6 +1,7 @@
 """OpenAI provider implementation."""
 
 import logging
+import re
 from typing import AsyncGenerator, Optional
 
 from openai import AsyncOpenAI, APIError, AuthenticationError, RateLimitError, APIConnectionError
@@ -24,9 +25,12 @@ class OpenAIProvider(BaseProvider):
         "gpt-4-turbo-preview",
         "gpt-4",
         "gpt-3.5-turbo",
+        "o1",
         "o1-preview",
         "o1-mini",
     ]
+
+    _REASONING_MODEL_RE = re.compile(r"^o\d", re.IGNORECASE)
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
@@ -40,6 +44,21 @@ class OpenAIProvider(BaseProvider):
             base_url=sanitize_string(config.base_url),
         )
 
+    def _is_reasoning_model(self) -> bool:
+        model = (self.model or "").strip()
+        return bool(self._REASONING_MODEL_RE.match(model))
+
+    def _get_generation_kwargs(self) -> dict:
+        if self._is_reasoning_model():
+            return {
+                "max_completion_tokens": self.max_tokens,
+            }
+
+        return {
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+
     async def generate(
         self,
         messages: list[Message],
@@ -52,8 +71,7 @@ class OpenAIProvider(BaseProvider):
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=openai_messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                **self._get_generation_kwargs(),
             )
             return response.choices[0].message.content or ""
         except AuthenticationError as e:
@@ -83,12 +101,19 @@ class OpenAIProvider(BaseProvider):
         """Generate a completion with streaming."""
         openai_messages = self._convert_messages(messages, system_prompt)
 
+        # Some OpenAI reasoning models don't support streaming. Fall back to a single buffered response.
+        if self._is_reasoning_model():
+            content = await self.generate(messages, system_prompt)
+            if content:
+                yield StreamChunk(content=content, is_complete=False)
+            yield StreamChunk(content="", is_complete=True)
+            return
+
         try:
             stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=openai_messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                **self._get_generation_kwargs(),
                 stream=True,
             )
 
@@ -142,8 +167,7 @@ class OpenAIProvider(BaseProvider):
                 messages=clean_messages,
                 tools=tools if tools else None,
                 tool_choice="auto" if tools else None,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                **self._get_generation_kwargs(),
             )
 
             result = {

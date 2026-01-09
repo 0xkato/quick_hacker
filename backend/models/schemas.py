@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -58,6 +58,11 @@ class UltrathinkGate(str, Enum):
     FINAL_GATE = "final_gate"
 
 
+class HandoffMode(str, Enum):
+    EXPLORATION = "exploration"
+    SINK_IDENTIFICATION = "sink_identification"
+
+
 # === Repository ===
 
 class RepoCloneRequest(BaseModel):
@@ -108,7 +113,13 @@ class ProviderConfig(BaseModel):
 class AgentCreateRequest(BaseModel):
     repo_id: str
     agent_type: AgentType
-    provider_config: ProviderConfig
+    provider_config: Optional[ProviderConfig] = None  # Change to Optional for backwards compat
+
+    # Dual-model configuration
+    scanner_config: Optional[ProviderConfig] = None
+    analyzer_config: Optional[ProviderConfig] = None
+    handoff_after: HandoffMode = HandoffMode.SINK_IDENTIFICATION
+
     name: Optional[str] = None
     custom_prompt: Optional[str] = None
     target_files: Optional[list[str]] = Field(
@@ -187,6 +198,59 @@ class FindingCreate(BaseModel):
     metadata: dict[str, Any] = {}
 
 
+# === Dual-Model Handoff ===
+
+class FileReadRecord(BaseModel):
+    """Record of a file read during scanning."""
+    path: str
+    relevance_score: float = 0.0
+    summary: Optional[str] = None
+    read_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TechStack(BaseModel):
+    """Detected technology stack."""
+    languages: list[str] = []
+    frameworks: list[str] = []
+    dependencies: list[str] = []
+
+
+class EntryPoint(BaseModel):
+    """An entry point discovered during scanning."""
+    name: str
+    file_path: str
+    line_number: int
+    method: Optional[str] = None  # HTTP method if route
+    route: Optional[str] = None   # Route path if applicable
+    code_snippet: str             # ~20 lines of context
+
+
+class Sink(BaseModel):
+    """A dangerous sink discovered during scanning."""
+    sink_type: str  # sql, exec, eval, file_write, etc.
+    function_name: str
+    file_path: str
+    line_number: int
+    code_snippet: str  # ~20 lines of context
+    context: Optional[str] = None  # Additional context
+
+
+class ScannerHandoffState(BaseModel):
+    """State passed from scanner to analyzer."""
+    repo_path: str
+    files_read: list[FileReadRecord] = []
+    tech_stack: TechStack = Field(default_factory=TechStack)
+    entry_points: list[EntryPoint] = []
+    dangerous_sinks: list[Sink] = []
+    file_map: dict[str, dict] = {}  # path -> {relevance, summary}
+
+    # Metadata
+    scanner_model: str = ""
+    scanner_tokens_used: int = 0
+    scanner_duration_ms: int = 0
+    handoff_reason: str = ""  # "exploration_complete", "sink_identification_complete", "limit_reached"
+
+
 # === WebSocket Messages ===
 
 class WSMessageType(str, Enum):
@@ -196,6 +260,7 @@ class WSMessageType(str, Enum):
     ERROR = "error"
     LOG = "log"
     PIPELINE_STAGE = "pipeline_stage"  # Multi-stage prompt pipeline events
+    PHASE_HANDOFF = "phase_handoff"  # Scanner -> Analyzer transition
     # Observability message types
     LLM_REQUEST = "llm_request"  # Prompt being sent to LLM
     LLM_RESPONSE = "llm_response"  # Response received from LLM

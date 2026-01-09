@@ -52,12 +52,72 @@ export interface ProviderConfig {
   max_tokens?: number;
 }
 
+// === Dual-Model Handoff ===
+
+export type HandoffMode = 'exploration' | 'sink_identification';
+
+export interface FileReadRecord {
+  path: string;
+  relevance_score: number;
+  summary?: string;
+  read_at: string;
+}
+
+export interface TechStack {
+  languages: string[];
+  frameworks: string[];
+  dependencies: string[];
+}
+
+export interface EntryPoint {
+  name: string;
+  file_path: string;
+  line_number: number;
+  method?: string;
+  route?: string;
+  code_snippet: string;
+}
+
+export interface Sink {
+  sink_type: string;
+  function_name: string;
+  file_path: string;
+  line_number: number;
+  code_snippet: string;
+  context?: string;
+}
+
+export interface ScannerHandoffState {
+  repo_path: string;
+  files_read: FileReadRecord[];
+  tech_stack: TechStack;
+  entry_points: EntryPoint[];
+  dangerous_sinks: Sink[];
+  file_map: Record<string, { relevance: number; summary?: string }>;
+  scanner_model: string;
+  scanner_tokens_used: number;
+  scanner_duration_ms: number;
+  handoff_reason: string;
+}
+
+export interface PhaseHandoffEvent {
+  scanner_tokens: number;
+  scanner_duration_ms: number;
+  entry_points_found: number;
+  sinks_found: number;
+  files_read: number;
+  handoff_reason: string;
+}
+
 // === Agent ===
 
 export interface AgentCreateRequest {
   repo_id: string;
   agent_type: AgentType;
-  provider_config: ProviderConfig;
+  provider_config?: ProviderConfig;
+  scanner_config?: ProviderConfig;
+  analyzer_config?: ProviderConfig;
+  handoff_after?: HandoffMode;
   name?: string;
   custom_prompt?: string;
   target_files?: string[];
@@ -116,7 +176,8 @@ export type WSMessageType =
   | 'llm_response'
   | 'tool_detail'
   | 'state_sync'
-  | 'report_ready';
+  | 'report_ready'
+  | 'phase_handoff';
 
 export interface WSMessage {
   type: WSMessageType;

@@ -315,6 +315,13 @@ TRACE_PATH_VERDICT_SCHEMA = {
     }
 }
 
+# Add trace_path_verdict to AGENT_TOOLS
+AGENT_TOOLS.append({
+    "name": TRACE_PATH_VERDICT_SCHEMA["name"],
+    "description": TRACE_PATH_VERDICT_SCHEMA["description"],
+    "parameters": TRACE_PATH_VERDICT_SCHEMA["parameters"]
+})
+
 
 # Tool schema for completing the audit (gated by coverage validation)
 COMPLETE_AUDIT_SCHEMA = {

@@ -140,9 +140,15 @@ async def websocket_endpoint(
     - log: Log messages
     - pong: Heartbeat response
     """
+    # FastAPI should populate `token` from the query string.
+    # In practice (dev tooling / proxies), we occasionally see `token` arrive as None
+    # even when the client includes it. Fall back to Starlette's parsed query params.
+    token = token or websocket.query_params.get("token")
+
     # Validate authentication token
     if not token:
-        print("[WS] Connection rejected: No token provided")
+        query_keys = list(websocket.query_params.keys())
+        print(f"[WS] Connection rejected: No token provided (query_keys={query_keys})")
         await websocket.close(code=4001, reason="Authentication required. Use ?token=<token>")
         return
 

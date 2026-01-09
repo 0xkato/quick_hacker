@@ -85,7 +85,16 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
     try {
       tokenKindRef.current = jwtToken ? 'jwt' : 'legacy';
-      const wsUrl = `${WS_BASE_URL}?token=${encodeURIComponent(token)}`;
+      const wsUrl = (() => {
+        try {
+          const url = new URL(WS_BASE_URL);
+          url.searchParams.set('token', token);
+          return url.toString();
+        } catch {
+          const separator = WS_BASE_URL.includes('?') ? '&' : '?';
+          return `${WS_BASE_URL}${separator}token=${encodeURIComponent(token)}`;
+        }
+      })();
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {

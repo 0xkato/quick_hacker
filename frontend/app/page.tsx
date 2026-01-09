@@ -848,6 +848,7 @@ export default function Home() {
                   <FlowVisualization
                     agentId={selectedAgentId}
                     flow={agentFlow}
+                    variant="investigation"
                     onQueueInvestigation={
                       canQueueInvestigations
                         ? async (nodeId) => {
@@ -866,6 +867,7 @@ export default function Home() {
                   <FlowVisualization
                     agentId={selectedRouteId}
                     flow={callTreeFlow}
+                    variant="calltree"
                     emptySelectionText="Select a route to view call tree"
                     emptyFlowText={isCallTreeLoading ? 'Building call tree...' : 'No call tree data'}
                   />

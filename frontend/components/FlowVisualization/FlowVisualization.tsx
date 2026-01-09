@@ -65,6 +65,7 @@ interface FlowVisualizationProps {
   emptySelectionText?: string;
   emptyFlowText?: string;
   onQueueInvestigation?: (nodeId: string) => Promise<void> | void;
+  variant?: 'investigation' | 'calltree';
 }
 
 // Get border color based on confidence score
@@ -178,6 +179,7 @@ export function FlowVisualization({
   emptySelectionText,
   emptyFlowText,
   onQueueInvestigation,
+  variant = 'investigation',
 }: FlowVisualizationProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -266,16 +268,50 @@ export function FlowVisualization({
   }, [flow, setNodes, setEdges]);
 
   // Stats
-  const stats = useMemo(() => {
+  type InvestigationStats = {
+    kind: 'investigation';
+    total: number;
+    searches: number;
+    reads: number;
+    findings: number;
+  };
+  type CallTreeStats = {
+    kind: 'calltree';
+    total: number;
+    functions: number;
+    external: number;
+    cycles: number;
+    files: number;
+  };
+
+  const stats = useMemo<InvestigationStats | CallTreeStats | null>(() => {
     if (!flow) return null;
+
+    if (variant === 'calltree') {
+      const files = new Set<string>();
+      for (const node of flow.nodes) {
+        const file = node.data?.file;
+        if (typeof file === 'string' && file.trim()) files.add(file.trim());
+      }
+
+      return {
+        kind: 'calltree',
+        total: flow.nodes.length,
+        functions: flow.nodes.filter((n) => n.type === 'function').length,
+        external: flow.nodes.filter((n) => n.type === 'external').length,
+        cycles: flow.nodes.filter((n) => n.type === 'cycle').length,
+        files: files.size,
+      };
+    }
+
     return {
+      kind: 'investigation',
       total: flow.nodes.length,
-      completed: flow.nodes.filter((n) => n.status === 'completed').length,
       findings: flow.nodes.filter((n) => n.type === 'finding').length,
       searches: flow.nodes.filter((n) => n.type === 'search').length,
       reads: flow.nodes.filter((n) => n.type === 'code_read').length,
     };
-  }, [flow]);
+  }, [flow, variant]);
 
   if (!agentId) {
     return (
@@ -352,54 +388,78 @@ export function FlowVisualization({
       {/* Legend */}
       <div className="absolute bottom-4 left-4 bg-vsc-sidebar border border-vsc-border rounded-lg p-3 text-vsc-xs">
         <div className="font-medium mb-2 text-vsc-text-muted">Node Types</div>
-        <div className="space-y-1.5 text-vsc-text">
-          <div className="flex items-center gap-2">
-            <Network className="w-3 h-3 text-vsc-text-muted" />
-            <span>Entry Point</span>
+        {variant === 'calltree' ? (
+          <div className="space-y-1.5 text-vsc-text">
+            <div className="flex items-center gap-2">
+              <Network className="w-3 h-3 text-vsc-text-muted" />
+              <span>Entry Point</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Code className="w-3 h-3 text-vsc-text-muted" />
+              <span>Function</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <FileText className="w-3 h-3 text-vsc-text-muted" />
+              <span>External Call</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-3 h-3 text-sev-medium" />
+              <span>Cycle</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-3 h-3 text-sev-medium" />
-            <span>Dangerous Sink</span>
+        ) : (
+          <div className="space-y-1.5 text-vsc-text">
+            <div className="flex items-center gap-2">
+              <Network className="w-3 h-3 text-vsc-text-muted" />
+              <span>Entry Point</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-3 h-3 text-sev-medium" />
+              <span>Dangerous Sink</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Code className="w-3 h-3 text-vsc-text-muted" />
+              <span>Function</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-3 h-3 text-vsc-text-muted" />
+              <span>User Input</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Search className="w-3 h-3 text-vsc-text-muted" />
+              <span>Search</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <FileText className="w-3 h-3 text-vsc-text-muted" />
+              <span>Read File</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-3 h-3 text-sev-high" />
+              <span>Finding</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Code className="w-3 h-3 text-vsc-text-muted" />
-            <span>Function</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <MessageSquare className="w-3 h-3 text-vsc-text-muted" />
-            <span>User Input</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Search className="w-3 h-3 text-vsc-text-muted" />
-            <span>Search</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <FileText className="w-3 h-3 text-vsc-text-muted" />
-            <span>Read File</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-3 h-3 text-sev-high" />
-            <span>Finding</span>
-          </div>
-        </div>
+        )}
 
-        <div className="border-t border-vsc-border mt-2 pt-2">
-          <div className="font-medium mb-2 text-vsc-text-muted">Confidence</div>
-          <div className="space-y-1 text-vsc-text">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-vsc-success" />
-              <span>High (80%+)</span>
+        {variant === 'investigation' &&
+          flow.nodes.some((n) => n.confidence_score !== undefined) && (
+            <div className="border-t border-vsc-border mt-2 pt-2">
+              <div className="font-medium mb-2 text-vsc-text-muted">Confidence</div>
+              <div className="space-y-1 text-vsc-text">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-vsc-success" />
+                  <span>High (80%+)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-sev-medium" />
+                  <span>Medium (60%+)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-sev-high" />
+                  <span>Low (40%+)</span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-sev-medium" />
-              <span>Medium (60%+)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-sev-high" />
-              <span>Low (40%+)</span>
-            </div>
-          </div>
-        </div>
+          )}
 
         <div className="border-t border-vsc-border mt-2 pt-2 text-vsc-text-muted">
           <span className="italic">Click nodes for details</span>
@@ -415,18 +475,41 @@ export function FlowVisualization({
               <span className="text-vsc-text-muted">Nodes:</span>
               <span>{stats.total}</span>
             </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-vsc-text-muted">Searches:</span>
-              <span>{stats.searches}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-vsc-text-muted">Files read:</span>
-              <span>{stats.reads}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-vsc-text-muted">Findings:</span>
-              <span className="text-sev-high">{stats.findings}</span>
-            </div>
+            {stats.kind === 'calltree' ? (
+              <>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">Functions:</span>
+                  <span>{stats.functions}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">External calls:</span>
+                  <span>{stats.external}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">Cycles:</span>
+                  <span>{stats.cycles}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">Files referenced:</span>
+                  <span>{stats.files}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">Searches:</span>
+                  <span>{stats.searches}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">Files read:</span>
+                  <span>{stats.reads}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-vsc-text-muted">Findings:</span>
+                  <span className="text-sev-high">{stats.findings}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

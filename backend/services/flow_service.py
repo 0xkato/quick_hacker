@@ -21,6 +21,9 @@ NodeType = Literal[
     "code_read",
     "search",
     "scan",
+    "entry_point",
+    "dangerous_sink",
+    "investigation",
 ]
 
 NodeStatus = Literal["pending", "running", "completed", "failed"]
@@ -35,6 +38,10 @@ class FlowNode:
     data: dict = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     duration_ms: Optional[int] = None
+    llm_reasoning: Optional[str] = None
+    code_context: Optional[str] = None
+    tool_result_summary: Optional[str] = None
+    confidence_score: Optional[float] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -90,13 +97,21 @@ class FlowService:
         node_type: NodeType,
         label: str,
         data: Optional[dict] = None,
+        *,
+        parent_id: Optional[str] = None,
+        edge_label: Optional[str] = None,
+        llm_reasoning: Optional[str] = None,
+        code_context: Optional[str] = None,
+        tool_result_summary: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        set_current: bool = True,
     ) -> FlowNode:
         """Add a node to the flow."""
         flow = self._flows.get(agent_id)
         if not flow:
             flow = self.initialize_flow(agent_id)
 
-        previous_node_id = flow.current_node_id
+        previous_node_id = parent_id or flow.current_node_id
 
         node = FlowNode(
             id=str(uuid.uuid4())[:8],
@@ -104,10 +119,15 @@ class FlowService:
             label=label,
             status="pending",
             data=data or {},
+            llm_reasoning=llm_reasoning,
+            code_context=code_context,
+            tool_result_summary=tool_result_summary,
+            confidence_score=confidence_score,
         )
 
         flow.nodes.append(node)
-        flow.current_node_id = node.id
+        if set_current:
+            flow.current_node_id = node.id
 
         # Add edge from previous node
         if previous_node_id:
@@ -115,6 +135,7 @@ class FlowService:
                 id=str(uuid.uuid4())[:8],
                 source=previous_node_id,
                 target=node.id,
+                label=edge_label,
             )
             flow.edges.append(edge)
 
@@ -157,6 +178,39 @@ class FlowService:
             if node.id == node_id:
                 node.data.update(data)
                 break
+
+        self._notify_subscribers(agent_id, flow)
+
+    def update_node_fields(
+        self,
+        agent_id: str,
+        node_id: str,
+        *,
+        label: Optional[str] = None,
+        llm_reasoning: Optional[str] = None,
+        code_context: Optional[str] = None,
+        tool_result_summary: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+    ) -> None:
+        """Update top-level fields on a node (not stored in `data`)."""
+        flow = self._flows.get(agent_id)
+        if not flow:
+            return
+
+        for node in flow.nodes:
+            if node.id != node_id:
+                continue
+            if label is not None:
+                node.label = label
+            if llm_reasoning is not None:
+                node.llm_reasoning = llm_reasoning
+            if code_context is not None:
+                node.code_context = code_context
+            if tool_result_summary is not None:
+                node.tool_result_summary = tool_result_summary
+            if confidence_score is not None:
+                node.confidence_score = confidence_score
+            break
 
         self._notify_subscribers(agent_id, flow)
 

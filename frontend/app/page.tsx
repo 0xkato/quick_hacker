@@ -49,12 +49,14 @@ import type {
 } from '@/types';
 
 type ActivityView = 'explorer' | 'search' | 'agents' | 'findings' | 'flow' | 'llm';
+type ThreatModel = 'A' | 'AB' | 'ABC';
 
 export default function Home() {
   // Project state
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [isProjectLoading, setIsProjectLoading] = useState(true);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isThreatModelSaving, setIsThreatModelSaving] = useState(false);
 
   // State
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
@@ -386,6 +388,19 @@ export default function Home() {
     setFileTree(null);
   };
 
+  const handleThreatModelChange = async (threatModel: ThreatModel) => {
+    if (!currentProject) return;
+    setIsThreatModelSaving(true);
+    try {
+      const updated = await projectsApi.update(currentProject.id, { threat_model: threatModel });
+      setCurrentProject(updated);
+    } catch (err) {
+      console.error('Failed to update threat model:', err);
+    } finally {
+      setIsThreatModelSaving(false);
+    }
+  };
+
   // Select file
   const handleFileSelect = async (path: string) => {
     if (!currentProject) return;
@@ -525,6 +540,10 @@ export default function Home() {
   const runningAgents = agents.filter((a) => a.status === 'running').length;
   const criticalFindings = findings.filter((f) => f.severity === 'critical').length;
   const highFindings = findings.filter((f) => f.severity === 'high').length;
+  const selectedAgent = selectedAgentId ? agents.find((a) => a.id === selectedAgentId) : null;
+  const canQueueInvestigations = Boolean(
+    selectedAgent && ['deep_scan', 'custom', 'strict_analysis', 'ultra_strict'].includes(selectedAgent.agent_type)
+  );
 
   // Show loading while checking project status
   if (isProjectLoading) {
@@ -559,6 +578,20 @@ export default function Home() {
                 ({currentProject.repo_name})
               </span>
             )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-vsc-xs text-vsc-text-muted">Threat model</span>
+            <select
+              value={(currentProject.threat_model || 'AB') as ThreatModel}
+              onChange={(e) => handleThreatModelChange(e.target.value as ThreatModel)}
+              disabled={isThreatModelSaving}
+              className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-xs disabled:opacity-50"
+              title="Attacker model used for automated triage"
+            >
+              <option value="A">Internet (A)</option>
+              <option value="AB">Internet + Auth (A+B)</option>
+              <option value="ABC">Internet + Auth + Insider (A+B+C)</option>
+            </select>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -812,7 +845,23 @@ export default function Home() {
               </div>
               <div className="flex-1">
                 {diagramMode === 'investigation' ? (
-                  <FlowVisualization agentId={selectedAgentId} flow={agentFlow} />
+                  <FlowVisualization
+                    agentId={selectedAgentId}
+                    flow={agentFlow}
+                    onQueueInvestigation={
+                      canQueueInvestigations
+                        ? async (nodeId) => {
+                          if (!selectedAgentId) return;
+                          const res = await agentsApi.queueInvestigation(selectedAgentId, nodeId);
+                          if (!res.queued) {
+                            throw new Error(res.reason || 'Not queued');
+                          }
+                          const updated = await agentsApi.getFlow(selectedAgentId);
+                          setAgentFlow(updated);
+                        }
+                        : undefined
+                    }
+                  />
                 ) : (
                   <FlowVisualization
                     agentId={selectedRouteId}

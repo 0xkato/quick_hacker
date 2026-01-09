@@ -22,6 +22,9 @@ from models.schemas import (
 from providers import BaseProvider, Message, get_provider
 from prompts.system_prompts import get_system_prompt
 from prompts.audit_methodology import get_audit_prompt
+from services.attack_surface_service import attack_surface_service
+from services.flow_service import flow_service
+from services.project_service import project_service
 from pipelines import (
     PromptPipeline,
     PipelineConfig,
@@ -170,6 +173,12 @@ class BaseAgent(ABC):
             {"current": current, "total": total, "file": file},
         )
 
+    async def emit_flow_update(self) -> None:
+        """Emit a flow update (if a flow exists) for the investigation diagram."""
+        flow = flow_service.get_flow(self.id)
+        if flow:
+            await self.emit(WSMessageType.PROGRESS, {"type": "flow_update", "flow": flow.to_dict()})
+
     async def emit_finding(self, finding: Finding):
         """Emit a new finding."""
         await self.emit(WSMessageType.FINDING, finding.model_dump())
@@ -181,6 +190,95 @@ class BaseAgent(ABC):
             WSMessageType.AGENT_STATUS,
             {"status": status.value},
         )
+
+    async def _build_attack_surface_tree(self) -> None:
+        """Build an initial attack-surface tree (best-effort)."""
+        threat_model = "AB"
+        try:
+            project = await project_service.get_project(self.repo_id)
+            if project and getattr(project, "threat_model", None):
+                threat_model = project.threat_model
+        except Exception:
+            threat_model = "AB"
+
+        scan_node = flow_service.add_node(
+            self.id,
+            "scan",
+            f"Attack Surface Scan ({threat_model})",
+            {"threat_model": threat_model},
+        )
+        flow_service.update_node_status(self.id, scan_node.id, "running")
+        await self.emit_flow_update()
+
+        provider = None
+        try:
+            provider = self.provider
+        except Exception:
+            provider = None
+
+        try:
+            triaged = []
+            if provider is None:
+                flow_service.update_node_data(
+                    self.id,
+                    scan_node.id,
+                    {"skipped": True, "reason": "no_provider_configured"},
+                )
+                flow_service.update_node_status(self.id, scan_node.id, "completed")
+                await self.emit_flow_update()
+                return
+
+            candidates = attack_surface_service.scan_candidates(repo_path=self.repo_path)
+            triaged = await attack_surface_service.triage(
+                agent_id=self.id,
+                repo_path=self.repo_path,
+                threat_model=threat_model,  # type: ignore[arg-type]
+                provider=provider,
+                candidates=candidates,
+            )
+
+            flow_service.update_node_data(
+                self.id,
+                scan_node.id,
+                {
+                    "candidates_found": len(candidates),
+                    "investigate_count": len(triaged),
+                },
+            )
+            flow_service.update_node_status(self.id, scan_node.id, "completed")
+
+            for item in triaged[:20]:
+                c = item.candidate
+                node_type = "entry_point" if c.kind == "entry_point" else "dangerous_sink"
+                exposure = item.exposure if item.exposure != "unknown" else ""
+                label = f"[{exposure}] {c.label}" if exposure else c.label
+
+                flow_service.add_node(
+                    self.id,
+                    node_type,  # type: ignore[arg-type]
+                    label,
+                    data={
+                        "attack_surface_candidate_id": c.id,
+                        "kind": c.kind,
+                        "file_path": c.file_path,
+                        "line_number": c.line_number,
+                        "metadata": c.metadata,
+                        "threat_model": threat_model,
+                        "exposure": item.exposure,
+                    },
+                    parent_id=scan_node.id,
+                    edge_label="candidate",
+                    llm_reasoning=item.reasoning,
+                    code_context=c.code_context,
+                    confidence_score=item.confidence_score,
+                    set_current=False,
+                )
+
+            await self.emit_flow_update()
+        except Exception as e:
+            flow_service.update_node_data(self.id, scan_node.id, {"error": str(e)})
+            flow_service.update_node_status(self.id, scan_node.id, "failed")
+            await self.emit_flow_update()
 
     def add_finding(self, finding_create: FindingCreate) -> Finding:
         """Add a finding."""
@@ -201,6 +299,20 @@ class BaseAgent(ABC):
             await self.emit_status(AgentStatus.RUNNING)
             await self.emit_log(f"Starting {self.agent_type.value} agent...")
 
+            # Initialize investigation flow (used by the Flow diagram UI)
+            flow_service.initialize_flow(self.id)
+            start_node = flow_service.add_node(
+                self.id,
+                "user_input",
+                f"Start {self.agent_type.value}",
+                {"agent_type": self.agent_type.value},
+            )
+            flow_service.update_node_status(self.id, start_node.id, "completed")
+            await self.emit_flow_update()
+
+            # Best-effort initial scan + triage (safe to no-op on failure).
+            await self._build_attack_surface_tree()
+
             # Run the actual analysis
             await self.analyze()
 
@@ -213,6 +325,13 @@ class BaseAgent(ABC):
                 await self.emit_log(
                     f"Analysis complete. Found {len(self.findings)} potential issues."
                 )
+                flow_service.add_node(
+                    self.id,
+                    "analysis",
+                    "Audit Complete",
+                    {"findings_count": len(self.findings)},
+                )
+                await self.emit_flow_update()
 
         except Exception as e:
             self.error_message = str(e)

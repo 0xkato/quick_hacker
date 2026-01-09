@@ -64,6 +64,7 @@ interface FlowVisualizationProps {
   flow: InvestigationFlow | null;
   emptySelectionText?: string;
   emptyFlowText?: string;
+  onQueueInvestigation?: (nodeId: string) => Promise<void> | void;
 }
 
 // Get border color based on confidence score
@@ -94,6 +95,8 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
     search: <Search className="w-4 h-4" />,
     scan: <Scan className="w-4 h-4" />,
     entry_point: <Network className="w-4 h-4" />,
+    dangerous_sink: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
+    investigation: <Brain className="w-4 h-4" />,
     function: <Code className="w-4 h-4" />,
     external: <FileText className="w-4 h-4" />,
     cycle: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
@@ -174,12 +177,15 @@ export function FlowVisualization({
   flow,
   emptySelectionText,
   emptyFlowText,
+  onQueueInvestigation,
 }: FlowVisualizationProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNode, setSelectedNode] = useState<FlowNode | null>(null);
   const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const [isQueueing, setIsQueueing] = useState(false);
+  const [queueError, setQueueError] = useState<string | null>(null);
 
   // Handle node click to show popover
   const onNodeClick: NodeMouseHandler = useCallback((event, node) => {
@@ -205,6 +211,19 @@ export function FlowVisualization({
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
   }, []);
+
+  const handleQueueInvestigation = useCallback(async () => {
+    if (!selectedNode || !onQueueInvestigation) return;
+    setIsQueueing(true);
+    setQueueError(null);
+    try {
+      await onQueueInvestigation(selectedNode.id);
+    } catch (err) {
+      setQueueError(err instanceof Error ? err.message : 'Failed to queue investigation');
+    } finally {
+      setIsQueueing(false);
+    }
+  }, [onQueueInvestigation, selectedNode]);
 
   // Convert investigation flow to ReactFlow nodes/edges
   useEffect(() => {
@@ -324,6 +343,9 @@ export function FlowVisualization({
           node={selectedNode}
           position={popoverPosition}
           onClose={closePopover}
+          onQueueInvestigation={onQueueInvestigation ? handleQueueInvestigation : undefined}
+          isQueueing={isQueueing}
+          queueError={queueError}
         />
       )}
 
@@ -334,6 +356,10 @@ export function FlowVisualization({
           <div className="flex items-center gap-2">
             <Network className="w-3 h-3 text-vsc-text-muted" />
             <span>Entry Point</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-3 h-3 text-sev-medium" />
+            <span>Dangerous Sink</span>
           </div>
           <div className="flex items-center gap-2">
             <Code className="w-3 h-3 text-vsc-text-muted" />

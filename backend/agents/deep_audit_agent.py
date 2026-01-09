@@ -37,6 +37,9 @@ from prompts import (
     get_hard_rules_prompt,
     get_developer_prompt,
 )
+from services.attack_surface_service import attack_surface_service
+from services.flow_service import flow_service
+from services.project_service import project_service
 
 
 @dataclass
@@ -180,6 +183,84 @@ class DeepAuditAgent:
             )
             self.on_message(message)
 
+    def _broadcast_flow_update(self) -> None:
+        """Send flow update to WebSocket (for the investigation diagram)."""
+        flow = flow_service.get_flow(self.id)
+        if flow:
+            self._broadcast(WSMessageType.PROGRESS, {"type": "flow_update", "flow": flow.to_dict()})
+
+    async def _build_attack_surface_tree(self) -> None:
+        """Run an initial scan + conservative triage and render candidate branches in the flow."""
+        threat_model = "AB"
+        try:
+            project = await project_service.get_project(self.repo_id)
+            if project and getattr(project, "threat_model", None):
+                threat_model = project.threat_model
+        except Exception:
+            threat_model = "AB"
+
+        scan_node = flow_service.add_node(
+            self.id,
+            "scan",
+            f"Attack Surface Scan ({threat_model})",
+            {"threat_model": threat_model},
+        )
+        flow_service.update_node_status(self.id, scan_node.id, "running")
+        self._broadcast_flow_update()
+
+        try:
+            candidates = attack_surface_service.scan_candidates(repo_path=self.repo_path)
+            triaged = await attack_surface_service.triage(
+                agent_id=self.id,
+                repo_path=self.repo_path,
+                threat_model=threat_model,  # type: ignore[arg-type]
+                provider=self.provider,
+                candidates=candidates,
+            )
+
+            flow_service.update_node_data(
+                self.id,
+                scan_node.id,
+                {
+                    "candidates_found": len(candidates),
+                    "investigate_count": len(triaged),
+                },
+            )
+            flow_service.update_node_status(self.id, scan_node.id, "completed")
+
+            for item in triaged[:20]:
+                c = item.candidate
+                node_type = "entry_point" if c.kind == "entry_point" else "dangerous_sink"
+                exposure = item.exposure if item.exposure != "unknown" else ""
+                label = f"[{exposure}] {c.label}" if exposure else c.label
+
+                flow_service.add_node(
+                    self.id,
+                    node_type,  # type: ignore[arg-type]
+                    label,
+                    data={
+                        "attack_surface_candidate_id": c.id,
+                        "kind": c.kind,
+                        "file_path": c.file_path,
+                        "line_number": c.line_number,
+                        "metadata": c.metadata,
+                        "threat_model": threat_model,
+                        "exposure": item.exposure,
+                    },
+                    parent_id=scan_node.id,
+                    edge_label="candidate",
+                    llm_reasoning=item.reasoning,
+                    code_context=c.code_context,
+                    confidence_score=item.confidence_score,
+                    set_current=False,
+                )
+
+            self._broadcast_flow_update()
+        except Exception as e:
+            flow_service.update_node_data(self.id, scan_node.id, {"error": str(e)})
+            flow_service.update_node_status(self.id, scan_node.id, "failed")
+            self._broadcast_flow_update()
+
     def _log_audit_event(self, event_type: str, data: dict) -> Optional[dict]:
         """Log event to AUDIT_JSONL format."""
         if not self.state:
@@ -222,6 +303,18 @@ class DeepAuditAgent:
         self.status = AgentStatus.RUNNING
         self._broadcast(WSMessageType.AGENT_STATUS, {"status": "running"})
 
+        # Initialize investigation flow (diagram)
+        flow_service.initialize_flow(self.id)
+        start_node = flow_service.add_node(
+            self.id,
+            "user_input",
+            "Start Deep Audit",
+            {"agent_type": self.agent_type.value},
+        )
+        flow_service.update_node_status(self.id, start_node.id, "completed")
+        self._broadcast_flow_update()
+        await self._build_attack_surface_tree()
+
         # Initialize state
         import uuid
         self.state = AuditState(
@@ -246,6 +339,13 @@ class DeepAuditAgent:
         try:
             await self._audit_loop()
             self.status = AgentStatus.COMPLETED
+            flow_service.add_node(
+                self.id,
+                "analysis",
+                "Audit Complete",
+                {"findings_count": len(self.findings)},
+            )
+            self._broadcast_flow_update()
         except asyncio.CancelledError:
             self.status = AgentStatus.CANCELLED
         except Exception as e:

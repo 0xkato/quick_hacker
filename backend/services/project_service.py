@@ -10,10 +10,13 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
 from config import settings
+
+
+ThreatModel = Literal["A", "AB", "ABC"]
 
 
 class Project(BaseModel):
@@ -21,6 +24,7 @@ class Project(BaseModel):
     id: str
     name: str
     description: str = ""
+    threat_model: ThreatModel = "AB"  # A, AB, or ABC
     repo_url: Optional[str] = None
     repo_name: Optional[str] = None
     repo_branch: Optional[str] = None
@@ -206,7 +210,8 @@ class ProjectService:
         self,
         project_id: str,
         name: Optional[str] = None,
-        description: Optional[str] = None
+        description: Optional[str] = None,
+        threat_model: Optional[ThreatModel] = None,
     ) -> Optional[Project]:
         """Update project metadata."""
         project = self._projects.get(project_id)
@@ -217,6 +222,8 @@ class ProjectService:
             project.name = name
         if description is not None:
             project.description = description
+        if threat_model is not None:
+            project.threat_model = threat_model
 
         await self._save_projects()
         return project

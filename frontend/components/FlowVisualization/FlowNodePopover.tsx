@@ -24,9 +24,19 @@ interface FlowNodePopoverProps {
   node: FlowNode;
   position: { x: number; y: number };
   onClose: () => void;
+  onQueueInvestigation?: () => void;
+  isQueueing?: boolean;
+  queueError?: string | null;
 }
 
-export function FlowNodePopover({ node, position, onClose }: FlowNodePopoverProps): JSX.Element {
+export function FlowNodePopover({
+  node,
+  position,
+  onClose,
+  onQueueInvestigation,
+  isQueueing,
+  queueError,
+}: FlowNodePopoverProps): JSX.Element {
   const typeLabels: Record<string, string> = {
     user_input: 'User Input',
     tool_call: 'Tool Call',
@@ -37,6 +47,8 @@ export function FlowNodePopover({ node, position, onClose }: FlowNodePopoverProp
     search: 'Search',
     scan: 'Scan',
     entry_point: 'Entry Point',
+    dangerous_sink: 'Dangerous Sink',
+    investigation: 'Investigation',
     function: 'Function',
     external: 'External Call',
     cycle: 'Cycle',
@@ -63,6 +75,10 @@ export function FlowNodePopover({ node, position, onClose }: FlowNodePopoverProp
     if (confidence >= 0.4) return 'bg-sev-high';
     return 'bg-sev-critical';
   };
+
+  const isCandidate = Boolean((node.data as any)?.attack_surface_candidate_id);
+  const isQueued = Boolean((node.data as any)?.queued);
+  const isInProgress = node.status === 'running' || Boolean((node.data as any)?.in_progress);
 
   return (
     <div
@@ -208,6 +224,35 @@ export function FlowNodePopover({ node, position, onClose }: FlowNodePopoverProp
             <pre className="text-xs text-vsc-text bg-vsc-bg p-2 rounded overflow-auto max-h-32 font-mono">
               {JSON.stringify(node.data, null, 2)}
             </pre>
+          </div>
+        )}
+
+        {/* Queue deeper investigation */}
+        {isCandidate && onQueueInvestigation && (
+          <div className="pt-2 border-t border-vsc-border">
+            <button
+              onClick={onQueueInvestigation}
+              disabled={isQueued || isInProgress || isQueueing}
+              className={clsx(
+                'w-full px-3 py-2 rounded text-sm font-medium transition-colors',
+                isQueued || isInProgress || isQueueing
+                  ? 'bg-vsc-border text-vsc-text-muted cursor-not-allowed'
+                  : 'bg-vsc-accent text-white hover:bg-vsc-accent/80'
+              )}
+            >
+              {isQueueing
+                ? 'Queueing…'
+                : isInProgress
+                  ? 'In progress'
+                  : isQueued
+                    ? 'Queued'
+                    : 'Queue deeper investigation'}
+            </button>
+            {queueError && (
+              <div className="mt-2 text-vsc-xs text-vsc-error">
+                {queueError}
+              </div>
+            )}
           </div>
         )}
       </div>

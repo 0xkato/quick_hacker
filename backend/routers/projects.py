@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 
 from services.project_service import project_service, Project
 
@@ -18,6 +18,7 @@ class CreateProjectRequest(BaseModel):
 class UpdateProjectRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    threat_model: Optional[Literal["A", "AB", "ABC"]] = None
 
 
 class CloneIntoProjectRequest(BaseModel):
@@ -71,7 +72,8 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
     project = await project_service.update_project(
         project_id=project_id,
         name=request.name,
-        description=request.description
+        description=request.description,
+        threat_model=request.threat_model,
     )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")

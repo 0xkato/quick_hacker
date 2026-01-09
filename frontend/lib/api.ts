@@ -334,6 +334,17 @@ export const agents = {
     await request(`/api/agents/${agentId}/flow`, { method: 'DELETE' });
   },
 
+  async queueInvestigation(
+    agentId: string,
+    nodeId: string,
+    notes?: string
+  ): Promise<{ queued: boolean; task_id?: string; reason?: string }> {
+    return request(`/api/agents/${agentId}/investigate`, {
+      method: 'POST',
+      body: JSON.stringify({ node_id: nodeId, notes }),
+    });
+  },
+
   async getLLMInteractions(
     agentId: string,
     limit?: number,
@@ -600,6 +611,7 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  threat_model?: 'A' | 'AB' | 'ABC';
   repo_url: string | null;
   repo_name: string | null;
   repo_branch: string | null;
@@ -632,7 +644,10 @@ export const projects = {
     return request<Project>(`/api/projects/${projectId}`);
   },
 
-  async update(projectId: string, data: { name?: string; description?: string }): Promise<Project> {
+  async update(
+    projectId: string,
+    data: { name?: string; description?: string; threat_model?: 'A' | 'AB' | 'ABC' }
+  ): Promise<Project> {
     return request<Project>(`/api/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(data),

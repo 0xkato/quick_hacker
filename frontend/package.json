@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
-    "@types/dagre": "^0.7.53",
     "clsx": "^2.1.0",
     "dagre": "^0.8.5",
     "lucide-react": "^0.312.0",
@@ -22,6 +21,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
+    "@types/dagre": "^0.7.53",
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",

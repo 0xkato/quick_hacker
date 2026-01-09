@@ -103,9 +103,9 @@ export default function Home() {
     setAuthFunctions(getAccessToken, refreshToken);
   }, [getAccessToken, refreshToken]);
 
-  // WebSocket - only connect after auth is ready
+  // WebSocket - only connect after auth is ready AND user is authenticated
   const { isConnected } = useWebSocket({
-    enabled: isAuthReady,
+    enabled: isAuthReady && isAuthenticated,
     onFinding: useCallback((finding: Finding) => {
       setFindings((prev) => [finding, ...prev]);
     }, []),

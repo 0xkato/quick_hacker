@@ -119,6 +119,26 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       const apiKey = providerData.api_key;
       const isMaskedKey = apiKey && (apiKey.includes('...') || apiKey === '****');
 
+      // If the user entered a real key (not masked), validate + store per-user.
+      if (!isMaskedKey && provider !== 'ollama') {
+        const normalizedKey = (apiKey || '').trim();
+        const isValid = await validateApiKey(provider, normalizedKey);
+        if (!isValid) {
+          return;
+        }
+
+        try {
+          if (normalizedKey) {
+            await authApiKeys.save(provider, normalizedKey);
+          } else {
+            await authApiKeys.delete(provider);
+          }
+        } catch (err) {
+          // Per-user API keys require JWT auth; fall back to settings-based storage.
+          console.warn('[Settings] Failed to save per-user API key, falling back to provider settings:', err);
+        }
+      }
+
       // Build settings to save - include api_key only if it's a real new key
       const settingsToSave = { ...providerData };
       if (isMaskedKey) {

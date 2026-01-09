@@ -11,6 +11,7 @@ from config import settings
 from routers import git, files, agents, websocket, projects, flow, auth, call_tree
 from routers import settings as settings_router
 from routers import chat as chat_router
+from routers import session as session_router
 from routers.websocket import set_main_loop
 from database import init_db
 from services.settings_service import settings_service
@@ -113,6 +114,11 @@ app.include_router(
 )
 app.include_router(websocket.router, prefix="/ws", tags=["WebSocket"])
 app.include_router(auth.router)
+app.include_router(
+    session_router.router,
+    prefix="/api",
+    dependencies=[Depends(require_auth)],
+)
 
 
 @app.get("/")

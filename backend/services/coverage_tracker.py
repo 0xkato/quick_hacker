@@ -147,3 +147,24 @@ class CoverageTracker:
                     stats.inconclusive_count += 1
 
         return stats
+
+    def find_path_by_locations(
+        self,
+        entry_file: str,
+        entry_line: int,
+        sink_file: str,
+        sink_line: int
+    ) -> Optional[PathRecord]:
+        """Find path by file:line locations."""
+        key = (entry_file, entry_line, sink_file, sink_line)
+        path_id = self._location_index.get(key)
+        if path_id:
+            return self.paths.get(path_id)
+        return None
+
+    def get_unexplored_paths(self) -> list[PathRecord]:
+        """Get paths that haven't been traced yet."""
+        return [
+            r for r in self.paths.values()
+            if r.status in (PathStatus.DISCOVERED, PathStatus.INCONCLUSIVE)
+        ]

@@ -248,3 +248,60 @@ class TestCoverageTrackerStats:
         assert stats.traced_safe_count == 1
         assert stats.discovered_count == 2
         assert stats.coverage_percent == pytest.approx(33.33, rel=0.1)
+
+
+class TestCoverageTrackerQueries:
+    def test_find_path_by_locations_found(self, tracker):
+        tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        found = tracker.find_path_by_locations(
+            "routes/api.py", 42,
+            "db/query.py", 100
+        )
+        assert found is not None
+        assert found.entry_point_name == "login"
+
+    def test_find_path_by_locations_not_found(self, tracker):
+        found = tracker.find_path_by_locations(
+            "nonexistent.py", 1,
+            "also_nonexistent.py", 1
+        )
+        assert found is None
+
+    def test_get_unexplored_paths_returns_discovered(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        unexplored = tracker.get_unexplored_paths()
+        assert len(unexplored) == 1
+
+        tracker.update_status(path_id, PathStatus.TRACED_SAFE)
+        unexplored = tracker.get_unexplored_paths()
+        assert len(unexplored) == 0
+
+    def test_get_unexplored_paths_includes_inconclusive(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        tracker.update_status(path_id, PathStatus.INCONCLUSIVE)
+        unexplored = tracker.get_unexplored_paths()
+        assert len(unexplored) == 1

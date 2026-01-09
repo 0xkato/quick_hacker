@@ -218,3 +218,33 @@ class TestCoverageTrackerUpdateStatus:
             files_in_path=files
         )
         assert tracker.paths[path_id].files_in_path == files
+
+
+class TestCoverageTrackerStats:
+    def test_get_coverage_stats_empty(self, tracker):
+        stats = tracker.get_coverage_stats()
+        assert stats.total_paths == 0
+        assert stats.coverage_percent == 0.0
+
+    def test_get_coverage_stats_counts_correctly(self, tracker):
+        # Register 3 paths
+        for i in range(3):
+            tracker.register_path(
+                entry_point_file="routes/api.py",
+                entry_point_line=i * 10,
+                entry_point_name=f"handler_{i}",
+                sink_file=f"db/query{i}.py",
+                sink_line=100,
+                sink_type="sql",
+                sink_function="execute"
+            )
+
+        # Update one to traced_safe
+        path_ids = list(tracker.paths.keys())
+        tracker.update_status(path_ids[0], PathStatus.TRACED_SAFE)
+
+        stats = tracker.get_coverage_stats()
+        assert stats.total_paths == 3
+        assert stats.traced_safe_count == 1
+        assert stats.discovered_count == 2
+        assert stats.coverage_percent == pytest.approx(33.33, rel=0.1)

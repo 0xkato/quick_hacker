@@ -118,3 +118,32 @@ class CoverageTracker:
         record.traced_at = datetime.now(timezone.utc)
         if files_in_path:
             record.files_in_path = files_in_path
+
+    def get_coverage_stats(self) -> CoverageStats:
+        """Calculate current coverage statistics."""
+        stats = CoverageStats(
+            total_paths=len(self.paths),
+            discovered_count=0,
+            in_progress_count=0,
+            traced_safe_count=0,
+            traced_vuln_count=0,
+            blocked_count=0,
+            inconclusive_count=0
+        )
+
+        for record in self.paths.values():
+            match record.status:
+                case PathStatus.DISCOVERED:
+                    stats.discovered_count += 1
+                case PathStatus.IN_PROGRESS:
+                    stats.in_progress_count += 1
+                case PathStatus.TRACED_SAFE:
+                    stats.traced_safe_count += 1
+                case PathStatus.TRACED_VULN:
+                    stats.traced_vuln_count += 1
+                case PathStatus.BLOCKED:
+                    stats.blocked_count += 1
+                case PathStatus.INCONCLUSIVE:
+                    stats.inconclusive_count += 1
+
+        return stats

@@ -125,3 +125,25 @@ APPROACH:
 4. If disproven: document as REJECTED with reason
 </analysis_mission>
 """
+
+    @staticmethod
+    def get_verdict_reporting_instruction() -> str:
+        """Return instruction for reporting path verdicts."""
+        return """
+<path_verdict_reporting>
+AFTER TRACING EACH PATH:
+
+When you finish investigating a path from entry point to sink, call trace_path_verdict with:
+- entry_point_file, entry_point_line: Location of the entry point
+- sink_file, sink_line: Location of the dangerous sink
+- verdict: One of:
+  - "safe" - No vulnerability, data is properly handled
+  - "vulnerable" - Exploitable vulnerability (also call report_finding)
+  - "blocked" - Path exists but defenses prevent exploitation
+  - "inconclusive" - Cannot determine, need more context
+- reasoning: 1-2 sentence explanation
+- files_examined: Files you read while tracing
+
+This enables coverage tracking. Do NOT skip this step.
+</path_verdict_reporting>
+"""

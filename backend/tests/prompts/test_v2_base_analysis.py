@@ -23,3 +23,10 @@ class TestBaseAnalysisPrompt:
         prompt = BaseAnalysisPrompt.get_output_format()
         assert "validated" in prompt.lower() or "finding" in prompt.lower()
         assert "rejected" in prompt.lower() or "reason" in prompt.lower()
+
+    def test_includes_verdict_reporting_instruction(self):
+        prompt = BaseAnalysisPrompt.get_verdict_reporting_instruction()
+        assert "trace_path_verdict" in prompt
+        assert "safe" in prompt.lower()
+        assert "vulnerable" in prompt.lower()
+        assert "reasoning" in prompt.lower()

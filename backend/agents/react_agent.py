@@ -1228,6 +1228,22 @@ Continue following the main audit instructions above."""
         self._cancelled = True
         self._paused.set()  # Unpause to allow loop to exit
 
+    def request_pause(self):
+        """Request the agent to pause at the next safe point (for session hibernation)."""
+        self.pause()
+
+    def is_pausable(self) -> bool:
+        """Check if agent can be paused."""
+        return self.status == AgentStatus.RUNNING
+
+    def get_pause_state(self) -> dict:
+        """Get current state for snapshot."""
+        return {
+            "processed_files": list(self.files_examined),
+            "pending_files": [],  # ReAct agent doesn't track pending files the same way
+            "current_file": None,
+        }
+
     def to_schema(self):
         """Convert to API schema."""
         from models.schemas import Agent, ProviderConfig

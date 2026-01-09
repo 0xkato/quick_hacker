@@ -1017,6 +1017,22 @@ class DeepAuditAgent:
         self.status = AgentStatus.CANCELLED
         self._broadcast(WSMessageType.AGENT_STATUS, {"status": "cancelled"})
 
+    def request_pause(self):
+        """Request the agent to pause at the next safe point (for session hibernation)."""
+        self.pause()
+
+    def is_pausable(self) -> bool:
+        """Check if agent can be paused."""
+        return self.status == AgentStatus.RUNNING
+
+    def get_pause_state(self) -> dict:
+        """Get current state for snapshot."""
+        return {
+            "processed_files": [],
+            "pending_files": self.target_files or [],
+            "current_file": None,
+        }
+
     def to_schema(self) -> Agent:
         """Convert to Agent schema."""
         return Agent(

@@ -1,6 +1,8 @@
 // === Enums ===
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type FindingClassification = 'security_issue' | 'bug' | 'misconfiguration' | 'hardening';
+export type FixType = 'code' | 'config' | 'docs' | 'warning';
 export type AgentStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type AgentType = 'deep_scan' | 'quick_audit' | 'custom' | 'strict_analysis' | 'ultra_strict' | 'deep_audit';
 export type ProviderType = 'openai' | 'anthropic' | 'ollama';
@@ -161,6 +163,14 @@ export interface Finding {
   confidence: number;
   created_at: string;
   metadata?: Record<string, unknown>;
+  // Classification gate fields
+  classification?: FindingClassification;
+  config_dependent?: boolean;
+  config_flag?: string | null;
+  default_secure?: boolean | null;
+  contradiction_present?: boolean;
+  fix_type?: FixType;
+  classification_reasoning?: string;
 }
 
 // === WebSocket ===

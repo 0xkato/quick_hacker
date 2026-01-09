@@ -20,7 +20,6 @@ from models.schemas import (
 from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
 from agents.react_agent import ReActSecurityAgent
-from agents.deep_audit_agent import DeepAuditAgent
 from agents.ultrathink_agent import UltrathinkAgent
 from services import git_service
 from services.project_service import project_service
@@ -36,7 +35,7 @@ AGENT_CLASSES = {
     AgentType.CUSTOM: ReActSecurityAgent,         # ReAct for custom investigation
     AgentType.STRICT_ANALYSIS: ReActSecurityAgent,# ReAct for strict mode
     AgentType.ULTRA_STRICT: ReActSecurityAgent,   # ReAct for ultra strict
-    AgentType.DEEP_AUDIT: DeepAuditAgent,         # 3-layer architecture
+    AgentType.DEEP_AUDIT: ReActSecurityAgent,     # ReAct w/ deeper profile
     AgentType.ULTRATHINK: UltrathinkAgent,        # Maximum cognitive depth
 }
 

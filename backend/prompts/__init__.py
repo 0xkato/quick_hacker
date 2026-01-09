@@ -22,6 +22,11 @@ from .run_config import (
     generate_run_prompt,
     create_run_config_from_project,
 )
+from .classification_gate import (
+    CLASSIFICATION_RULES,
+    CLASSIFICATION_GATE_TEMPLATE,
+    get_classification_gate_prompt,
+)
 
 __all__ = [
     # Legacy
@@ -40,4 +45,8 @@ __all__ = [
     "RunConfig",
     "generate_run_prompt",
     "create_run_config_from_project",
+    # Classification Gate
+    "CLASSIFICATION_RULES",
+    "CLASSIFICATION_GATE_TEMPLATE",
+    "get_classification_gate_prompt",
 ]

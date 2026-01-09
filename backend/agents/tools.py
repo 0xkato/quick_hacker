@@ -316,6 +316,42 @@ TRACE_PATH_VERDICT_SCHEMA = {
 }
 
 
+# Tool schema for completing the audit (gated by coverage validation)
+COMPLETE_AUDIT_SCHEMA = {
+    "name": "complete_audit",
+    "description": "Request to complete the security audit. This will be REJECTED if coverage thresholds are not met or investigation queue is not empty. Only call when you have thoroughly investigated all discovered paths.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "outcome": {
+                "type": "string",
+                "enum": ["validated_findings", "no_findings", "insufficient_coverage"],
+                "description": "Final outcome: 'validated_findings' if vulns found, 'no_findings' if clean, 'insufficient_coverage' if cannot meet thresholds"
+            },
+            "summary": {
+                "type": "string",
+                "description": "Brief summary of what was investigated and concluded"
+            },
+            "coverage_acknowledgment": {
+                "type": "boolean",
+                "description": "Set to true to acknowledge you have traced all discovered paths or deferred them with reason"
+            },
+            "findings_count": {
+                "type": "integer",
+                "description": "Number of validated findings reported"
+            }
+        },
+        "required": ["outcome", "summary", "coverage_acknowledgment"]
+    }
+}
+
+# Add complete_audit to AGENT_TOOLS
+AGENT_TOOLS.append({
+    "name": "complete_audit",
+    "description": "Request to complete the security audit. This will be REJECTED if coverage thresholds are not met or investigation queue is not empty.",
+    "parameters": COMPLETE_AUDIT_SCHEMA["parameters"]
+})
+
 # Build tool definition lookup for validation
 TOOL_DEFINITIONS = {tool["name"]: tool for tool in AGENT_TOOLS}
 

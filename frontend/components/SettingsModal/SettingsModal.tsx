@@ -114,24 +114,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setIsSaving(true);
     try {
       const providerData = providerForms[provider] || {};
+
+      // Check if API key looks like a masked value (don't save masked keys)
       const apiKey = providerData.api_key;
+      const isMaskedKey = apiKey && (apiKey.includes('...') || apiKey === '****');
 
-      // If API key is provided and has changed, validate and save it using the auth endpoint
-      if (apiKey && apiKey.trim() !== '' && !apiKey.startsWith('sk-...')) {
-        // Validate the API key first
-        const isValid = await validateApiKey(provider, apiKey);
-        if (!isValid) {
-          setIsSaving(false);
-          return; // Don't save if validation failed
-        }
-
-        // Save API key using the per-user auth endpoint
-        await authApiKeys.save(provider, apiKey);
+      // Build settings to save - include api_key only if it's a real new key
+      const settingsToSave = { ...providerData };
+      if (isMaskedKey) {
+        delete settingsToSave.api_key; // Don't overwrite with masked value
       }
 
-      // Save other provider settings (excluding api_key which is handled separately)
-      const { api_key: _, ...otherSettings } = providerData;
-      await settings.updateProvider(provider, otherSettings);
+      // Save all settings including api_key to the settings endpoint
+      await settings.updateProvider(provider, settingsToSave);
 
       await loadSettings();
       setValidationResults((prev) => ({ ...prev, [provider]: { status: 'success', message: 'Settings saved' } }));

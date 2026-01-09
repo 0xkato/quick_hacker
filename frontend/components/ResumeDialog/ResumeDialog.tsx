@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
 import type { SnapshotInfo } from '@/types';
 
@@ -18,9 +19,39 @@ export function ResumeDialog({
 }: ResumeDialogProps) {
   const formattedDate = new Date(snapshotInfo.timestamp).toLocaleString();
 
+  // Handle escape key
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    },
+    [onClose]
+  );
+
+  useEffect(() => {
+    document.addEventListener('keydown', handleKeyDown);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = '';
+    };
+  }, [handleKeyDown]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-zinc-800 rounded-lg shadow-xl w-full max-w-md mx-4 border border-zinc-700">
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50"
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="relative bg-zinc-800 rounded-lg shadow-xl w-full max-w-md mx-4 border border-zinc-700"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-700">
           <h2 className="text-lg font-semibold text-zinc-100">
@@ -28,6 +59,7 @@ export function ResumeDialog({
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="p-1 rounded-md hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
           >
             <X className="w-5 h-5" />

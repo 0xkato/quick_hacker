@@ -188,12 +188,33 @@ async def get_user_api_key_for_provider(
     db: AsyncSession
 ) -> Optional[str]:
     """Get the decrypted API key for a user and provider."""
-    if auth_context.is_legacy_token or not auth_context.user_id:
-        # For legacy tokens, fall back to environment variables
-        if provider == "anthropic":
-            return os.environ.get("ANTHROPIC_API_KEY")
-        elif provider == "openai":
-            return os.environ.get("OPENAI_API_KEY")
-        return None
+    provider = (provider or "").strip().lower()
 
-    return await auth_service.get_user_api_key(db, auth_context.user_id, provider)
+    # Prefer per-user keys for JWT-authenticated users.
+    if not auth_context.is_legacy_token and auth_context.user_id:
+        try:
+            key = await auth_service.get_user_api_key(db, auth_context.user_id, provider)
+            if key:
+                return key
+        except Exception:
+            # Corrupt/legacy encrypted keys shouldn't block falling back to app settings.
+            pass
+
+    # Fall back to app-level settings (what the Settings UI currently edits).
+    try:
+        from services.settings_service import settings_service
+
+        app_settings = await settings_service.get_settings()
+        provider_settings = app_settings.providers.get(provider)
+        if provider_settings and provider_settings.api_key:
+            return provider_settings.api_key
+    except Exception:
+        # Settings are optional; ignore and continue to env fallbacks.
+        pass
+
+    # Final fallback: environment variables.
+    if provider == "anthropic":
+        return os.environ.get("ANTHROPIC_API_KEY")
+    if provider == "openai":
+        return os.environ.get("OPENAI_API_KEY")
+    return None

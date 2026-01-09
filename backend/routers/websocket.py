@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Set, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from starlette.websockets import WebSocketState
 
 from models.schemas import WSMessage
 from services.agent_orchestrator import orchestrator
@@ -25,7 +26,9 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket):
         """Accept and register a new WebSocket connection."""
-        await websocket.accept()
+        # The endpoint may accept early to perform an auth handshake. Avoid double-accept.
+        if websocket.application_state == WebSocketState.CONNECTING:
+            await websocket.accept()
         async with self._lock:
             self.active_connections.add(websocket)
         print(f"WebSocket connected. Total: {len(self.active_connections)}")
@@ -145,17 +148,48 @@ async def websocket_endpoint(
     # even when the client includes it. Fall back to Starlette's parsed query params.
     token = token or websocket.query_params.get("token")
 
-    # Validate authentication token
-    if not token:
-        query_keys = list(websocket.query_params.keys())
-        print(f"[WS] Connection rejected: No token provided (query_keys={query_keys})")
-        await websocket.close(code=4001, reason="Authentication required. Use ?token=<token>")
-        return
+    # Accept early so we can exchange an auth message even when query params are missing.
+    await websocket.accept()
 
-    if not verify_ws_token(token):
-        print(f"[WS] Token rejected - prefix: {token[:8]}...")
-        await websocket.close(code=4001, reason="Invalid or expired token.")
-        return
+    # Validate authentication token (query param OR message-based handshake).
+    if not token or not verify_ws_token(token):
+        query_keys = list(websocket.query_params.keys())
+        reason = "missing" if not token else "invalid"
+        print(f"[WS] Auth required (reason={reason}, query_keys={query_keys})")
+
+        # Ask the client to send an auth message:
+        # { "type": "auth", "token": "<jwt|session_token>" }
+        await websocket.send_text(json.dumps({"type": "auth_required", "data": {"reason": reason}}))
+
+        try:
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+        except asyncio.TimeoutError:
+            await websocket.close(code=4001, reason="Authentication required.")
+            return
+        except WebSocketDisconnect:
+            return
+
+        try:
+            auth_msg = json.loads(raw)
+        except json.JSONDecodeError:
+            await websocket.close(code=4001, reason="Authentication required.")
+            return
+
+        if auth_msg.get("type") != "auth":
+            await websocket.close(code=4001, reason="Authentication required.")
+            return
+
+        provided_token = auth_msg.get("token") or (auth_msg.get("data") or {}).get("token")
+        if not provided_token:
+            await websocket.close(code=4001, reason="Authentication required.")
+            return
+
+        provided_token = str(provided_token)
+        if not verify_ws_token(provided_token):
+            await websocket.close(code=4001, reason="Invalid or expired token.")
+            return
+
+        token = provided_token
 
     await manager.connect(websocket)
 
@@ -178,6 +212,10 @@ async def websocket_endpoint(
             if msg_type == "ping":
                 # Heartbeat
                 await manager.send_personal(websocket, {"type": "pong"})
+
+            elif msg_type == "auth":
+                # Client may send auth proactively; ignore once connected.
+                await manager.send_personal(websocket, {"type": "auth_ok"})
 
             elif msg_type == "subscribe":
                 # Client wants to subscribe to specific updates

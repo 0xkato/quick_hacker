@@ -87,15 +87,20 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       tokenKindRef.current = jwtToken ? 'jwt' : 'legacy';
       const wsUrl = (() => {
         try {
-          const url = new URL(WS_BASE_URL);
-          url.searchParams.set('token', token);
-          return url.toString();
+          return new URL(WS_BASE_URL).toString();
         } catch {
-          const separator = WS_BASE_URL.includes('?') ? '&' : '?';
-          return `${WS_BASE_URL}${separator}token=${encodeURIComponent(token)}`;
+          return WS_BASE_URL;
         }
       })();
       const ws = new WebSocket(wsUrl);
+
+      const sendAuth = () => {
+        try {
+          ws.send(JSON.stringify({ type: 'auth', token }));
+        } catch (err) {
+          console.error('[WS] Failed to send auth message:', err);
+        }
+      };
 
       ws.onopen = () => {
         if (!mountedRef.current) {
@@ -107,6 +112,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         setIsConnected(true);
         setError(null);
         console.log('[WS] Connected');
+        sendAuth();
       };
 
       ws.onclose = async (event) => {
@@ -165,6 +171,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         try {
           const message = JSON.parse(event.data) as WSMessage;
           const opts = optionsRef.current;
+
+          // Server may request auth after accepting the socket.
+          if (message.type === 'auth_required') {
+            sendAuth();
+            return;
+          }
 
           // Call general message handler
           opts.onMessage?.(message);

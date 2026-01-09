@@ -324,7 +324,8 @@ export default function Home() {
 
   // Check for existing snapshot on project load
   useEffect(() => {
-    if (!currentProject || !isAuthReady) return;
+    const projectId = currentProject?.id;
+    if (!projectId || !isAuthReady) return;
 
     const checkSnapshot = async () => {
       try {

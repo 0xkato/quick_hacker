@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   FolderOpen,
   Plus,
@@ -394,11 +394,7 @@ export function ProjectSelector({ onProjectEnter, onProjectExit }: ProjectSelect
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
 
-  useEffect(() => {
-    loadProjectStatus();
-  }, []);
-
-  const loadProjectStatus = async () => {
+  const loadProjectStatus = useCallback(async () => {
     setIsLoading(true);
     try {
       const [projectList, status] = await Promise.all([
@@ -416,7 +412,11 @@ export function ProjectSelector({ onProjectEnter, onProjectExit }: ProjectSelect
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [onProjectEnter]);
+
+  useEffect(() => {
+    loadProjectStatus();
+  }, [loadProjectStatus]);
 
   const handleEnterProject = async (project: Project) => {
     try {

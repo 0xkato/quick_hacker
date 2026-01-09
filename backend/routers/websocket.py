@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime
 from typing import Set, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -94,6 +95,17 @@ def broadcast_agent_message(message: WSMessage):
                 asyncio.run(manager.broadcast(message.model_dump()))
             except Exception as e:
                 print(f"Failed to broadcast message: {e}")
+
+
+async def broadcast_session_event(event_type: str, data: dict):
+    """Broadcast a session event to all connected clients."""
+    message = {
+        "type": event_type,
+        "agent_id": "session",  # Special ID for session-level events
+        "data": data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    await manager.broadcast(message)
 
 
 # Register the callback with the orchestrator

@@ -65,6 +65,12 @@ class BaseAgent(ABC):
         self._cancelled = False
         self._task: Optional[asyncio.Task] = None
 
+        # Pause support
+        self._pause_requested = False
+        self.processed_files: list[str] = []
+        self.pending_files: list[str] = []
+        self.current_file: Optional[str] = None
+
         # Provider (lazy init)
         self._provider: Optional[BaseProvider] = None
 
@@ -230,6 +236,22 @@ class BaseAgent(ABC):
         """Resume the agent."""
         if self.status == AgentStatus.PAUSED:
             self.status = AgentStatus.RUNNING
+
+    def request_pause(self):
+        """Request the agent to pause at the next safe point."""
+        self._pause_requested = True
+
+    def is_pausable(self) -> bool:
+        """Check if agent can be paused."""
+        return self.status == AgentStatus.RUNNING
+
+    def get_pause_state(self) -> dict:
+        """Get current state for snapshot."""
+        return {
+            "processed_files": getattr(self, "processed_files", []),
+            "pending_files": getattr(self, "pending_files", []),
+            "current_file": getattr(self, "current_file", None),
+        }
 
     @abstractmethod
     async def analyze(self):

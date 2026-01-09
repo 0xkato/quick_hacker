@@ -177,7 +177,10 @@ export type WSMessageType =
   | 'tool_detail'
   | 'state_sync'
   | 'report_ready'
-  | 'phase_handoff';
+  | 'phase_handoff'
+  | 'session_pausing'
+  | 'session_paused'
+  | 'session_resumed';
 
 export interface WSMessage {
   type: WSMessageType;
@@ -409,4 +412,46 @@ export interface TokenUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+}
+
+// === Session Hibernation ===
+
+export type SessionStatus = 'active' | 'pausing' | 'paused' | 'resuming';
+
+export interface SessionSnapshotAgent {
+  id: string;
+  agent_type: string;
+  status: string;
+  target_files: string[];
+  processed_files: string[];
+  pending_files: string[];
+  current_file: string | null;
+  config: Record<string, unknown>;
+}
+
+export interface SessionSnapshotUIState {
+  active_view: string;
+  selected_file: string | null;
+  open_panels: string[];
+  selected_agent_id: string | null;
+}
+
+export interface SessionSnapshot {
+  version: number;
+  timestamp: string;
+  project_id: string;
+  agents: SessionSnapshotAgent[];
+  findings: Record<string, unknown>[];
+  llm_context: Array<{
+    agent_id: string;
+    messages: Record<string, unknown>[];
+  }>;
+  ui_state: SessionSnapshotUIState;
+}
+
+export interface SnapshotInfo {
+  timestamp: string;
+  agent_count: number;
+  findings_count: number;
+  pending_files: number;
 }

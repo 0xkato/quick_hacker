@@ -261,6 +261,21 @@ class ProjectService:
             return str(repo_path.absolute())
         return None
 
+    def get_current_project_path(self) -> Optional[str]:
+        """Get the path of the currently active project (synchronous)."""
+        if not self._current_project_id:
+            return None
+        project = self._projects.get(self._current_project_id)
+        if project:
+            return project.path
+        return None
+
+    def get_current_project_sync(self) -> Optional[Project]:
+        """Get the currently active project (synchronous)."""
+        if self._current_project_id:
+            return self._projects.get(self._current_project_id)
+        return None
+
 
 # Global instance
 project_service = ProjectService(os.environ.get("DATA_DIR", "data"))

@@ -273,6 +273,10 @@ class WSMessageType(str, Enum):
     ULTRATHINK_GATE_COMPLETE = "ultrathink_gate_complete"
     ULTRATHINK_THINKING_UPDATE = "ultrathink_thinking_update"
     ULTRATHINK_CASCADE_COMPLETE = "ultrathink_cascade_complete"
+    # Session hibernation events
+    SESSION_PAUSING = "session_pausing"
+    SESSION_PAUSED = "session_paused"
+    SESSION_RESUMED = "session_resumed"
 
 
 class WSMessage(BaseModel):
@@ -304,6 +308,53 @@ class APIResponse(BaseModel):
     success: bool
     message: Optional[str] = None
     data: Optional[Any] = None
+
+
+# === Session Hibernation ===
+
+class SessionSnapshotAgent(BaseModel):
+    """Agent state within a session snapshot."""
+    id: str
+    agent_type: str
+    status: str  # 'running' | 'paused' | 'completed'
+    target_files: list[str] = []
+    processed_files: list[str] = []
+    pending_files: list[str] = []
+    current_file: Optional[str] = None
+    config: dict[str, Any] = {}
+
+
+class SessionSnapshotLLMContext(BaseModel):
+    """LLM conversation context for an agent."""
+    agent_id: str
+    messages: list[dict[str, Any]] = []
+
+
+class SessionSnapshotUIState(BaseModel):
+    """UI state to restore."""
+    active_view: str
+    selected_file: Optional[str] = None
+    open_panels: list[str] = []
+    selected_agent_id: Optional[str] = None
+
+
+class SessionSnapshot(BaseModel):
+    """Full session snapshot for hibernation."""
+    version: int = 1
+    timestamp: datetime
+    project_id: str
+    agents: list[SessionSnapshotAgent] = []
+    findings: list[dict[str, Any]] = []  # Finding dicts
+    llm_context: list[SessionSnapshotLLMContext] = []
+    ui_state: SessionSnapshotUIState
+
+
+class SnapshotInfo(BaseModel):
+    """Metadata about a snapshot (for conflict dialog)."""
+    timestamp: datetime
+    agent_count: int
+    findings_count: int
+    pending_files: int
 
 
 # Enable forward references

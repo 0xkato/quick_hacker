@@ -28,9 +28,11 @@ import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualizat
 import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
 import { ReportModal } from '@/components/ReportPanel';
 import { AuthModal } from '@/components/Auth';
+import { SessionControls } from '@/components/SessionControls';
+import { ResumeDialog } from '@/components/ResumeDialog';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '@/hooks/useAuth';
-import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, initializeAuth, setAuthFunctions, type Project } from '@/lib/api';
+import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, session as sessionApi, initializeAuth, setAuthFunctions, type Project } from '@/lib/api';
 import type {
   FileNode,
   FileContent,
@@ -42,6 +44,8 @@ import type {
   LLMInteraction,
   ToolDetail,
   InvestigationReport,
+  SessionStatus,
+  SnapshotInfo,
 } from '@/types';
 
 type ActivityView = 'explorer' | 'search' | 'agents' | 'findings' | 'flow' | 'llm';
@@ -83,6 +87,11 @@ export default function Home() {
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Session hibernation state
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>('active');
+  const [snapshotInfo, setSnapshotInfo] = useState<SnapshotInfo | null>(null);
+  const [showResumeDialog, setShowResumeDialog] = useState(false);
 
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
@@ -311,6 +320,22 @@ export default function Home() {
     initialize();
   }, []);
 
+  // Check for existing snapshot on project load
+  useEffect(() => {
+    if (!currentProject || !isAuthReady) return;
+
+    const checkSnapshot = async () => {
+      try {
+        const info = await sessionApi.getSnapshotInfo();
+        setSnapshotInfo(info);
+      } catch (err) {
+        console.error('Failed to check snapshot:', err);
+      }
+    };
+
+    checkSnapshot();
+  }, [currentProject?.id, isAuthReady]);
+
   // Load project data when entering a project
   const loadProjectData = async (project: Project) => {
     // Skip only if definitely no repo info at all
@@ -424,6 +449,78 @@ export default function Home() {
     }
   };
 
+  // Session restore handler
+  const handleRestoreSession = useCallback(async () => {
+    try {
+      setSessionStatus('resuming');
+      const result = await sessionApi.resume();
+
+      // Restore findings from snapshot
+      if (result.snapshot.findings) {
+        setFindings(result.snapshot.findings as unknown as Finding[]);
+      }
+
+      // Restore UI state
+      const ui = result.snapshot.ui_state;
+      if (ui.active_view) {
+        setActiveView(ui.active_view as typeof activeView);
+      }
+      if (ui.selected_file) {
+        setSelectedPath(ui.selected_file);
+      }
+      if (ui.selected_agent_id) {
+        setSelectedAgentId(ui.selected_agent_id);
+      }
+
+      setSessionStatus('active');
+      setShowResumeDialog(false);
+      setSnapshotInfo(null);
+
+      // Delete snapshot after restore
+      await sessionApi.deleteSnapshot();
+    } catch (err) {
+      console.error('Failed to restore session:', err);
+      setSessionStatus('active');
+    }
+  }, []);
+
+  // Handle showing dialog or auto-restore when snapshotInfo changes
+  useEffect(() => {
+    if (!snapshotInfo) return;
+
+    // Check if we have running agents (conflict)
+    const hasRunning = agents.some(a => a.status === 'running');
+
+    if (hasRunning) {
+      // Show conflict dialog
+      setShowResumeDialog(true);
+    } else {
+      // Auto-restore if no conflict
+      handleRestoreSession();
+    }
+  }, [snapshotInfo, agents, handleRestoreSession]);
+
+  const handleKeepCurrent = useCallback(async () => {
+    setShowResumeDialog(false);
+    // Optionally delete the snapshot
+    try {
+      await sessionApi.deleteSnapshot();
+      setSnapshotInfo(null);
+    } catch (err) {
+      console.error('Failed to delete snapshot:', err);
+    }
+  }, []);
+
+  const handleSessionPaused = useCallback(() => {
+    // Could show a toast notification here
+    console.log('Session paused successfully');
+  }, []);
+
+  const handleSessionError = useCallback((error: string) => {
+    console.error('Session error:', error);
+    // Could show error toast here
+  }, []);
+
   // Count running agents and findings
   const runningAgents = agents.filter((a) => a.status === 'running').length;
   const criticalFindings = findings.filter((f) => f.severity === 'critical').length;
@@ -485,6 +582,21 @@ export default function Home() {
               Login
             </button>
           )}
+          <SessionControls
+            sessionStatus={sessionStatus}
+            onStatusChange={setSessionStatus}
+            hasRunningAgents={agents.some(a => a.status === 'running')}
+            activeView={activeView}
+            selectedFile={selectedPath}
+            openPanels={[
+              showSidebar ? 'sidebar' : '',
+              showPanel ? 'panel' : '',
+              showChat ? 'chat' : '',
+            ].filter(Boolean)}
+            selectedAgentId={selectedAgentId}
+            onPaused={handleSessionPaused}
+            onError={handleSessionError}
+          />
           <button
             onClick={handleProjectExit}
             className="btn btn-secondary btn-sm flex items-center gap-1"
@@ -888,6 +1000,16 @@ export default function Home() {
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
       />
+
+      {/* Resume Dialog */}
+      {showResumeDialog && snapshotInfo && (
+        <ResumeDialog
+          snapshotInfo={snapshotInfo}
+          onRestore={handleRestoreSession}
+          onKeepCurrent={handleKeepCurrent}
+          onClose={() => setShowResumeDialog(false)}
+        />
+      )}
     </div>
   );
 }

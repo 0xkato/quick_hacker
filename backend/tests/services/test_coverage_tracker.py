@@ -1,6 +1,6 @@
 """Tests for coverage tracker service."""
 import pytest
-from services.coverage_tracker import PathStatus, PathRecord
+from services.coverage_tracker import PathStatus, PathRecord, CoverageStats
 
 
 class TestPathStatus:
@@ -30,3 +30,53 @@ class TestPathRecord:
         assert record.id == "path-1"
         assert record.status == PathStatus.DISCOVERED
         assert record.verdict_reasoning is None
+
+
+class TestCoverageStats:
+    def test_coverage_stats_creation(self):
+        stats = CoverageStats(
+            total_paths=10,
+            discovered_count=5,
+            in_progress_count=1,
+            traced_safe_count=2,
+            traced_vuln_count=1,
+            blocked_count=1,
+            inconclusive_count=0
+        )
+        assert stats.total_paths == 10
+
+    def test_traced_count_property(self):
+        stats = CoverageStats(
+            total_paths=10,
+            discovered_count=5,
+            in_progress_count=0,
+            traced_safe_count=2,
+            traced_vuln_count=1,
+            blocked_count=1,
+            inconclusive_count=1
+        )
+        assert stats.traced_count == 4  # safe + vuln + blocked
+
+    def test_coverage_percent_property(self):
+        stats = CoverageStats(
+            total_paths=10,
+            discovered_count=6,
+            in_progress_count=0,
+            traced_safe_count=2,
+            traced_vuln_count=1,
+            blocked_count=1,
+            inconclusive_count=0
+        )
+        assert stats.coverage_percent == 40.0  # 4/10
+
+    def test_coverage_percent_zero_paths(self):
+        stats = CoverageStats(
+            total_paths=0,
+            discovered_count=0,
+            in_progress_count=0,
+            traced_safe_count=0,
+            traced_vuln_count=0,
+            blocked_count=0,
+            inconclusive_count=0
+        )
+        assert stats.coverage_percent == 0.0

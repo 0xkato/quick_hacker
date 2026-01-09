@@ -180,7 +180,8 @@ export type WSMessageType =
   | 'phase_handoff'
   | 'session_pausing'
   | 'session_paused'
-  | 'session_resumed';
+  | 'session_resumed'
+  | 'auth_required';
 
 export interface WSMessage {
   type: WSMessageType;

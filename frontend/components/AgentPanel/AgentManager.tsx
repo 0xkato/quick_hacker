@@ -47,7 +47,7 @@ const AGENT_TYPES: { value: AgentType; label: string; icon: React.ReactNode; des
     value: 'deep_audit',
     label: 'Audit',
     icon: <Layers className="w-4 h-4" />,
-    description: '3-layer architecture',
+    description: 'Marathon deep coverage',
   },
   {
     value: 'strict_analysis',
@@ -83,6 +83,7 @@ const SUGGESTED_MODELS: Record<ProviderType, string[]> = {
     'claude-3-5-haiku-20241022',
   ],
   openai: [
+    'gpt-5.2',
     'gpt-4o',
     'gpt-4o-mini',
     'gpt-4-turbo',

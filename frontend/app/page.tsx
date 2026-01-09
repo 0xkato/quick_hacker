@@ -542,7 +542,8 @@ export default function Home() {
   const highFindings = findings.filter((f) => f.severity === 'high').length;
   const selectedAgent = selectedAgentId ? agents.find((a) => a.id === selectedAgentId) : null;
   const canQueueInvestigations = Boolean(
-    selectedAgent && ['deep_scan', 'custom', 'strict_analysis', 'ultra_strict'].includes(selectedAgent.agent_type)
+    selectedAgent &&
+      ['deep_scan', 'deep_audit', 'custom', 'strict_analysis', 'ultra_strict'].includes(selectedAgent.agent_type)
   );
 
   // Show loading while checking project status

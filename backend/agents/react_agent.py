@@ -38,10 +38,11 @@ from models.schemas import (
     ProviderConfig,
 )
 from agents.tools import ToolExecutor, AGENT_TOOLS, ToolResult
-from agents.dual_model_config import resolve_dual_model_config, get_handoff_mode
+from agents.dual_model_config import DEFAULT_SCANNER_MODELS, resolve_dual_model_config, get_handoff_mode
 from agents.prompts.scanner_prompt import format_scanner_prompt
 from agents.prompts.analyzer_prompt import format_analyzer_prompt
-from providers import get_provider
+from prompts.strict_prompts import EVIDENCE_VERIFICATION_PROMPT
+from providers import Message, get_provider
 from services.attack_surface_service import attack_surface_service, AttackSurfaceTriageItem
 from services.flow_service import flow_service
 from services.investigation_queue_service import investigation_queue_service
@@ -211,19 +212,55 @@ class ReActSecurityAgent:
         self._scanner_config, self._analyzer_config, self._is_dual_mode = resolve_dual_model_config(request)
         self._handoff_mode = get_handoff_mode(request)
 
+        # Deep audits default to dual-mode (cheap scanner + chosen analyzer) unless explicitly configured.
+        if (
+            not self._is_dual_mode
+            and self.agent_type == AgentType.DEEP_AUDIT
+            and request.provider_config is not None
+        ):
+            analyzer = request.provider_config
+            scanner_model = DEFAULT_SCANNER_MODELS.get(analyzer.provider) or analyzer.model
+            self._scanner_config = ProviderConfig(
+                provider=analyzer.provider,
+                model=scanner_model,
+                api_key=analyzer.api_key,
+                base_url=analyzer.base_url,
+                temperature=0.0,
+                max_tokens=4096,
+            )
+            self._analyzer_config = analyzer
+            self._is_dual_mode = True
+
         if self._is_dual_mode:
             self._scanner_provider = get_provider(self._scanner_config)
             self._analyzer_provider = get_provider(self._analyzer_config)
             self.provider = self._scanner_provider  # Start with scanner
         else:
+            if request.provider_config is None:
+                raise ValueError("provider_config is required for single-model ReAct agents")
             self.provider = get_provider(request.provider_config)
 
         # Conversation history for the agent
         self.messages: list[dict] = []
 
         # Limits
-        self.max_iterations = 100  # Safety limit
+        self.max_iterations = 100  # Safety limit (may be overridden by agent profile)
         self.max_tool_calls_per_iteration = 5
+        self.max_runtime_seconds: Optional[int] = None
+
+        # Attack-surface triage rendering/automation knobs (may be overridden by agent profile)
+        self._triage_render_limit = 20
+        self._triage_prompt_limit = 10
+        self._auto_queue_limit = 3
+
+        # Finding acceptance gates (may be overridden by agent profile)
+        self._min_finding_confidence = 0.8
+        self._require_strict_finding_fields = False
+        self._require_ultra_verification = False
+
+        # "Press harder" completion confirmation (may be overridden by agent profile)
+        self._audit_complete_confirmations_required = 1
+        self._audit_complete_confirmations_seen = 0
 
         # Rate limiting / throttling
         self.iteration_delay = 2.0  # Seconds to wait between iterations
@@ -237,6 +274,260 @@ class ReActSecurityAgent:
         self._attack_surface_triage: list[AttackSurfaceTriageItem] = []
         self._active_investigation_candidate_node_id: Optional[str] = None
         self._active_investigation_root_node_id: Optional[str] = None
+
+        self._apply_agent_profile()
+
+    def _apply_agent_profile(self) -> None:
+        """Tune the ReAct loop behavior based on agent_type.
+
+        The goal is to keep a consistent investigation engine (ReAct + tools),
+        while allowing different "scan flavors" via conservative parameter changes.
+        """
+        if self.agent_type == AgentType.DEEP_AUDIT:
+            # Long-running, coverage-oriented mode.
+            self.max_runtime_seconds = 60 * 60  # 1 hour
+            self.max_iterations = 10_000  # Time-boxed by max_runtime_seconds
+            self.max_tool_calls_per_iteration = 8
+            self.iteration_delay = 1.0
+            self._triage_render_limit = 40
+            self._triage_prompt_limit = 20
+            self._auto_queue_limit = 8
+            self._audit_complete_confirmations_required = 2
+            return
+
+        if self.agent_type == AgentType.STRICT_ANALYSIS:
+            # Same engine, stricter finding acceptance.
+            self.max_iterations = 150
+            self._min_finding_confidence = 0.9
+            self._require_strict_finding_fields = True
+            self._auto_queue_limit = 3
+            return
+
+        if self.agent_type == AgentType.ULTRA_STRICT:
+            # Strict + second-pass verifier gate.
+            self.max_iterations = 200
+            self._min_finding_confidence = 0.95
+            self._require_strict_finding_fields = True
+            self._require_ultra_verification = True
+            self._auto_queue_limit = 4
+            return
+
+    def _profile_prompt_appendix(self) -> str:
+        """Extra, profile-specific instructions appended to the system prompt."""
+        if self.agent_type == AgentType.DEEP_AUDIT:
+            return (
+                "=== DEEP AUDIT MODE ===\n"
+                "- Be coverage-driven: enumerate entry points and dangerous sinks systematically.\n"
+                "- Expand sibling paths and variants (v1/v2, admin/public, internal/external).\n"
+                "- Prefer evidence via tools over speculation. If unsure, investigate more.\n"
+                "- You may only call report_finding when you can provide a concrete source→sink trace.\n"
+                "- Stop only when you are confident there is nothing left to investigate.\n"
+                "=== END DEEP AUDIT MODE ==="
+            )
+
+        if self.agent_type == AgentType.STRICT_ANALYSIS:
+            return (
+                "=== STRICT MODE (Zero false positives) ===\n"
+                "- Assume the code is secure until proven otherwise.\n"
+                "- Only call report_finding with confidence >= 0.90 and concrete evidence.\n"
+                "- Required fields for report_finding: source_trace, attack_scenario, proof_of_concept.\n"
+                "- If you cannot prove it, do NOT report it; keep investigating or conclude AUDIT_COMPLETE.\n"
+                "=== END STRICT MODE ==="
+            )
+
+        if self.agent_type == AgentType.ULTRA_STRICT:
+            return (
+                "=== ULTRA STRICT MODE (Double verification) ===\n"
+                "- Everything from STRICT MODE applies.\n"
+                "- Only call report_finding with confidence >= 0.95 and concrete evidence.\n"
+                "- Any report_finding may be rejected unless it includes: source_trace, attack_scenario, proof_of_concept.\n"
+                "- Expect a second-pass verifier; weak/uncertain claims will be rejected.\n"
+                "=== END ULTRA STRICT MODE ==="
+            )
+
+        return ""
+
+    def _audit_completion_confirmation_prompt(self) -> str:
+        """Ask the model to do an extra pass before ending (used in deep audit mode)."""
+        if self.agent_type == AgentType.DEEP_AUDIT:
+            return (
+                "Before you finalize, do ONE MORE sweep for anything you might have missed.\n"
+                "Use tools, be systematic, and favor concrete evidence.\n"
+                "\n"
+                "Checklist:\n"
+                "1) Run targeted searches for common sinks: eval/exec/subprocess/os.system, SQL execute/raw, open/path joins, template render, deserialization, SSRF-capable HTTP clients.\n"
+                "2) Re-check auth/authorization boundaries around the highest-risk entry points.\n"
+                "3) Look for config/env toggles that change security posture (DEBUG, auth bypass flags, permissive CORS, unsafe loaders).\n"
+                "\n"
+                "If you are still confident there's nothing left, respond with AUDIT_COMPLETE.\n"
+            )
+
+        return "Before finishing, do a brief final sweep using tools; if nothing else, respond with AUDIT_COMPLETE."
+
+    def _guess_language_from_path(self, file_path: str) -> str:
+        ext = (file_path.rsplit(".", 1)[-1] if "." in file_path else "").lower()
+        if ext in ("py",):
+            return "python"
+        if ext in ("js", "mjs", "cjs"):
+            return "javascript"
+        if ext in ("ts",):
+            return "typescript"
+        if ext in ("tsx",):
+            return "tsx"
+        if ext in ("jsx",):
+            return "jsx"
+        if ext in ("yml", "yaml"):
+            return "yaml"
+        if ext:
+            return ext
+        return "text"
+
+    def _extract_json_object(self, text: str) -> dict[str, Any]:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("No JSON object found")
+        raw = text[start : end + 1]
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("Expected JSON object")
+        return parsed
+
+    def _validate_reported_finding(self, finding_data: Any) -> tuple[bool, str]:
+        if not isinstance(finding_data, dict):
+            return False, "Invalid finding payload (expected an object)."
+
+        try:
+            confidence = float(finding_data.get("confidence"))
+        except Exception:
+            return False, "Missing or invalid 'confidence' (expected number 0.0-1.0)."
+
+        if confidence < self._min_finding_confidence:
+            return (
+                False,
+                f"Confidence {confidence:.2f} is below the minimum threshold {self._min_finding_confidence:.2f}.",
+            )
+
+        if self._require_strict_finding_fields:
+            missing: list[str] = []
+
+            source_trace = finding_data.get("source_trace")
+            if not isinstance(source_trace, list) or not any(str(x).strip() for x in source_trace):
+                missing.append("source_trace (non-empty array)")
+
+            attack_scenario = finding_data.get("attack_scenario")
+            if not isinstance(attack_scenario, str) or not attack_scenario.strip():
+                missing.append("attack_scenario")
+
+            proof_of_concept = finding_data.get("proof_of_concept")
+            if not isinstance(proof_of_concept, str) or not proof_of_concept.strip():
+                missing.append("proof_of_concept")
+
+            if missing:
+                return False, "Missing required fields for strict mode: " + ", ".join(missing)
+
+        return True, ""
+
+    async def _ultra_strict_verify_finding(self, finding_data: dict[str, Any]) -> tuple[bool, str]:
+        file_path = str(finding_data.get("file_path") or "").strip()
+        language = self._guess_language_from_path(file_path)
+
+        code = ""
+        if file_path:
+            try:
+                line_start = int(finding_data.get("line_start") or 1)
+                line_end = int(finding_data.get("line_end") or line_start)
+                read_args = {
+                    "path": file_path,
+                    "start_line": max(1, line_start - 20),
+                    "end_line": max(line_end + 20, line_start),
+                }
+                read_result = await self.tool_executor.execute("read_file", read_args)
+                if read_result.success and isinstance(read_result.data, dict):
+                    code = str(read_result.data.get("content") or "")
+            except Exception:
+                code = ""
+
+        if not code:
+            code = str(finding_data.get("vulnerable_code") or "")
+
+        if not code.strip():
+            return False, "Ultra-strict verification failed: no code snippet available."
+
+        finding_blob = json.dumps(finding_data, indent=2, default=str)[:8000]
+        code_blob = code[:8000]
+        prompt = (
+            EVIDENCE_VERIFICATION_PROMPT
+            .replace("{{finding}}", finding_blob)
+            .replace("{{language}}", language)
+            .replace("{{code}}", code_blob)
+        )
+
+        request_id = observability_service.log_llm_request(
+            agent_id=self.id,
+            messages=[{"role": "user", "content": prompt}],
+            tools_available=None,
+            model=self.provider.model,
+            provider=self.provider.provider_type,
+        )
+
+        start_time = datetime.utcnow()
+        try:
+            raw = await self.provider.generate([Message(role="user", content=prompt)])
+        except Exception as e:
+            observability_service.log_llm_response(
+                agent_id=self.id,
+                request_id=request_id,
+                content=str(e),
+                tool_calls=None,
+                usage=None,
+                duration_ms=int((datetime.utcnow() - start_time).total_seconds() * 1000),
+                model=self.provider.model,
+                provider=self.provider.provider_type,
+            )
+            return False, f"Ultra-strict verifier call failed: {e}"
+
+        observability_service.log_llm_response(
+            agent_id=self.id,
+            request_id=request_id,
+            content=raw,
+            tool_calls=None,
+            usage=None,
+            duration_ms=int((datetime.utcnow() - start_time).total_seconds() * 1000),
+            model=self.provider.model,
+            provider=self.provider.provider_type,
+        )
+
+        try:
+            parsed = self._extract_json_object(raw)
+        except Exception as e:
+            return False, f"Ultra-strict verifier returned non-JSON output: {e}"
+
+        verdict = str(parsed.get("verdict") or "").strip().upper()
+        try:
+            verifier_confidence = float(parsed.get("confidence") or 0.0)
+        except Exception:
+            verifier_confidence = 0.0
+
+        if verdict != "CONFIRMED":
+            assessment = str(parsed.get("final_assessment") or "").strip()
+            concerns = parsed.get("concerns")
+            concerns_str = ""
+            if isinstance(concerns, list) and concerns:
+                concerns_str = " Concerns: " + "; ".join(str(c) for c in concerns[:6] if str(c).strip())
+            return (
+                False,
+                f"Verifier verdict={verdict or 'UNKNOWN'} (confidence={verifier_confidence:.2f}). {assessment}{concerns_str}".strip(),
+            )
+
+        if verifier_confidence < 0.85:
+            return False, f"Verifier confidence {verifier_confidence:.2f} is below 0.85."
+
+        for flag in ("source_verified", "path_verified", "sink_verified", "exploit_viable"):
+            if parsed.get(flag) is not True:
+                return False, f"Verifier did not confirm {flag}=true."
+
+        return True, ""
 
     def _init_handoff_state(self) -> ScannerHandoffState:
         """Initialize empty handoff state."""
@@ -328,8 +619,8 @@ class ReActSecurityAgent:
             )
             flow_service.update_node_status(self.id, scan_node.id, "completed")
 
-            auto_queue_limit = 3
-            for idx, item in enumerate(triaged[:20]):
+            auto_queue_limit = self._auto_queue_limit
+            for idx, item in enumerate(triaged[: self._triage_render_limit]):
                 c = item.candidate
                 node_type = "entry_point" if c.kind == "entry_point" else "dangerous_sink"
                 exposure = item.exposure if item.exposure != "unknown" else ""
@@ -618,7 +909,7 @@ class ReActSecurityAgent:
                     "Confidence is attacker-controlled input reachability (not vulnerability confidence).",
                     "",
                 ]
-                for item in self._attack_surface_triage[:10]:
+                for item in self._attack_surface_triage[: self._triage_prompt_limit]:
                     c = item.candidate
                     loc = f"{c.file_path}:{c.line_number}" if c.line_number else c.file_path
                     exposure = item.exposure if item.exposure != "unknown" else "?"
@@ -629,6 +920,10 @@ class ReActSecurityAgent:
                 system_prompt += "\n\n=== ATTACK SURFACE TRIAGE (actionable) ===\n"
                 system_prompt += "\n".join(triage_lines)
                 system_prompt += "\n=== END ATTACK SURFACE TRIAGE ===\n"
+
+            appendix = self._profile_prompt_appendix()
+            if appendix:
+                system_prompt += "\n\n" + appendix + "\n"
 
             self.messages = [
                 {"role": "system", "content": system_prompt},
@@ -665,7 +960,7 @@ Continue following the main audit instructions above."""
                     "Confidence is attacker-controlled input reachability (not vulnerability confidence).",
                     "",
                 ]
-                for item in self._attack_surface_triage[:10]:
+                for item in self._attack_surface_triage[: self._triage_prompt_limit]:
                     c = item.candidate
                     loc = f"{c.file_path}:{c.line_number}" if c.line_number else c.file_path
                     exposure = item.exposure if item.exposure != "unknown" else "?"
@@ -676,6 +971,10 @@ Continue following the main audit instructions above."""
                 system_prompt += "\n\n=== ATTACK SURFACE TRIAGE (actionable) ===\n"
                 system_prompt += "\n".join(triage_lines)
                 system_prompt += "\n=== END ATTACK SURFACE TRIAGE ===\n"
+
+            appendix = self._profile_prompt_appendix()
+            if appendix:
+                system_prompt += "\n\n" + appendix + "\n"
 
             self.messages = [
                 {"role": "system", "content": system_prompt},
@@ -700,6 +999,12 @@ Continue following the main audit instructions above."""
 
             if self._cancelled:
                 break
+
+            if self.max_runtime_seconds and self.started_at:
+                elapsed = (datetime.utcnow() - self.started_at).total_seconds()
+                if elapsed >= self.max_runtime_seconds:
+                    self._log(f"Max runtime reached ({int(elapsed)}s). Stopping audit.")
+                    break
 
             # Add phase label in dual mode
             phase_label = f"[{self._current_phase}] " if self._is_dual_mode else ""
@@ -761,6 +1066,22 @@ Continue following the main audit instructions above."""
 
                 # Check if audit is complete
                 if "AUDIT_COMPLETE" in content:
+                    self._audit_complete_confirmations_seen += 1
+                    if self._audit_complete_confirmations_seen < self._audit_complete_confirmations_required:
+                        self._log(
+                            "Agent signaled audit complete; requesting another sweep "
+                            f"({self._audit_complete_confirmations_seen}/{self._audit_complete_confirmations_required})"
+                        )
+                        self.messages.append({"role": "assistant", "content": content})
+                        self.messages.append(
+                            {
+                                "role": "user",
+                                "content": self._audit_completion_confirmation_prompt(),
+                            }
+                        )
+                        consecutive_no_tool = 0
+                        continue
+
                     self._log("Agent signaled audit complete")
                     break
 
@@ -975,17 +1296,53 @@ Continue following the main audit instructions above."""
             if tool_name == "read_file" and result.success:
                 code_context = self._build_code_context(arguments, result)
 
-            # Handle special case: finding reported
-            if tool_name == "report_finding" and result.success:
-                finding_data = result.data.get("finding", {})
-                await self._create_finding(finding_data)
-                result_str = "Finding reported successfully."
+            tool_success = result.success
+            tool_error = result.error
 
-                # Add finding node to flow
-                flow_service.add_node(
-                    self.id, "finding", finding_data.get("title", "Finding"),
-                    {"severity": finding_data.get("severity", "medium")}
-                )
+            # Handle special case: finding reported (with strict/ultra gates)
+            if tool_name == "report_finding" and result.success:
+                finding_data = result.data.get("finding", {}) if isinstance(result.data, dict) else {}
+                ok, reason = self._validate_reported_finding(finding_data)
+                if not ok:
+                    tool_success = False
+                    tool_error = reason
+                    result_str = (
+                        "REJECTED report_finding: "
+                        + reason
+                        + "\nStrictness rule: do NOT report uncertain issues. Keep investigating or say AUDIT_COMPLETE."
+                    )[:4000]
+                    flow_service.update_node_data(self.id, tool_node.id, {"rejected": True, "reason": reason})
+                else:
+                    if self._require_ultra_verification:
+                        verified, verify_reason = await self._ultra_strict_verify_finding(finding_data)
+                        if not verified:
+                            tool_success = False
+                            tool_error = verify_reason
+                            result_str = ("REJECTED report_finding (verifier): " + verify_reason)[:4000]
+                            flow_service.update_node_data(
+                                self.id,
+                                tool_node.id,
+                                {"rejected": True, "reason": verify_reason, "verification": "failed"},
+                            )
+                        else:
+                            await self._create_finding(finding_data)
+                            result_str = "Finding reported successfully."
+
+                            # Add finding node to flow
+                            flow_service.add_node(
+                                self.id, "finding", finding_data.get("title", "Finding"),
+                                {"severity": finding_data.get("severity", "medium")}
+                            )
+                            flow_service.update_node_data(self.id, tool_node.id, {"verification": "passed"})
+                    else:
+                        await self._create_finding(finding_data)
+                        result_str = "Finding reported successfully."
+
+                        # Add finding node to flow
+                        flow_service.add_node(
+                            self.id, "finding", finding_data.get("title", "Finding"),
+                            {"severity": finding_data.get("severity", "medium")}
+                        )
             else:
                 # Format result for LLM
                 if result.success:
@@ -997,7 +1354,7 @@ Continue following the main audit instructions above."""
                     result_str = f"Error: {result.error}"
 
             # Update flow node status
-            status = "completed" if result.success else "failed"
+            status = "completed" if tool_success else "failed"
             flow_service.update_node_status(self.id, tool_node.id, status, duration_ms)
             self._broadcast_flow_update()
 
@@ -1007,10 +1364,10 @@ Continue following the main audit instructions above."""
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 arguments=arguments,
-                result=result.data if result.success else result.error,
-                success=result.success,
+                result=result.data if tool_success else tool_error,
+                success=tool_success,
                 duration_ms=duration_ms,
-                error_message=result.error if not result.success else None,
+                error_message=tool_error if not tool_success else None,
                 code_context=code_context,
             )
 

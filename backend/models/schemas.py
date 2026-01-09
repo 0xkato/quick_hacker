@@ -31,7 +31,7 @@ class AgentType(str, Enum):
     CUSTOM = "custom"
     STRICT_ANALYSIS = "strict_analysis"  # Zero false positive tolerance
     ULTRA_STRICT = "ultra_strict"  # Double verification, maximum precision
-    DEEP_AUDIT = "deep_audit"  # 3-layer prompt architecture with AUDIT_JSONL logging
+    DEEP_AUDIT = "deep_audit"  # Long-running, coverage-oriented deep audit (ReAct)
     ULTRATHINK = "ultrathink"  # Maximum cognitive depth with hierarchical cascade
 
 

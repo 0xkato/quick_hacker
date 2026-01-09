@@ -327,24 +327,14 @@ export default function Home() {
     const checkSnapshot = async () => {
       try {
         const info = await sessionApi.getSnapshotInfo();
-        if (info) {
-          setSnapshotInfo(info);
-          // Show dialog if we have running agents (conflict)
-          const hasRunning = agents.some(a => a.status === 'running');
-          if (hasRunning) {
-            setShowResumeDialog(true);
-          } else {
-            // Auto-restore if no conflict
-            handleRestoreSession();
-          }
-        }
+        setSnapshotInfo(info);
       } catch (err) {
         console.error('Failed to check snapshot:', err);
       }
     };
 
     checkSnapshot();
-  }, [currentProject?.id, isAuthReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentProject?.id, isAuthReady]);
 
   // Load project data when entering a project
   const loadProjectData = async (project: Project) => {
@@ -493,6 +483,22 @@ export default function Home() {
       setSessionStatus('active');
     }
   }, []);
+
+  // Handle showing dialog or auto-restore when snapshotInfo changes
+  useEffect(() => {
+    if (!snapshotInfo) return;
+
+    // Check if we have running agents (conflict)
+    const hasRunning = agents.some(a => a.status === 'running');
+
+    if (hasRunning) {
+      // Show conflict dialog
+      setShowResumeDialog(true);
+    } else {
+      // Auto-restore if no conflict
+      handleRestoreSession();
+    }
+  }, [snapshotInfo, agents, handleRestoreSession]);
 
   const handleKeepCurrent = useCallback(async () => {
     setShowResumeDialog(false);

@@ -109,15 +109,32 @@ Evidence requirement:
   - variants scanned summary
 
 ---------------------------
-E) FINAL OUTCOME RULE
+E) COMPLETION PROTOCOL (Tool-Based, Validated)
 ---------------------------
 
-Your final user-facing report MUST be exactly one of:
-A) Validated exploitable vulnerabilities found (include details)
-B) No exploitable vulnerabilities found (ONLY if depth+coverage thresholds are met)
-C) Insufficient depth/coverage — escalate to human review (if thresholds unmet OR any deferred candidates remain)
+To complete the audit, you MUST call the complete_audit tool. Text-based completion signals are ignored.
 
-You MUST NOT output "No exploitable vulnerabilities found…" unless your coverage matrix and candidate resolution ledger are complete and logged.
+The complete_audit tool will VALIDATE:
+1. Minimum files examined (at least 5 files read)
+2. Minimum iterations (at least 10 audit turns)
+3. Investigation queue empty (all discovered paths processed or deferred)
+4. Coverage threshold met (at least 80% of registered paths traced)
+
+If validation fails, the tool returns rejection with specific guidance on what's missing.
+
+WORKFLOW:
+1. Discover entry points → get_entry_points tool
+2. For each entry point, find dangerous sinks → trace_data_flow tool
+3. For each potential path, investigate and call → trace_path_verdict tool
+4. When all paths have verdicts → call complete_audit tool
+
+The complete_audit tool accepts three outcomes:
+- "validated_findings": Exploitable vulnerabilities were found and reported
+- "no_findings": No exploitable vulnerabilities found (requires thorough coverage)
+- "insufficient_coverage": Cannot achieve coverage threshold, escalate to human
+
+DO NOT attempt to complete by outputting text like "FINAL OUTCOME" or "Case A/B/C".
+These text patterns are ignored. You MUST use the complete_audit tool.
 """
 
 

@@ -41,6 +41,11 @@ from prompts import (
 from services.attack_surface_service import attack_surface_service
 from services.flow_service import flow_service
 from services.project_service import project_service
+from services.coverage_tracker import CoverageTracker, PathStatus
+from agents.depth_enforcement import (
+    DepthEnforcementConfig,
+    validate_completion_request,
+)
 
 
 @dataclass
@@ -157,6 +162,11 @@ class DeepAuditAgent:
         # Provider
         self.provider = get_provider(self.provider_config)
         self.tool_executor = ToolExecutor(self.repo_path)
+
+        # Coverage tracking
+        self.coverage_tracker = CoverageTracker(self.id)
+        self.depth_config = DepthEnforcementConfig()
+        self._completion_approved = False
 
         # Config
         self.max_iterations = 50

@@ -1,0 +1,84 @@
+name: Nightly E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Generate fixture repo
+        run: |
+          cd backend
+          python -c "from pathlib import Path; from tests.fixtures.generate_fastapi_repo import ensure_fastapi_fixture_repo; ensure_fastapi_fixture_repo(Path('tests/fixtures/generated_fastapi_repo'), force_recreate=True)"
+
+      - name: Start stack
+        run: |
+          docker compose up -d --build backend frontend postgres redis
+
+      - name: Wait for backend
+        run: |
+          for i in {1..90}; do
+            if curl -fsS http://localhost:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend did not become ready" >&2
+          docker compose logs backend --tail=200 || true
+          exit 1
+
+      - name: Backend e2e smoke
+        env:
+          RUN_E2E: "1"
+        run: |
+          cd backend
+          python -m pytest -m e2e -q
+
+      - name: Install frontend deps
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          cd frontend
+          npx playwright install --with-deps chromium
+
+      - name: Frontend smoke (Playwright)
+        env:
+          PLAYWRIGHT_BASE_URL: "http://localhost:3000"
+          E2E_FIXTURE_CLONE_URL: "/app/tests/fixtures/generated_fastapi_repo"
+        run: |
+          cd frontend
+          npm run test:e2e
+
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose down -v
+

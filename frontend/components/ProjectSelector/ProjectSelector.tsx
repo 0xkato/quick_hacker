@@ -229,6 +229,7 @@ function QuickCloneModal({ currentProject, onClose, onCloned }: QuickCloneModalP
               placeholder="https://github.com/user/repo"
               className="input"
               autoFocus
+              data-testid="quick-clone-url"
             />
           </div>
 
@@ -282,6 +283,7 @@ function QuickCloneModal({ currentProject, onClose, onCloned }: QuickCloneModalP
             onClick={() => handleClone()}
             disabled={isLoading || !url.trim()}
             className="btn btn-primary"
+            data-testid="quick-clone-submit"
           >
             {isLoading ? (
               <>
@@ -498,6 +500,7 @@ export function ProjectSelector({ onProjectEnter, onProjectExit }: ProjectSelect
         <button
           onClick={() => setShowCloneModal(true)}
           className="btn btn-primary"
+          data-testid="project-quick-clone"
         >
           <GitBranch className="w-4 h-4" />
           Quick Clone

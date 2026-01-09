@@ -803,6 +803,7 @@ export default function Home() {
                   value={diagramMode}
                   onChange={(e) => setDiagramMode(e.target.value as 'investigation' | 'calltree')}
                   className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+                  data-testid="diagram-mode-select"
                 >
                   <option value="investigation">Investigation Flow</option>
                   <option value="calltree">Call Tree (FastAPI)</option>
@@ -827,6 +828,7 @@ export default function Home() {
                     onChange={(e) => setSelectedRouteId(e.target.value || null)}
                     className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm min-w-[320px]"
                     disabled={isCallTreeRoutesLoading}
+                    data-testid="calltree-route-select"
                   >
                     <option value="">
                       {isCallTreeRoutesLoading
@@ -978,7 +980,7 @@ export default function Home() {
       <footer className="h-6 bg-vsc-statusbar flex items-center px-3 text-vsc-xs text-white select-none">
         <div className="flex items-center gap-3">
           {/* Connection status */}
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1" data-testid="ws-connection-status">
             <Circle className={`w-2 h-2 ${isConnected ? 'fill-vsc-success text-vsc-success' : 'fill-vsc-error text-vsc-error'}`} />
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>

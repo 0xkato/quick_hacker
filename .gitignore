@@ -38,6 +38,9 @@ htmlcov/
 # Runtime data
 backend/data/
 
+# Generated test fixture repos
+backend/tests/fixtures/generated_fastapi_repo/
+
 # TypeScript incremental build info
 *.tsbuildinfo
 

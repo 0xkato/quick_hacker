@@ -148,3 +148,17 @@ async def test_complete_audit_accepted_when_requirements_met():
 
     # Agent should have completion flag set
     assert agent._completion_approved
+
+
+def test_string_completion_detection_removed():
+    """The old string-based completion detection should be removed."""
+    import inspect
+    from agents.deep_audit_agent import DeepAuditAgent
+
+    # Get the source code of _audit_loop
+    source = inspect.getsource(DeepAuditAgent._audit_loop)
+
+    # These patterns should NOT be in the code anymore
+    # The old code checked: if "FINAL OUTCOME" in content or "Case A:" in content ...
+    assert '"FINAL OUTCOME" in content' not in source
+    assert '"Case A:" in content' not in source

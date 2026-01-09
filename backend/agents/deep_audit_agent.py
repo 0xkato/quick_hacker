@@ -444,17 +444,19 @@ class DeepAuditAgent:
             # Process tool calls
             if response.get("tool_calls"):
                 await self._process_tool_calls(response["tool_calls"])
+
+                # Check if completion was approved via complete_audit tool
+                if self._completion_approved:
+                    self._log("Audit complete - completion approved via validation")
+                    self._log_audit_event("note", {"message": "Completion approved after validation"})
+                    break
             else:
                 content = response.get("content", "")
-
-                # Check for completion signals
-                if "FINAL OUTCOME" in content or "Case A:" in content or "Case B:" in content or "Case C:" in content:
-                    self._log("Audit complete - final outcome reached")
-                    self._log_audit_event("note", {"message": "Final outcome reached"})
-                    break
-
-                # Parse AUDIT_JSONL from response
+                # Parse AUDIT_JSONL from response (for logging/state updates)
                 self._parse_audit_jsonl(content)
+
+                # NOTE: String-based completion removed. LLM must use complete_audit tool.
+                # If LLM tries to declare completion in text, it will be ignored.
 
             # Update coverage
             self._update_coverage_metrics()

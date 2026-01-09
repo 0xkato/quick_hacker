@@ -11,6 +11,7 @@ from config import settings
 from routers import git, files, agents, websocket, projects, flow, auth, call_tree
 from routers import settings as settings_router
 from routers import chat as chat_router
+from routers import graph as graph_router
 from routers import session as session_router
 from routers.websocket import set_main_loop
 from database import init_db
@@ -110,6 +111,12 @@ app.include_router(
     call_tree.router,
     prefix="/api",
     tags=["CallTree"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    graph_router.router,
+    prefix="/api",
+    tags=["Graph"],
     dependencies=[Depends(require_auth)],
 )
 app.include_router(websocket.router, prefix="/ws", tags=["WebSocket"])

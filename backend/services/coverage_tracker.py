@@ -1,7 +1,7 @@
 """Coverage tracker for entry point to sink path analysis."""
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -98,3 +98,23 @@ class CoverageTracker:
         )
         self._location_index[key] = path_id
         return path_id
+
+    def update_status(
+        self,
+        path_id: str,
+        status: PathStatus,
+        reasoning: Optional[str] = None,
+        finding_id: Optional[str] = None,
+        files_in_path: Optional[list[str]] = None
+    ) -> None:
+        """Update path status after LLM verdict."""
+        if path_id not in self.paths:
+            raise ValueError(f"Unknown path: {path_id}")
+
+        record = self.paths[path_id]
+        record.status = status
+        record.verdict_reasoning = reasoning
+        record.finding_id = finding_id
+        record.traced_at = datetime.now(timezone.utc)
+        if files_in_path:
+            record.files_in_path = files_in_path

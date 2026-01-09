@@ -134,3 +134,87 @@ class TestCoverageTrackerRegister:
         )
         assert path_id_1 == path_id_2
         assert len(tracker.paths) == 1
+
+
+class TestCoverageTrackerUpdateStatus:
+    def test_update_status_changes_status(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        tracker.update_status(path_id, PathStatus.IN_PROGRESS)
+        assert tracker.paths[path_id].status == PathStatus.IN_PROGRESS
+
+    def test_update_status_sets_reasoning(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        tracker.update_status(
+            path_id,
+            PathStatus.TRACED_SAFE,
+            reasoning="Uses parameterized query"
+        )
+        assert tracker.paths[path_id].verdict_reasoning == "Uses parameterized query"
+
+    def test_update_status_sets_traced_at(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        tracker.update_status(path_id, PathStatus.TRACED_SAFE)
+        assert tracker.paths[path_id].traced_at is not None
+
+    def test_update_status_unknown_path_raises(self, tracker):
+        with pytest.raises(ValueError, match="Unknown path"):
+            tracker.update_status("nonexistent-id", PathStatus.TRACED_SAFE)
+
+    def test_update_status_sets_finding_id(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        tracker.update_status(
+            path_id,
+            PathStatus.TRACED_VULN,
+            finding_id="finding-123"
+        )
+        assert tracker.paths[path_id].finding_id == "finding-123"
+
+    def test_update_status_sets_files_in_path(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        files = ["routes/api.py", "services/auth.py", "db/query.py"]
+        tracker.update_status(
+            path_id,
+            PathStatus.TRACED_SAFE,
+            files_in_path=files
+        )
+        assert tracker.paths[path_id].files_in_path == files

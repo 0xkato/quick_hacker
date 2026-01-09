@@ -8,8 +8,10 @@ just like a human security researcher would.
 import os
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from dataclasses import dataclass
+
+from services.coverage_tracker import CoverageTracker, PathStatus
 
 
 @dataclass
@@ -750,3 +752,64 @@ class ToolExecutor:
             'count': len(all_entries),
             'truncated': len(all_entries) > 100
         })
+
+
+def handle_trace_path_verdict(
+    args: dict,
+    coverage_tracker: CoverageTracker,
+    broadcast_fn: Callable[[str, dict], None]
+) -> str:
+    """Handle trace_path_verdict tool call."""
+    status_map = {
+        "safe": PathStatus.TRACED_SAFE,
+        "vulnerable": PathStatus.TRACED_VULN,
+        "blocked": PathStatus.BLOCKED,
+        "inconclusive": PathStatus.INCONCLUSIVE
+    }
+
+    # Find or auto-register the path
+    record = coverage_tracker.find_path_by_locations(
+        args["entry_point_file"],
+        args["entry_point_line"],
+        args["sink_file"],
+        args["sink_line"]
+    )
+
+    if record is None:
+        # Auto-register discovered path
+        path_id = coverage_tracker.register_path(
+            entry_point_file=args["entry_point_file"],
+            entry_point_line=args["entry_point_line"],
+            entry_point_name="discovered",
+            sink_file=args["sink_file"],
+            sink_line=args["sink_line"],
+            sink_type="unknown",
+            sink_function="unknown"
+        )
+        record = coverage_tracker.paths[path_id]
+
+    # Update status
+    coverage_tracker.update_status(
+        record.id,
+        status_map[args["verdict"]],
+        reasoning=args["reasoning"],
+        finding_id=args.get("finding_id"),
+        files_in_path=args["files_examined"]
+    )
+
+    # Broadcast update
+    stats = coverage_tracker.get_coverage_stats()
+    broadcast_fn("COVERAGE_UPDATE", {
+        "path_id": record.id,
+        "entry_point": f"{args['entry_point_file']}:{args['entry_point_line']}",
+        "sink": f"{args['sink_file']}:{args['sink_line']}",
+        "status": args["verdict"],
+        "stats": {
+            "total": stats.total_paths,
+            "traced": stats.traced_count,
+            "remaining": stats.discovered_count + stats.inconclusive_count,
+            "coverage_percent": stats.coverage_percent
+        }
+    })
+
+    return f"Recorded verdict '{args['verdict']}' for path {args['entry_point_file']}:{args['entry_point_line']} -> {args['sink_file']}:{args['sink_line']}"

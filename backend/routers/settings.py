@@ -130,7 +130,7 @@ async def test_provider(provider: str):
                 provider=ProviderType.OPENAI,
                 model=provider_settings.default_model or "gpt-4o",
                 api_key=provider_settings.api_key,
-                max_tokens=10,
+                max_tokens=16,
             )
             p = OpenAIProvider(config)
             await p.generate([Message(role="user", content="Say 'OK'")])

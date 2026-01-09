@@ -24,6 +24,8 @@ class OpenAIProvider(BaseProvider):
 
     provider_type = "openai"
 
+    _MIN_RESPONSES_MAX_OUTPUT_TOKENS = 16
+
     MODELS = [
         "gpt-4o",
         "gpt-4o-mini",
@@ -71,6 +73,27 @@ class OpenAIProvider(BaseProvider):
         if self._GPT5_MODEL_RE.match(model):
             return "none"
         return None
+
+    def _get_responses_max_output_tokens(self) -> int:
+        """
+        Responses API enforces a minimum `max_output_tokens` (currently >= 16).
+        Clamp low values to avoid hard failures for small health-check/test calls.
+        """
+        try:
+            tokens = int(self.max_tokens)
+        except Exception:
+            tokens = 0
+
+        if tokens < self._MIN_RESPONSES_MAX_OUTPUT_TOKENS:
+            logger.debug(
+                "Clamping Responses API max_output_tokens %s -> %s for model=%s",
+                tokens,
+                self._MIN_RESPONSES_MAX_OUTPUT_TOKENS,
+                self.model,
+            )
+            return self._MIN_RESPONSES_MAX_OUTPUT_TOKENS
+
+        return tokens
 
     def _get_generation_kwargs(self) -> dict:
         if self._needs_max_completion_tokens():
@@ -234,7 +257,7 @@ class OpenAIProvider(BaseProvider):
             kwargs: dict = {
                 "model": self.model,
                 "input": input_items,
-                "max_output_tokens": self.max_tokens,
+                "max_output_tokens": self._get_responses_max_output_tokens(),
             }
             reasoning_effort = self._default_reasoning_effort()
             if reasoning_effort:
@@ -330,7 +353,7 @@ class OpenAIProvider(BaseProvider):
             kwargs: dict = {
                 "model": self.model,
                 "input": input_items,
-                "max_output_tokens": self.max_tokens,
+                "max_output_tokens": self._get_responses_max_output_tokens(),
                 "stream": True,
             }
             reasoning_effort = self._default_reasoning_effort()
@@ -430,7 +453,7 @@ class OpenAIProvider(BaseProvider):
             kwargs: dict = {
                 "model": self.model,
                 "input": input_items,
-                "max_output_tokens": self.max_tokens,
+                "max_output_tokens": self._get_responses_max_output_tokens(),
             }
             if instructions:
                 kwargs["instructions"] = instructions

@@ -42,6 +42,7 @@ from agents.dual_model_config import DEFAULT_SCANNER_MODELS, resolve_dual_model_
 from agents.prompts.scanner_prompt import format_scanner_prompt
 from agents.prompts.analyzer_prompt import format_analyzer_prompt
 from prompts.strict_prompts import EVIDENCE_VERIFICATION_PROMPT
+from prompts.classification_gate import get_classification_gate_prompt
 from providers import Message, get_provider
 from services.attack_surface_service import attack_surface_service, AttackSurfaceTriageItem
 from services.flow_service import flow_service
@@ -932,6 +933,10 @@ class ReActSecurityAgent:
             if appendix:
                 system_prompt += "\n\n" + appendix + "\n"
 
+            # Inject classification gate prompt
+            classification_prompt = get_classification_gate_prompt(self._threat_model)
+            system_prompt += "\n\n" + classification_prompt + "\n"
+
             self.messages = [
                 {"role": "system", "content": system_prompt},
                 {
@@ -982,6 +987,10 @@ Continue following the main audit instructions above."""
             appendix = self._profile_prompt_appendix()
             if appendix:
                 system_prompt += "\n\n" + appendix + "\n"
+
+            # Inject classification gate prompt
+            classification_prompt = get_classification_gate_prompt(self._threat_model)
+            system_prompt += "\n\n" + classification_prompt + "\n"
 
             self.messages = [
                 {"role": "system", "content": system_prompt},

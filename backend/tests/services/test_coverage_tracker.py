@@ -1,6 +1,6 @@
 """Tests for coverage tracker service."""
 import pytest
-from services.coverage_tracker import PathStatus, PathRecord, CoverageStats
+from services.coverage_tracker import PathStatus, PathRecord, CoverageStats, CoverageTracker
 
 
 class TestPathStatus:
@@ -80,3 +80,57 @@ class TestCoverageStats:
             inconclusive_count=0
         )
         assert stats.coverage_percent == 0.0
+
+
+@pytest.fixture
+def tracker():
+    return CoverageTracker(agent_id="test-agent")
+
+
+class TestCoverageTrackerRegister:
+    def test_register_path_returns_id(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        assert path_id is not None
+        assert len(path_id) > 0
+
+    def test_register_path_sets_discovered_status(self, tracker):
+        path_id = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        assert tracker.paths[path_id].status == PathStatus.DISCOVERED
+
+    def test_register_path_is_idempotent(self, tracker):
+        path_id_1 = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        path_id_2 = tracker.register_path(
+            entry_point_file="routes/api.py",
+            entry_point_line=42,
+            entry_point_name="login",
+            sink_file="db/query.py",
+            sink_line=100,
+            sink_type="sql",
+            sink_function="cursor.execute"
+        )
+        assert path_id_1 == path_id_2
+        assert len(tracker.paths) == 1

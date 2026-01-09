@@ -1,4 +1,5 @@
 """Coverage tracker for entry point to sink path analysis."""
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -56,3 +57,44 @@ class CoverageStats:
         if self.total_paths == 0:
             return 0.0
         return (self.traced_count / self.total_paths) * 100
+
+
+class CoverageTracker:
+    """Tracks entry point to sink path coverage during scans."""
+
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+        self.paths: dict[str, PathRecord] = {}
+        self._location_index: dict[tuple[str, int, str, int], str] = {}
+
+    def register_path(
+        self,
+        entry_point_file: str,
+        entry_point_line: int,
+        entry_point_name: str,
+        sink_file: str,
+        sink_line: int,
+        sink_type: str,
+        sink_function: str,
+        status: PathStatus = PathStatus.DISCOVERED
+    ) -> str:
+        """Register a potential path. Returns path_id. Idempotent."""
+        key = (entry_point_file, entry_point_line, sink_file, sink_line)
+
+        if key in self._location_index:
+            return self._location_index[key]
+
+        path_id = str(uuid.uuid4())
+        self.paths[path_id] = PathRecord(
+            id=path_id,
+            entry_point_file=entry_point_file,
+            entry_point_line=entry_point_line,
+            entry_point_name=entry_point_name,
+            sink_file=sink_file,
+            sink_line=sink_line,
+            sink_type=sink_type,
+            sink_function=sink_function,
+            status=status
+        )
+        self._location_index[key] = path_id
+        return path_id

@@ -102,38 +102,47 @@ class AgentOrchestrator:
                 f"Maximum concurrent agents ({settings.max_concurrent_agents}) reached"
             )
 
-        # Resolve API key from user's stored keys
-        provider_config = request.provider_config
-        if provider_config and not provider_config.api_key:
-            provider_name = (
-                provider_config.provider.value
-                if hasattr(provider_config.provider, 'value')
-                else str(provider_config.provider)
-            )
+        # Resolve API keys for all configs
+        configs_to_resolve = []
+        if request.provider_config:
+            configs_to_resolve.append(("provider_config", request.provider_config))
+        if request.scanner_config:
+            configs_to_resolve.append(("scanner_config", request.scanner_config))
+        if request.analyzer_config:
+            configs_to_resolve.append(("analyzer_config", request.analyzer_config))
 
-            # Get API key from user's stored keys
-            api_key = await get_user_api_key_for_provider(
-                provider_name,
-                auth_context,
-                db
-            )
-
-            if not api_key and provider_name != "ollama":
-                raise ValueError(
-                    f"No {provider_name.capitalize()} API key found. "
-                    f"Please add your API key in Settings."
+        for config_name, config in configs_to_resolve:
+            if config and not config.api_key:
+                provider_name = (
+                    config.provider.value
+                    if hasattr(config.provider, 'value')
+                    else str(config.provider)
                 )
 
-            if api_key:
-                request.provider_config = ProviderConfig(
-                    provider=provider_config.provider,
-                    model=provider_config.model,
-                    api_key=api_key,
-                    base_url=provider_config.base_url,
-                    temperature=provider_config.temperature,
-                    max_tokens=provider_config.max_tokens,
+                api_key = await get_user_api_key_for_provider(
+                    provider_name,
+                    auth_context,
+                    db
                 )
-                print(f"[Orchestrator] Using API key for {provider_name}")
+
+                if not api_key and provider_name != "ollama":
+                    raise ValueError(
+                        f"No {provider_name.capitalize()} API key found for {config_name}. "
+                        f"Please add your API key in Settings."
+                    )
+
+                if api_key:
+                    # Create new config with resolved key
+                    resolved_config = ProviderConfig(
+                        provider=config.provider,
+                        model=config.model,
+                        api_key=api_key,
+                        base_url=config.base_url,
+                        temperature=config.temperature,
+                        max_tokens=config.max_tokens,
+                    )
+                    setattr(request, config_name, resolved_config)
+                    print(f"[Orchestrator] Resolved API key for {config_name}")
 
         # Create agent instance
         agent_class = AGENT_CLASSES.get(request.agent_type)

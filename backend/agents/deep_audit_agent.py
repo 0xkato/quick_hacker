@@ -853,6 +853,50 @@ class DeepAuditAgent:
                 self.state.budgets["tc_rem"] = max(0, int(self.state.budgets.get("tc_rem", 0)) - 1)
                 continue  # Skip normal tool execution
 
+            # Handle complete_audit with validation
+            if tool_name == "complete_audit":
+                # Count pending investigations (paths discovered but not traced)
+                unexplored = self.coverage_tracker.get_unexplored_paths()
+                pending_count = len(unexplored)
+
+                # Validate completion request
+                validation_result = validate_completion_request(
+                    coverage_tracker=self.coverage_tracker,
+                    config=self.depth_config,
+                    files_examined=self.files_examined,
+                    iteration_count=self.state.iteration,
+                    pending_investigations=pending_count
+                )
+
+                if validation_result.can_complete:
+                    self._completion_approved = True
+                    self._log_audit_event("completion_approved", {
+                        "outcome": arguments.get("outcome"),
+                        "summary": arguments.get("summary"),
+                        "coverage_stats": validation_result.coverage_stats
+                    })
+                    self._log(f"Audit completion approved: {arguments.get('summary')}")
+                else:
+                    # Rejection - tell LLM what's missing
+                    self._log_audit_event("completion_rejected", {
+                        "reason": validation_result.rejection_reason,
+                        "guidance": validation_result.guidance,
+                        "coverage_stats": validation_result.coverage_stats
+                    })
+                    self._log(f"Completion rejected: {validation_result.rejection_reason}", "warning")
+
+                    # Add rejection to evidence so LLM sees it
+                    rejection_event = {
+                        "id": f"REJECT-{self.state.seq}",
+                        "k": "rejection",
+                        "reason": validation_result.rejection_reason,
+                        "guidance": validation_result.guidance,
+                    }
+                    self._store_evidence(self.state.seq, rejection_event)
+
+                self.state.budgets["tc_rem"] = max(0, int(self.state.budgets.get("tc_rem", 0)) - 1)
+                continue  # Skip normal tool execution
+
             arguments = self._apply_tool_budgets(tool_name, arguments)
 
             # Log tool call

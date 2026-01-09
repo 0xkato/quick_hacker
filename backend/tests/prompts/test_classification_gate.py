@@ -163,3 +163,64 @@ class TestGetClassificationGatePrompt:
         assert "contradiction_present" in result_lower
         assert "fix_type" in result_lower
         assert "classification_reasoning" in result_lower
+
+
+class TestGetClassificationGatePromptValidation:
+    """Tests for input validation in get_classification_gate_prompt function."""
+
+    def test_empty_string_raises_value_error(self):
+        """Empty string should raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_invalid_threat_model_raises_value_error(self):
+        """Invalid threat model value like 'X' should raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("X")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_lowercase_a_raises_value_error(self):
+        """Lowercase 'a' should raise ValueError (only uppercase accepted)."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("a")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_lowercase_ab_raises_value_error(self):
+        """Lowercase 'ab' should raise ValueError (only uppercase accepted)."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("ab")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_lowercase_abc_raises_value_error(self):
+        """Lowercase 'abc' should raise ValueError (only uppercase accepted)."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("abc")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_mixed_case_Ab_raises_value_error(self):
+        """Mixed case 'Ab' should raise ValueError (only exact uppercase accepted)."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("Ab")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_whitespace_only_raises_value_error(self):
+        """Whitespace-only string should raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            get_classification_gate_prompt("   ")
+        assert "threat_model" in str(exc_info.value).lower()
+
+    def test_valid_uppercase_a_does_not_raise(self):
+        """Valid uppercase 'A' should not raise."""
+        result = get_classification_gate_prompt("A")
+        assert isinstance(result, str)
+
+    def test_valid_uppercase_ab_does_not_raise(self):
+        """Valid uppercase 'AB' should not raise."""
+        result = get_classification_gate_prompt("AB")
+        assert isinstance(result, str)
+
+    def test_valid_uppercase_abc_does_not_raise(self):
+        """Valid uppercase 'ABC' should not raise."""
+        result = get_classification_gate_prompt("ABC")
+        assert isinstance(result, str)

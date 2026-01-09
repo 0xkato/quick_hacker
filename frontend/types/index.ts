@@ -455,3 +455,65 @@ export interface SnapshotInfo {
   findings_count: number;
   pending_files: number;
 }
+
+// === Code Graph ===
+
+export type GraphNodeType = 'entry_point' | 'function' | 'external' | 'cycle';
+export type RelevanceLevel = 'high' | 'medium' | 'low' | 'skip';
+
+export interface RelevanceBreakdown {
+  content_score: number;
+  position_score: number;
+  matched_patterns: string[];
+}
+
+export interface GraphNode {
+  id: string;
+  type: GraphNodeType;
+  label: string;
+  file_path?: string;
+  line_number?: number;
+  module?: string;
+
+  // Relevance
+  relevance_level: RelevanceLevel;
+  relevance_score: number;
+  relevance_breakdown: RelevanceBreakdown;
+
+  // Expansion
+  is_expanded: boolean;
+  child_count: number;
+  children_loaded: boolean;
+
+  // Agent activity
+  visited: boolean;
+  visited_at?: string;
+  visit_duration_ms?: number;
+
+  // Additional data
+  data?: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface CodeGraph {
+  agent_id: string;
+  repo_path: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  entry_point_ids: string[];
+  created_at: string;
+}
+
+export interface GraphStats {
+  total_nodes: number;
+  entry_points: number;
+  visited: number;
+  high_relevance_unvisited: number;
+  by_relevance: Record<RelevanceLevel, number>;
+}

@@ -47,6 +47,7 @@ from services.attack_surface_service import attack_surface_service, AttackSurfac
 from services.flow_service import flow_service
 from services.investigation_queue_service import investigation_queue_service
 from services.observability_service import observability_service
+from services.code_graph_service import code_graph_service
 from services.project_service import project_service
 
 
@@ -788,6 +789,12 @@ class ReActSecurityAgent:
         flow_service.update_node_status(self.id, start_node.id, "completed")
         await self._build_attack_surface_tree()
 
+        # Initialize code graph for visualization
+        try:
+            await code_graph_service.initialize_graph(self.id, self.repo_path)
+        except Exception as e:
+            self._log(f"Failed to initialize code graph: {e}", "warning")
+
         try:
             await self._investigation_loop()
             self.status = AgentStatus.COMPLETED
@@ -1295,6 +1302,12 @@ Continue following the main audit instructions above."""
             code_context = None
             if tool_name == "read_file" and result.success:
                 code_context = self._build_code_context(arguments, result)
+                # Mark file as visited in code graph
+                file_path = str(arguments.get("path") or "")
+                try:
+                    code_graph_service.mark_visited(self.id, file_path, duration_ms)
+                except Exception as e:
+                    self._log(f"Failed to mark file visited in code graph: {e}", "warning")
 
             tool_success = result.success
             tool_error = result.error

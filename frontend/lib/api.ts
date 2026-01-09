@@ -20,6 +20,9 @@ import type {
   AgentStateSnapshot,
   SnapshotInfo,
   SessionSnapshot,
+  CodeGraph,
+  GraphStats,
+  GraphNode,
 } from '@/types';
 
 // Token management
@@ -410,6 +413,42 @@ export const agents = {
 
   async listSavedStates(): Promise<Array<Record<string, unknown>>> {
     return request('/api/agents/saved-states');
+  },
+};
+
+// === Code Graph API ===
+
+export const codeGraph = {
+  async initialize(agentId: string, repoPath: string): Promise<CodeGraph> {
+    return request<CodeGraph>(`/api/agents/${agentId}/graph/initialize`, {
+      method: 'POST',
+      body: JSON.stringify({ repo_path: repoPath }),
+    });
+  },
+
+  async get(agentId: string): Promise<CodeGraph> {
+    return request<CodeGraph>(`/api/agents/${agentId}/graph`);
+  },
+
+  async getStats(agentId: string): Promise<GraphStats> {
+    return request<GraphStats>(`/api/agents/${agentId}/graph/stats`);
+  },
+
+  async expandNode(agentId: string, nodeId: string): Promise<{ expanded_node_id: string; new_nodes: GraphNode[] }> {
+    return request(`/api/agents/${agentId}/graph/expand/${nodeId}`, {
+      method: 'POST',
+    });
+  },
+
+  async markVisited(agentId: string, filePath: string, durationMs?: number): Promise<{ marked: boolean; node_id?: string }> {
+    return request(`/api/agents/${agentId}/graph/mark-visited`, {
+      method: 'POST',
+      body: JSON.stringify({ file_path: filePath, duration_ms: durationMs }),
+    });
+  },
+
+  async clear(agentId: string): Promise<void> {
+    return request(`/api/agents/${agentId}/graph`, { method: 'DELETE' });
   },
 };
 

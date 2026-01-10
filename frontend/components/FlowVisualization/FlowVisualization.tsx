@@ -7,6 +7,7 @@ import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  Handle,
   useNodesState,
   useEdgesState,
   MarkerType,
@@ -115,6 +116,7 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
   return (
     <div
       className={clsx(
+        'relative',
         'px-3 py-2 rounded-lg border-2 min-w-[120px] max-w-[200px] bg-vsc-bg cursor-pointer',
         'transition-all duration-150 hover:scale-105 hover:shadow-lg',
         statusColors[data.status],
@@ -122,6 +124,8 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
       )}
       title={data.llm_reasoning ? `${data.label}\n\nClick for details` : data.label}
     >
+      <Handle type="target" position={Position.Left} isConnectable={false} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Right} isConnectable={false} style={{ opacity: 0 }} />
       <div className="flex items-center gap-2">
         <span className="text-vsc-text-muted">
           {typeIcons[data.type] || <Code className="w-4 h-4" />}

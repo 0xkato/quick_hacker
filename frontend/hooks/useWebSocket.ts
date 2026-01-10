@@ -82,9 +82,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     try {
       const wsUrl = (() => {
         try {
-          return new URL(WS_BASE_URL).toString();
+          const url = new URL(WS_BASE_URL);
+          url.searchParams.set('token', token);
+          return url.toString();
         } catch {
-          return WS_BASE_URL;
+          const sep = WS_BASE_URL.includes('?') ? '&' : '?';
+          return `${WS_BASE_URL}${sep}token=${encodeURIComponent(token)}`;
         }
       })();
       const ws = new WebSocket(wsUrl);
@@ -102,9 +105,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
           ws.close();
           return;
         }
-        reconnectAttempts.current = 0;
-        authRetryCount.current = 0; // Reset auth retry on successful connection
-        setIsConnected(true);
+        setIsConnected(false);
         setError(null);
         console.log('[WS] Connected');
         sendAuth();
@@ -117,7 +118,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         // Check if this was an auth failure (code 4001)
         const isAuthFailure = event.code === 4001;
 
-        if (isAuthFailure && authRetryCount.current < MAX_AUTH_RETRIES) {
+        if (isAuthFailure) {
+          if (authRetryCount.current >= MAX_AUTH_RETRIES) {
+            setError('Authentication failed. Please login again.');
+            return;
+          }
+
           authRetryCount.current++;
           console.log(`[WS] Auth failed, refreshing token (attempt ${authRetryCount.current}/${MAX_AUTH_RETRIES})`);
 
@@ -167,6 +173,14 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
           // Server may request auth after accepting the socket.
           if (message.type === 'auth_required') {
             sendAuth();
+            return;
+          }
+
+          if (message.type === 'auth_ok') {
+            reconnectAttempts.current = 0;
+            authRetryCount.current = 0;
+            setIsConnected(true);
+            setError(null);
             return;
           }
 

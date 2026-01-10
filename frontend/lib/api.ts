@@ -37,6 +37,12 @@ export function setAuthFunctions(
   refreshTokenFn = refresh;
 }
 
+// Backwards-compatible auth initialization hook (kept for callers).
+// Auth is now fully managed by AuthContext + JWT storage, so this is a no-op.
+export async function initializeAuth(): Promise<void> {
+  return;
+}
+
 async function fetchWithAuth(
   url: string,
   options: RequestInit = {}

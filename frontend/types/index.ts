@@ -196,7 +196,8 @@ export type WSMessageType =
   | 'session_pausing'
   | 'session_paused'
   | 'session_resumed'
-  | 'auth_required';
+  | 'auth_required'
+  | 'auth_ok';
 
 export interface WSMessage {
   type: WSMessageType;

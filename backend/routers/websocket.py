@@ -192,6 +192,8 @@ async def websocket_endpoint(
         token = provided_token
 
     await manager.connect(websocket)
+    # Confirm successful authentication to the client so it can start heartbeats/subscriptions.
+    await manager.send_personal(websocket, {"type": "auth_ok"})
 
     try:
         while True:

@@ -49,6 +49,8 @@ class BaseAgent(ABC):
         self.repo_id = request.repo_id
         self.repo_path = repo_path
         self.provider_config = request.provider_config
+        self.scan_tier = request.scan_tier
+        self.time_budget_seconds = request.time_budget_seconds
         self.custom_prompt = request.custom_prompt
         self.target_files = request.target_files
         self.focus_areas = request.focus_areas
@@ -140,6 +142,8 @@ class BaseAgent(ABC):
             agent_type=self.agent_type,
             status=self.status,
             provider_config=self.provider_config,
+            scan_tier=self.scan_tier,
+            time_budget_seconds=self.time_budget_seconds,
             custom_prompt=self.custom_prompt,
             target_files=self.target_files,
             focus_areas=self.focus_areas,

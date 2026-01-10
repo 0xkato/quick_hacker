@@ -12,6 +12,8 @@ from typing import Any, Callable, Optional
 from dataclasses import dataclass
 
 from services.coverage_tracker import CoverageTracker, PathStatus
+from models.sink_signals import RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
+from services.sink_signal_service import compute_signal_fingerprint, sink_signal_service
 
 
 @dataclass
@@ -20,6 +22,37 @@ class ToolResult:
     success: bool
     data: Any
     error: Optional[str] = None
+
+
+# Coarse exclusions for tree views (matches file_service defaults at a high level).
+TREE_EXCLUDED_DIRS = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    "venv",
+    ".venv",
+    "env",
+    "dist",
+    "build",
+    ".cache",
+    ".idea",
+    ".vscode",
+    "coverage",
+    ".nyc_output",
+    "target",
+}
+
+TREE_EXCLUDED_FILES = {
+    ".DS_Store",
+    "Thumbs.db",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "poetry.lock",
+}
 
 
 # Tool definitions for LLM (OpenAI/Anthropic format)
@@ -89,6 +122,98 @@ AGENT_TOOLS = [
             },
             "required": ["path"]
         }
+    },
+    {
+        "name": "get_repo_tree",
+        "description": "Get a hierarchical directory tree starting at a path. Use this to understand the codebase layout and pick new areas to investigate.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Directory path relative to repository root (use '' or '.' for root)."
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Maximum depth to traverse from the given path (default: 4, max: 10)."
+                },
+                "max_nodes": {
+                    "type": "integer",
+                    "description": "Maximum total nodes to return (default: 500, max: 2000)."
+                },
+            },
+        },
+    },
+    {
+        "name": "list_sink_signals",
+        "description": "List persistent sink signals (investigation leads) for the current project. These are NOT findings.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["unreviewed", "queued", "reviewed", "dismissed", "promoted"],
+                    "description": "Optional status filter."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of signals to return (default: 50, max: 200)."
+                },
+            },
+        },
+    },
+    {
+        "name": "upsert_sink_signal",
+        "description": "Create or update a persistent sink signal (investigation lead) for the current project. These are NOT findings. Provide LLM-assigned score/tier when possible.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fingerprint": {
+                    "type": "string",
+                    "description": "Optional deterministic signal ID to update. If omitted, computed from kind+file+line+label."
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["entry_point", "sink", "other"],
+                    "description": "What kind of lead this is."
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Short human label for the lead."
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "File path relative to repo root."
+                },
+                "line_number": {
+                    "type": "integer",
+                    "description": "Optional line number."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["unreviewed", "queued", "reviewed", "dismissed", "promoted"],
+                    "description": "Lifecycle status for this lead."
+                },
+                "llm_risk_tier": {
+                    "type": "string",
+                    "enum": ["S", "A", "B", "C", "D", "E"],
+                    "description": "Optional risk tier (S highest)."
+                },
+                "llm_score": {
+                    "type": "integer",
+                    "description": "Optional 0-100 priority score assigned by the LLM."
+                },
+                "llm_reasoning": {
+                    "type": "string",
+                    "description": "Optional brief reasoning for why this lead matters."
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional extra metadata."
+                },
+            },
+            "required": ["kind", "label", "file_path"],
+        },
     },
     {
         "name": "find_definition",
@@ -366,8 +491,9 @@ TOOL_DEFINITIONS = {tool["name"]: tool for tool in AGENT_TOOLS}
 class ToolExecutor:
     """Executes tools for the security research agent."""
 
-    def __init__(self, repo_path: str):
+    def __init__(self, repo_path: str, project_id: Optional[str] = None):
         self.repo_path = Path(repo_path)
+        self.project_id = project_id
         self.investigation_notes: list[dict] = []
 
     def _safe_path(self, path: str) -> Path:
@@ -549,6 +675,220 @@ class ToolExecutor:
 
         except Exception as e:
             return ToolResult(False, None, str(e))
+
+    async def _tool_get_repo_tree(
+        self,
+        path: str = ".",
+        max_depth: int = 4,
+        max_nodes: int = 500,
+    ) -> ToolResult:
+        """Return a hierarchical repo tree starting at `path`."""
+        normalized = (path or ".").strip() or "."
+        try:
+            max_depth = int(max_depth)
+        except Exception:
+            max_depth = 4
+        try:
+            max_nodes = int(max_nodes)
+        except Exception:
+            max_nodes = 500
+
+        max_depth = max(0, min(max_depth, 10))
+        max_nodes = max(1, min(max_nodes, 2000))
+
+        try:
+            root_path = self._safe_path(normalized)
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+        if not root_path.exists():
+            return ToolResult(False, None, f"Directory not found: {path}")
+        if not root_path.is_dir():
+            return ToolResult(False, None, f"Not a directory: {path}")
+        if root_path.is_symlink():
+            return ToolResult(False, None, f"Symlinks are not supported: {path}")
+
+        repo_root = self.repo_path.resolve()
+        nodes_used = 0
+        truncated = False
+
+        def build_tree(node_path: Path, depth: int) -> Optional[dict]:
+            nonlocal nodes_used, truncated
+            if nodes_used >= max_nodes:
+                truncated = True
+                return None
+
+            try:
+                rel = node_path.resolve().relative_to(repo_root)
+            except Exception:
+                return None
+
+            rel_posix = rel.as_posix()
+            rel_str = "" if rel_posix == "." else rel_posix
+            name = node_path.name if rel_str else "."
+
+            is_dir = node_path.is_dir()
+            node: dict[str, Any] = {"name": name, "path": rel_str, "is_dir": is_dir}
+            nodes_used += 1
+
+            if not is_dir or depth >= max_depth:
+                return node
+
+            children: list[dict] = []
+            try:
+                entries = sorted(
+                    list(node_path.iterdir()),
+                    key=lambda p: (not p.is_dir(), p.name.lower()),
+                )
+            except Exception:
+                entries = []
+
+            for entry in entries:
+                if nodes_used >= max_nodes:
+                    truncated = True
+                    break
+
+                if entry.is_symlink():
+                    continue
+
+                if entry.is_dir():
+                    if entry.name.startswith(".") or entry.name in TREE_EXCLUDED_DIRS:
+                        continue
+                else:
+                    if entry.name.startswith(".") or entry.name in TREE_EXCLUDED_FILES:
+                        continue
+
+                child = build_tree(entry, depth + 1)
+                if child is not None:
+                    children.append(child)
+
+            node["children"] = children
+            return node
+
+        tree = build_tree(root_path, 0)
+        if tree is None:
+            tree = {"name": ".", "path": "", "is_dir": True, "children": []}
+            truncated = True
+
+        return ToolResult(
+            True,
+            {
+                "path": ("" if normalized in (".", "") else normalized),
+                "max_depth": max_depth,
+                "max_nodes": max_nodes,
+                "nodes_returned": nodes_used,
+                "truncated": truncated,
+                "tree": tree,
+            },
+        )
+
+    async def _tool_list_sink_signals(
+        self,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> ToolResult:
+        """List persistent sink signals for the current project."""
+        if not self.project_id:
+            return ToolResult(False, None, "No project_id is set for this tool executor.")
+
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        parsed_status: Optional[SinkSignalStatus] = None
+        if status is not None:
+            try:
+                parsed_status = SinkSignalStatus(str(status))
+            except Exception:
+                return ToolResult(False, None, f"Invalid status: {status}")
+
+        signals = await sink_signal_service.list_signals(
+            project_id=self.project_id,
+            status=parsed_status,
+            limit=limit,
+        )
+        return ToolResult(
+            True,
+            {
+                "count": len(signals),
+                "signals": [s.model_dump(mode="json") for s in signals],
+            },
+        )
+
+    async def _tool_upsert_sink_signal(
+        self,
+        kind: str,
+        label: str,
+        file_path: str,
+        fingerprint: Optional[str] = None,
+        line_number: Optional[int] = None,
+        status: Optional[str] = None,
+        llm_risk_tier: Optional[str] = None,
+        llm_score: Optional[int] = None,
+        llm_reasoning: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> ToolResult:
+        """Create or update a persistent sink signal for the current project."""
+        if not self.project_id:
+            return ToolResult(False, None, "No project_id is set for this tool executor.")
+
+        try:
+            kind_enum = SinkSignalKind(str(kind))
+        except Exception:
+            return ToolResult(False, None, f"Invalid kind: {kind}")
+
+        status_enum = SinkSignalStatus.UNREVIEWED
+        if status is not None:
+            try:
+                status_enum = SinkSignalStatus(str(status))
+            except Exception:
+                return ToolResult(False, None, f"Invalid status: {status}")
+
+        tier_enum: Optional[RiskTier] = None
+        if llm_risk_tier is not None:
+            try:
+                tier_enum = RiskTier(str(llm_risk_tier).strip().upper())
+            except Exception:
+                return ToolResult(False, None, f"Invalid llm_risk_tier: {llm_risk_tier}")
+
+        score_val: Optional[int] = None
+        if llm_score is not None:
+            try:
+                score_val = int(llm_score)
+            except Exception:
+                return ToolResult(False, None, "Invalid llm_score (expected integer 0-100).")
+            if score_val < 0 or score_val > 100:
+                return ToolResult(False, None, "Invalid llm_score (expected integer 0-100).")
+
+        signal_id = fingerprint or compute_signal_fingerprint(
+            kind=kind_enum.value,
+            file_path=str(file_path),
+            line_number=int(line_number) if line_number is not None else None,
+            label=str(label),
+        )
+
+        signal = SinkSignal(
+            fingerprint=signal_id,
+            kind=kind_enum,
+            label=str(label),
+            file_path=str(file_path),
+            line_number=int(line_number) if line_number is not None else None,
+            status=status_enum,
+            source="llm",
+            llm_risk_tier=tier_enum,
+            llm_score=score_val,
+            llm_reasoning=str(llm_reasoning).strip() if llm_reasoning else None,
+            metadata=metadata or {},
+        )
+
+        updated = await sink_signal_service.upsert_signals(
+            project_id=self.project_id,
+            signals=[signal],
+        )
+        result_signal = updated[0] if updated else signal
+        return ToolResult(True, {"signal": result_signal.model_dump(mode="json")})
 
     async def _tool_find_definition(
         self,

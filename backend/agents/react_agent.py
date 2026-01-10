@@ -50,6 +50,8 @@ from services.investigation_queue_service import investigation_queue_service
 from services.observability_service import observability_service
 from services.code_graph_service import code_graph_service
 from services.project_service import project_service
+from services.sink_signal_service import sink_signal_service
+from models.sink_signals import SinkSignal, SinkSignalKind, SinkSignalStatus
 
 
 # Security: Maximum length for custom prompts
@@ -169,6 +171,8 @@ class ReActSecurityAgent:
         self.repo_id = request.repo_id
         self.repo_path = repo_path
         self.agent_type = request.agent_type
+        self.scan_tier = request.scan_tier
+        self.time_budget_seconds = request.time_budget_seconds
         self.name = request.name or f"react-{self.agent_type.value}-{self.id}"
         self.custom_prompt = request.custom_prompt
 
@@ -198,7 +202,7 @@ class ReActSecurityAgent:
         self._on_message = on_message
 
         # Tools and provider
-        self.tool_executor = ToolExecutor(repo_path)
+        self.tool_executor = ToolExecutor(repo_path, project_id=self.repo_id)
 
         # Dual-model support
         self._scanner_config: Optional[ProviderConfig] = None
@@ -249,6 +253,7 @@ class ReActSecurityAgent:
         self.max_iterations = 100  # Safety limit (may be overridden by agent profile)
         self.max_tool_calls_per_iteration = 5
         self.max_runtime_seconds: Optional[int] = None
+        self.min_runtime_seconds: Optional[int] = None
 
         # Attack-surface triage rendering/automation knobs (may be overridden by agent profile)
         self._triage_render_limit = 20
@@ -278,6 +283,7 @@ class ReActSecurityAgent:
         self._active_investigation_root_node_id: Optional[str] = None
 
         self._apply_agent_profile()
+        self._apply_time_budget()
 
     def _apply_agent_profile(self) -> None:
         """Tune the ReAct loop behavior based on agent_type.
@@ -314,6 +320,98 @@ class ReActSecurityAgent:
             self._auto_queue_limit = 4
             return
 
+    def _apply_time_budget(self) -> None:
+        """Apply a time budget from request.scan_tier/time_budget_seconds.
+
+        The ReAct loop is time-boxed by `max_runtime_seconds`, but also has an iteration cap.
+        This ensures the iteration cap cannot end the run early under a time-tiered scan.
+        """
+        if self.time_budget_seconds is None:
+            return
+
+        # Time-box the run.
+        self.max_runtime_seconds = int(self.time_budget_seconds)
+        if self.agent_type != AgentType.CUSTOM:
+            # Time-tiered scans must not accept early completion.
+            self.min_runtime_seconds = int(self.time_budget_seconds)
+
+        # Ensure the iteration cap doesn't cut the run short.
+        delay = float(self.iteration_delay) if self.iteration_delay else 1.0
+        min_iterations = int(self.max_runtime_seconds / max(delay, 0.5)) + 50
+        self.max_iterations = max(self.max_iterations, min_iterations)
+
+    async def _build_time_floor_prompt(self, *, elapsed_seconds: float) -> str:
+        """Prompt the model to continue investigating until the scan time floor is reached."""
+        remaining = 0
+        if self.min_runtime_seconds is not None:
+            remaining = max(int(self.min_runtime_seconds - elapsed_seconds), 0)
+
+        # Summarize what's still "cold" at a very coarse granularity (root-level coverage).
+        unvisited_roots: list[str] = []
+        try:
+            listing = await self.tool_executor.execute(
+                "list_directory",
+                {"path": ".", "recursive": False},
+            )
+            if listing.success and isinstance(listing.data, dict):
+                items = listing.data.get("items", [])
+                roots = []
+                for item in items:
+                    if not isinstance(item, str):
+                        continue
+                    roots.append(item)
+
+                # Mark any root dir as visited if any examined file falls under it.
+                for root in roots:
+                    if not root.endswith("/"):
+                        continue
+                    root_prefix = root
+                    if not any(p.startswith(root_prefix) for p in self.files_examined):
+                        unvisited_roots.append(root)
+        except Exception:
+            unvisited_roots = []
+
+        pending_queue = 0
+        try:
+            pending_queue = await investigation_queue_service.size(self.id)
+        except Exception:
+            pending_queue = 0
+
+        triage_remaining = []
+        if self._attack_surface_triage:
+            for item in self._attack_surface_triage:
+                c = item.candidate
+                if c.file_path and c.file_path not in self.files_examined:
+                    triage_remaining.append(item)
+
+        triage_hint_lines: list[str] = []
+        for item in triage_remaining[:8]:
+            c = item.candidate
+            loc = f"{c.file_path}:{c.line_number}" if c.line_number else c.file_path
+            triage_hint_lines.append(f"- score={item.confidence_score:.2f} {c.label} ({loc})")
+
+        roots_hint = ", ".join(unvisited_roots[:10]) if unvisited_roots else "(none detected)"
+        triage_hint = "\n".join(triage_hint_lines) if triage_hint_lines else "(none)"
+
+        tier_label = self.scan_tier or "time-tiered"
+        return (
+            "You attempted to finish early, but this is a time-tiered scan and MUST continue.\n\n"
+            f"Time remaining (approx): {remaining}s (tier={tier_label}).\n"
+            f"Files examined so far: {len(self.files_examined)}\n"
+            f"Queued investigations pending: {pending_queue}\n\n"
+            "Cold/unexplored root areas (coarse): " + roots_hint + "\n\n"
+            "High-signal triage items you have NOT opened yet:\n"
+            + triage_hint
+            + "\n\n"
+            "Next: pick a new area you have not inspected and go deeper.\n"
+            "- Use get_repo_tree to see the full repo tree (drill down via the path parameter).\n"
+            "- Use list_sink_signals to review the current lead backlog and pick the highest-impact items.\n"
+            "- Use list_directory to explore unexplored directories (recursively if needed).\n"
+            "- Use search_code to find dangerous sinks (exec/eval/subprocess/sql/query/raw/pickle/yaml.load/http requests).\n"
+            "- Re-open important files if needed; a file can be reviewed more than once with deeper context.\n"
+            "- If you exhaust a lead, create a new lead by exploring a different directory/module.\n"
+        )
+
     def _profile_prompt_appendix(self) -> str:
         """Extra, profile-specific instructions appended to the system prompt."""
         if self.agent_type == AgentType.DEEP_AUDIT:
@@ -348,6 +446,22 @@ class ReActSecurityAgent:
             )
 
         return ""
+
+    def _time_tier_prompt_appendix(self) -> str:
+        """Instructions for time-tiered scans (enforces continued depth)."""
+        if self.min_runtime_seconds is None:
+            return ""
+        tier_label = self.scan_tier or "time-tiered"
+        return (
+            "=== TIME-TIERED SCAN ENFORCEMENT ===\n"
+            f"- Tier: {tier_label}\n"
+            "- Do NOT attempt to finish early.\n"
+            "- If you think you're done, expand to new modules/files and look for additional sinks.\n"
+            "- Use get_repo_tree to identify unexplored areas and drill down.\n"
+            "- Use upsert_sink_signal to record new investigation leads (not findings).\n"
+            "- Early completion signals will be rejected with instructions to go deeper.\n"
+            "=== END TIME-TIERED SCAN ENFORCEMENT ==="
+        )
 
     def _audit_completion_confirmation_prompt(self) -> str:
         """Ask the model to do an extra pass before ending (used in deep audit mode)."""
@@ -610,6 +724,43 @@ class ReActSecurityAgent:
                 candidates=candidates,
             )
             self._attack_surface_triage = triaged
+
+            # Persist triaged candidates as sink signals (leads) for this project.
+            try:
+                signals: list[SinkSignal] = []
+                for item in triaged:
+                    c = item.candidate
+                    kind = (
+                        SinkSignalKind.ENTRY_POINT
+                        if c.kind == "entry_point"
+                        else SinkSignalKind.SINK
+                    )
+                    score = int(round(max(0.0, min(1.0, float(item.confidence_score))) * 100))
+                    signals.append(
+                        SinkSignal(
+                            fingerprint=c.id,
+                            kind=kind,
+                            label=c.label,
+                            file_path=c.file_path,
+                            line_number=c.line_number,
+                            status=SinkSignalStatus.UNREVIEWED,
+                            source="attack_surface_triage",
+                            llm_score=score,
+                            llm_reasoning=item.reasoning,
+                            metadata={
+                                "exposure": item.exposure,
+                                "candidate_kind": c.kind,
+                                **(c.metadata or {}),
+                            },
+                        )
+                    )
+                if signals:
+                    await sink_signal_service.upsert_signals(
+                        project_id=self.repo_id,
+                        signals=signals,
+                    )
+            except Exception as e:
+                self._log(f"Failed to persist sink signals: {e}", "warning")
 
             flow_service.update_node_data(
                 self.id,
@@ -937,6 +1088,10 @@ class ReActSecurityAgent:
             classification_prompt = get_classification_gate_prompt(self._threat_model)
             system_prompt += "\n\n" + classification_prompt + "\n"
 
+            time_tier_appendix = self._time_tier_prompt_appendix()
+            if time_tier_appendix:
+                system_prompt += "\n\n" + time_tier_appendix + "\n"
+
             self.messages = [
                 {"role": "system", "content": system_prompt},
                 {
@@ -991,6 +1146,10 @@ Continue following the main audit instructions above."""
             # Inject classification gate prompt
             classification_prompt = get_classification_gate_prompt(self._threat_model)
             system_prompt += "\n\n" + classification_prompt + "\n"
+
+            time_tier_appendix = self._time_tier_prompt_appendix()
+            if time_tier_appendix:
+                system_prompt += "\n\n" + time_tier_appendix + "\n"
 
             self.messages = [
                 {"role": "system", "content": system_prompt},
@@ -1082,6 +1241,29 @@ Continue following the main audit instructions above."""
 
                 # Check if audit is complete
                 if "AUDIT_COMPLETE" in content:
+                    elapsed = None
+                    if self.started_at:
+                        elapsed = (datetime.utcnow() - self.started_at).total_seconds()
+
+                    if (
+                        elapsed is not None
+                        and self.min_runtime_seconds is not None
+                        and elapsed < self.min_runtime_seconds
+                    ):
+                        self._log(
+                            "Agent requested AUDIT_COMPLETE before time floor; steering to continue "
+                            f"({int(elapsed)}s/{int(self.min_runtime_seconds)}s)"
+                        )
+                        self.messages.append({"role": "assistant", "content": content})
+                        self.messages.append(
+                            {
+                                "role": "user",
+                                "content": await self._build_time_floor_prompt(elapsed_seconds=elapsed),
+                            }
+                        )
+                        consecutive_no_tool = 0
+                        continue
+
                     self._audit_complete_confirmations_seen += 1
                     if self._audit_complete_confirmations_seen < self._audit_complete_confirmations_required:
                         self._log(
@@ -1636,6 +1818,8 @@ Continue following the main audit instructions above."""
                 provider=self.provider.provider_type,
                 model=self.provider.model
             ),
+            scan_tier=self.scan_tier,
+            time_budget_seconds=self.time_budget_seconds,
             custom_prompt=self.custom_prompt,
             created_at=self.created_at,
             started_at=self.started_at,

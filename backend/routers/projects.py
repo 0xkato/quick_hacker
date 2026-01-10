@@ -1,10 +1,12 @@
 """Project management API endpoints."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Literal
 
 from services.project_service import project_service, Project
+from services.sink_signal_service import sink_signal_service
+from models.sink_signals import SinkSignal, SinkSignalStatus
 
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -30,6 +32,10 @@ class CloneIntoProjectRequest(BaseModel):
 class ProjectStatus(BaseModel):
     in_project: bool
     current_project: Optional[Project] = None
+
+
+class UpdateSinkSignalStatusRequest(BaseModel):
+    status: SinkSignalStatus
 
 
 @router.get("", response_model=list[Project])
@@ -143,6 +149,44 @@ async def refresh_project(project_id: str):
         return project
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{project_id}/sink-signals", response_model=list[SinkSignal])
+async def list_sink_signals(
+    project_id: str,
+    status: Optional[SinkSignalStatus] = Query(None, description="Filter by signal status"),
+    limit: Optional[int] = Query(200, ge=1, le=2000, description="Maximum signals to return"),
+):
+    """List persistent sink signals (investigation leads) for a project."""
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return await sink_signal_service.list_signals(project_id=project_id, status=status, limit=limit)
+
+
+@router.put("/{project_id}/sink-signals/{fingerprint}/status", response_model=SinkSignal)
+async def update_sink_signal_status(
+    project_id: str,
+    fingerprint: str,
+    request: UpdateSinkSignalStatusRequest,
+):
+    """Update a sink signal's lifecycle status (no downgrades)."""
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    try:
+        return await sink_signal_service.set_status(
+            project_id=project_id,
+            fingerprint=fingerprint,
+            status=request.status,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail="Signal not found")
+        raise HTTPException(status_code=400, detail=msg)
 
 
 # Quick clone endpoint - creates project and clones in one step

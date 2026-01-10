@@ -125,6 +125,18 @@ class AgentCreateRequest(BaseModel):
     agent_type: AgentType
     provider_config: Optional[ProviderConfig] = None  # Change to Optional for backwards compat
 
+    # Time-tiered scan configuration (new)
+    scan_tier: Optional[str] = Field(
+        None,
+        description="Time-based scan tier: quick|medium|advanced|pro|ultra|evil. Defaults to quick.",
+    )
+    time_budget_seconds: Optional[int] = Field(
+        None,
+        ge=60,
+        le=60 * 60 * 24,
+        description="Optional override for scan duration in seconds (enables custom timing).",
+    )
+
     # Dual-model configuration
     scanner_config: Optional[ProviderConfig] = None
     analyzer_config: Optional[ProviderConfig] = None
@@ -147,6 +159,8 @@ class Agent(BaseModel):
     agent_type: AgentType
     status: AgentStatus
     provider_config: ProviderConfig
+    scan_tier: Optional[str] = None
+    time_budget_seconds: Optional[int] = None
     custom_prompt: Optional[str] = None
     target_files: Optional[list[str]] = None
     focus_areas: Optional[list[str]] = None

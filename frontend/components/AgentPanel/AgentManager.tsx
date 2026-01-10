@@ -16,7 +16,7 @@ import {
   FileText,
 } from 'lucide-react';
 import clsx from 'clsx';
-import type { Agent, AgentType, ProviderType, AgentCreateRequest, AgentProgress } from '@/types';
+import type { Agent, AgentType, ScanTier, ProviderType, AgentCreateRequest, AgentProgress } from '@/types';
 import { agents as agentsApi, settings as settingsApi, type AppSettings } from '@/lib/api';
 
 interface AgentManagerProps {
@@ -29,36 +29,48 @@ interface AgentManagerProps {
   onViewReport?: (agentId: string) => void;
 }
 
-const AGENT_TYPES: { value: AgentType; label: string; icon: React.ReactNode; description: string }[] = [
+const SCAN_TIERS: { value: ScanTier; label: string; icon: React.ReactNode; description: string }[] = [
   {
-    value: 'quick_audit',
-    label: 'Quick',
+    value: 'quick',
+    label: 'Quick (5m)',
     icon: <Zap className="w-4 h-4" />,
-    description: 'Fast pattern scan',
+    description: 'Five-minute scan',
   },
   {
-    value: 'deep_audit',
-    label: 'Audit',
+    value: 'medium',
+    label: 'Medium (15m)',
+    icon: <Zap className="w-4 h-4" />,
+    description: 'Fifteen-minute scan',
+  },
+  {
+    value: 'advanced',
+    label: 'Advanced (45m)',
     icon: <Layers className="w-4 h-4" />,
-    description: 'Marathon deep coverage',
+    description: 'Forty-five-minute scan',
   },
   {
-    value: 'strict_analysis',
-    label: 'Strict',
-    icon: <Bug className="w-4 h-4" />,
-    description: 'Zero false positives',
-  },
-  {
-    value: 'ultra_strict',
-    label: 'Ultra',
-    icon: <Bug className="w-4 h-4" />,
-    description: 'Double verification',
+    value: 'pro',
+    label: 'Pro (90m)',
+    icon: <Layers className="w-4 h-4" />,
+    description: 'Ninety-minute scan',
   },
   {
     value: 'custom',
     label: 'Custom',
     icon: <Wrench className="w-4 h-4" />,
-    description: 'User-defined',
+    description: 'Custom prompt only (no time enforcement)',
+  },
+  {
+    value: 'ultra',
+    label: 'Ultra (4h)',
+    icon: <Bug className="w-4 h-4" />,
+    description: 'Four-hour scan',
+  },
+  {
+    value: 'evil',
+    label: 'Evil (24h)',
+    icon: <Bug className="w-4 h-4" />,
+    description: 'All-day scan',
   },
 ];
 
@@ -99,7 +111,7 @@ interface CreateAgentModalProps {
 }
 
 function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps) {
-  const [agentType, setAgentType] = useState<AgentType>('quick_audit');
+  const [scanTier, setScanTier] = useState<ScanTier>('quick');
   const [provider, setProvider] = useState<ProviderType>('anthropic');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -166,6 +178,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
     setError(null);
 
     try {
+      const agentType: AgentType = scanTier === 'custom' ? 'custom' : 'deep_audit';
       const request: AgentCreateRequest = {
         repo_id: repoId,
         agent_type: agentType,
@@ -174,7 +187,8 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
           model,
           api_key: apiKey || undefined,
         },
-        custom_prompt: customPrompt || undefined,
+        scan_tier: scanTier,
+        custom_prompt: scanTier === 'custom' ? (customPrompt || undefined) : undefined,
       };
 
       const agent = await agentsApi.create(request);
@@ -228,17 +242,17 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
           {/* Agent Type */}
           <div>
             <label className="block text-vsc-xs text-vsc-text-muted mb-2 uppercase tracking-wider">
-              Agent Type
+              Scan Tier
             </label>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-              {AGENT_TYPES.map((type) => (
+              {SCAN_TIERS.map((type) => (
                 <button
                   key={type.value}
                   type="button"
-                  onClick={() => setAgentType(type.value)}
+                  onClick={() => setScanTier(type.value)}
                   className={clsx(
                     'p-2 rounded border text-left transition-colors',
-                    agentType === type.value
+                    scanTier === type.value
                       ? 'border-vsc-accent bg-vsc-accent/10'
                       : 'border-vsc-border-subtle hover:border-vsc-border bg-vsc-input'
                   )}
@@ -337,7 +351,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
           )}
 
           {/* Custom Prompt */}
-          {agentType === 'custom' && (
+          {scanTier === 'custom' && (
             <div>
               <label className="block text-vsc-xs text-vsc-text-muted mb-2 uppercase tracking-wider">
                 Custom Instructions
@@ -392,8 +406,11 @@ function AgentCard({
   const isCompleted = agent.status === 'completed';
   const isFinished = ['completed', 'failed', 'cancelled'].includes(agent.status);
 
-  // Get agent type label
-  const agentTypeLabel = AGENT_TYPES.find(t => t.value === agent.agent_type)?.label || agent.agent_type;
+  const scanTierLabel = (() => {
+    const tier = (agent.scan_tier || '').toLowerCase();
+    const found = SCAN_TIERS.find((t) => t.value === (tier as ScanTier));
+    return found?.label || agent.scan_tier || agent.agent_type;
+  })();
 
   // Truncate file path from left to show filename
   const truncateFromLeft = (path: string, maxLen: number = 30) => {
@@ -412,7 +429,7 @@ function AgentCard({
           className="text-vsc-xs px-2 py-0.5 rounded bg-vsc-accent/30 text-vsc-accent"
           style={{ borderRadius: 'var(--radius-sm)' }}
         >
-          {agentTypeLabel}
+          {scanTierLabel}
         </span>
       </div>
 

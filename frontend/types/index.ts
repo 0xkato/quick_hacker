@@ -5,6 +5,7 @@ export type FindingClassification = 'security_issue' | 'bug' | 'misconfiguration
 export type FixType = 'code' | 'config' | 'docs' | 'warning';
 export type AgentStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type AgentType = 'quick_audit' | 'custom' | 'strict_analysis' | 'ultra_strict' | 'deep_audit';
+export type ScanTier = 'quick' | 'medium' | 'advanced' | 'pro' | 'ultra' | 'evil' | 'custom';
 export type ProviderType = 'openai' | 'anthropic' | 'ollama';
 
 // === Repository ===
@@ -117,6 +118,8 @@ export interface AgentCreateRequest {
   repo_id: string;
   agent_type: AgentType;
   provider_config?: ProviderConfig;
+  scan_tier?: ScanTier | string;
+  time_budget_seconds?: number;
   scanner_config?: ProviderConfig;
   analyzer_config?: ProviderConfig;
   handoff_after?: HandoffMode;
@@ -133,6 +136,8 @@ export interface Agent {
   agent_type: AgentType;
   status: AgentStatus;
   provider_config: ProviderConfig;
+  scan_tier?: string;
+  time_budget_seconds?: number;
   custom_prompt?: string;
   target_files?: string[];
   focus_areas?: string[];

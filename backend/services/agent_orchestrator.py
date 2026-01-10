@@ -25,6 +25,7 @@ from services.project_service import project_service
 from services.settings_service import settings_service
 from services.persistence_service import persistence_service
 from services.report_service import report_service
+from services.scan_tier_service import resolve_scan_budget
 
 
 # Agent type to class mapping
@@ -97,6 +98,25 @@ class AgentOrchestrator:
             raise ValueError(
                 f"Maximum concurrent agents ({settings.max_concurrent_agents}) reached"
             )
+
+        # Resolve/validate scan tier → time budget (time-tiered audits).
+        # Custom agents may omit scan tiers entirely.
+        if request.agent_type != AgentType.CUSTOM:
+            resolved = resolve_scan_budget(
+                scan_tier=request.scan_tier,
+                time_budget_seconds=request.time_budget_seconds,
+            )
+            request.scan_tier = resolved.scan_tier
+            request.time_budget_seconds = resolved.time_budget_seconds
+        else:
+            # Only normalize custom agent timing if an explicit time override is provided.
+            if request.time_budget_seconds is not None:
+                resolved = resolve_scan_budget(
+                    scan_tier=request.scan_tier,
+                    time_budget_seconds=request.time_budget_seconds,
+                )
+                request.scan_tier = resolved.scan_tier
+                request.time_budget_seconds = resolved.time_budget_seconds
 
         # Resolve API keys for all configs
         configs_to_resolve = []

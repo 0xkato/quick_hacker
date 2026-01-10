@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { WSMessage, Finding, AgentProgress, LLMInteraction, ToolDetail } from '@/types';
-import { getSessionToken, refreshAuth } from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
@@ -38,7 +37,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const reconnectAttempts = useRef(0);
   const authRetryCount = useRef(0);
   const connectionIdRef = useRef(0); // Track connection attempts to prevent stale callbacks
-  const tokenKindRef = useRef<'jwt' | 'legacy' | null>(null);
 
   const { getAccessToken, refreshToken } = useAuth();
 
@@ -65,10 +63,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       return;
     }
 
-    // Prefer JWT access token; fall back to legacy session token.
-    const jwtToken = getAccessToken();
-    const legacyToken = jwtToken ? null : getSessionToken();
-    const token = jwtToken || legacyToken;
+    // Get JWT access token
+    const token = getAccessToken();
 
     // Don't connect without a valid token - retry after delay
     if (!token) {
@@ -84,7 +80,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     }
 
     try {
-      tokenKindRef.current = jwtToken ? 'jwt' : 'legacy';
       const wsUrl = (() => {
         try {
           return new URL(WS_BASE_URL).toString();
@@ -128,10 +123,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
           // Refresh the token and retry
           try {
-            const refreshed =
-              tokenKindRef.current === 'jwt'
-                ? await refreshToken()
-                : Boolean(await refreshAuth());
+            const refreshed = await refreshToken();
 
             if (!refreshed) {
               throw new Error('Token refresh failed');
@@ -252,7 +244,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       setError('Failed to connect to WebSocket');
       console.error('[WS] Connection failed:', e);
     }
-  }, [getAccessToken, refreshToken]); // Uses auth context functions via deps
+  }, [getAccessToken, refreshToken]);
 
   const disconnect = useCallback(() => {
     // Increment connection ID to invalidate any pending callbacks

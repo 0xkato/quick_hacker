@@ -4,7 +4,7 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type FindingClassification = 'security_issue' | 'bug' | 'misconfiguration' | 'hardening';
 export type FixType = 'code' | 'config' | 'docs' | 'warning';
 export type AgentStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
-export type AgentType = 'deep_scan' | 'quick_audit' | 'custom' | 'strict_analysis' | 'ultra_strict' | 'deep_audit';
+export type AgentType = 'quick_audit' | 'custom' | 'strict_analysis' | 'ultra_strict' | 'deep_audit';
 export type ProviderType = 'openai' | 'anthropic' | 'ollama';
 
 // === Repository ===

@@ -20,7 +20,6 @@ from models.schemas import (
 from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
 from agents.react_agent import ReActSecurityAgent
-from agents.ultrathink_agent import UltrathinkAgent
 from services import git_service
 from services.project_service import project_service
 from services.settings_service import settings_service
@@ -30,13 +29,11 @@ from services.report_service import report_service
 
 # Agent type to class mapping
 AGENT_CLASSES = {
-    AgentType.DEEP_SCAN: ReActSecurityAgent,      # ReAct for thorough investigation
     AgentType.QUICK_AUDIT: QuickAuditAgent,       # Pattern matching
     AgentType.CUSTOM: ReActSecurityAgent,         # ReAct for custom investigation
     AgentType.STRICT_ANALYSIS: ReActSecurityAgent,# ReAct for strict mode
     AgentType.ULTRA_STRICT: ReActSecurityAgent,   # ReAct for ultra strict
     AgentType.DEEP_AUDIT: ReActSecurityAgent,     # ReAct w/ deeper profile
-    AgentType.ULTRATHINK: UltrathinkAgent,        # Maximum cognitive depth
 }
 
 
@@ -147,10 +144,6 @@ class AgentOrchestrator:
         agent_class = AGENT_CLASSES.get(request.agent_type)
         if not agent_class:
             raise ValueError(f"Unknown agent type: {request.agent_type}")
-
-        # Use focused agent if focus areas provided with custom type
-        if request.agent_type == AgentType.CUSTOM and request.focus_areas:
-            agent_class = FocusedAgent
 
         agent = agent_class(
             request=request,

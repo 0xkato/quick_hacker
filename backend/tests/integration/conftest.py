@@ -74,27 +74,45 @@ def ensure_backend_ready(http_client: httpx.Client) -> None:
 
 
 @pytest.fixture(scope="session")
-def legacy_token(http_client: httpx.Client, ensure_backend_ready: None) -> str:
-    response = http_client.get("/api/auth/token")
-    response.raise_for_status()
-    token = response.json().get("token") or ""
-    assert token, "Expected a non-empty token from /api/auth/token"
+def jwt_token(http_client: httpx.Client, ensure_backend_ready: None) -> str:
+    """Get JWT access token by registering/logging in a test user."""
+    test_user = {
+        "username": "e2e_test_user",
+        "email": "e2e_test@example.com",
+        "password": "TestPassword123!"
+    }
+
+    # Try to register (might already exist)
+    http_client.post("/api/auth/register", json=test_user)
+
+    # Login to get token
+    response = http_client.post("/api/auth/login", json={
+        "username": test_user["username"],
+        "password": test_user["password"]
+    })
+
+    if response.status_code != 200:
+        raise AssertionError(f"Failed to login test user: {response.text}")
+
+    token = response.json().get("access_token") or ""
+    assert token, "Expected a non-empty access token from /api/auth/login"
     return token
 
 
 @pytest.fixture(scope="session")
-def legacy_headers(legacy_token: str) -> dict[str, str]:
-    return {"X-Session-Token": legacy_token}
+def auth_headers(jwt_token: str) -> dict[str, str]:
+    """Auth headers with JWT Bearer token."""
+    return {"Authorization": f"Bearer {jwt_token}"}
 
 
 @pytest.fixture(scope="session")
-def fixture_clone_url(http_client: httpx.Client, stack_config: StackConfig, legacy_headers: dict[str, str]) -> str:
+def fixture_clone_url(http_client: httpx.Client, stack_config: StackConfig, auth_headers: dict[str, str]) -> str:
     if stack_config.fixture_clone_url:
         return stack_config.fixture_clone_url
 
     # Best-effort heuristic: when running in docker compose, repos_dir will be under /app.
     try:
-        health = http_client.get("/api/health", headers=legacy_headers)
+        health = http_client.get("/api/health", headers=auth_headers)
         if health.status_code == 200:
             repos_dir = str(health.json().get("repos_dir") or "")
             if repos_dir.startswith("/app/"):
@@ -104,4 +122,3 @@ def fixture_clone_url(http_client: httpx.Client, stack_config: StackConfig, lega
 
     tests_dir = Path(__file__).resolve().parents[1]
     return str((tests_dir / "fixtures" / "generated_fastapi_repo").resolve())
-

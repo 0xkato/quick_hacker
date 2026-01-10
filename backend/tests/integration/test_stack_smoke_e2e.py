@@ -18,30 +18,16 @@ def test_health_endpoint(http_client: httpx.Client, ensure_backend_ready: None) 
     assert response.json().get("status") == "ok"
 
 
-def test_legacy_auth_bootstrap_token_allows_api_access(
+def test_jwt_auth_allows_api_access(
     http_client: httpx.Client,
-    legacy_headers: dict[str, str],
+    auth_headers: dict[str, str],
 ) -> None:
     unauth = http_client.get("/api/projects/status")
     assert unauth.status_code == 401
 
-    authed = http_client.get("/api/projects/status", headers=legacy_headers)
+    authed = http_client.get("/api/projects/status", headers=auth_headers)
     assert authed.status_code == 200
     assert "in_project" in authed.json()
-
-
-@pytest.mark.asyncio
-async def test_websocket_ping_pong_with_legacy_token(
-    stack_config,
-    legacy_token: str,
-    ensure_backend_ready: None,
-) -> None:
-    ws_url = f"{stack_config.ws_url}?token={legacy_token}"
-    async with websockets.connect(ws_url) as ws:
-        await ws.send(json.dumps({"type": "ping"}))
-        raw = await asyncio.wait_for(ws.recv(), timeout=5)
-        msg = json.loads(raw)
-        assert msg.get("type") == "pong"
 
 
 def test_register_login_me_refresh_flow(http_client: httpx.Client, ensure_backend_ready: None) -> None:
@@ -114,15 +100,15 @@ async def test_websocket_ping_pong_with_jwt_token(stack_config, ensure_backend_r
 
 def test_project_quick_clone_files_and_calltree(
     http_client: httpx.Client,
-    legacy_headers: dict[str, str],
+    auth_headers: dict[str, str],
     fixture_clone_url: str,
 ) -> None:
     # Ensure we're not stuck inside a prior project (persistent volumes / local dev).
-    http_client.post("/api/projects/exit", headers=legacy_headers)
+    http_client.post("/api/projects/exit", headers=auth_headers)
 
     clone = http_client.post(
         "/api/projects/quick-clone",
-        headers=legacy_headers,
+        headers=auth_headers,
         json={"url": fixture_clone_url, "force": True, "project_name": f"e2e-{uuid.uuid4().hex[:6]}"},
     )
     assert clone.status_code == 200, clone.text
@@ -131,20 +117,20 @@ def test_project_quick_clone_files_and_calltree(
     assert project_id
     assert project.get("is_cloned") is True
 
-    tree = http_client.get(f"/api/files/{project_id}/tree?max_depth=4", headers=legacy_headers)
+    tree = http_client.get(f"/api/files/{project_id}/tree?max_depth=4", headers=auth_headers)
     assert tree.status_code == 200, tree.text
     tree_json = tree.json()
     assert tree_json.get("type") == "directory"
 
     main_py = http_client.get(
         f"/api/files/{project_id}/content",
-        headers=legacy_headers,
+        headers=auth_headers,
         params={"path": "main.py"},
     )
     assert main_py.status_code == 200, main_py.text
     assert "FastAPI" in (main_py.json().get("content") or "")
 
-    routes = http_client.get(f"/api/calltree/{project_id}/routes", headers=legacy_headers)
+    routes = http_client.get(f"/api/calltree/{project_id}/routes", headers=auth_headers)
     assert routes.status_code == 200, routes.text
     routes_json = routes.json()
     assert isinstance(routes_json, list)
@@ -153,7 +139,7 @@ def test_project_quick_clone_files_and_calltree(
     route_id = next(r["id"] for r in routes_json if r.get("path") == "/hello")
     calltree = http_client.get(
         f"/api/calltree/{project_id}/tree",
-        headers=legacy_headers,
+        headers=auth_headers,
         params={"route_id": route_id, "max_depth": 6, "max_nodes": 250, "include_external": True},
     )
     assert calltree.status_code == 200, calltree.text

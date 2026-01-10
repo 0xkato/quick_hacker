@@ -1,7 +1,6 @@
 """quick_hack - Security Auditing Browser IDE Backend."""
 
 import asyncio
-import ipaddress
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -17,7 +16,7 @@ from routers.websocket import set_main_loop
 from database import init_db
 from services.settings_service import settings_service
 from services.project_service import project_service
-from middleware.auth import create_new_session, get_session_token, require_auth, verify_session
+from middleware.auth import require_auth
 
 
 @asynccontextmanager
@@ -62,7 +61,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Session-Token"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Include routers
@@ -160,63 +159,6 @@ async def health(_: str = Depends(require_auth)):
         "max_agents": settings.max_concurrent_agents,
         "providers": providers_status,
     }
-
-
-# === Authentication Endpoints ===
-
-def _require_local_bootstrap(request: Request):
-    """Deny remote access to bootstrap auth endpoints by default."""
-    if not settings.auth_bootstrap_allow_remote:
-        # Avoid proxy bypass: treat forwarded headers as non-local.
-        if request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip"):
-            raise HTTPException(status_code=403, detail="Auth bootstrap is localhost-only by default")
-
-        client_host = request.client.host if request.client else ""
-        try:
-            if not ipaddress.ip_address(client_host).is_loopback:
-                raise HTTPException(status_code=403, detail="Auth bootstrap is localhost-only by default")
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Auth bootstrap is localhost-only by default")
-
-
-@app.get("/api/auth/token")
-async def get_auth_token(request: Request):
-    """
-    Get the master session token for authentication.
-
-    This token is generated on server startup and remains valid for the session.
-    Use it in the X-Session-Token header for authenticated endpoints (WebSocket uses ?token=).
-
-    Note: This endpoint is intentionally unauthenticated to allow initial token retrieval.
-    By default it is restricted to localhost requests; set AUTH_BOOTSTRAP_ALLOW_REMOTE=true to override
-    (not recommended without real authentication/TLS).
-    """
-    _require_local_bootstrap(request)
-    token = get_session_token()
-    return {
-        "token": token,
-        "usage": "Add 'X-Session-Token: <token>' header to requests",
-        "note": "Keep this token secure - it grants access to sensitive settings and findings",
-    }
-
-
-@app.post("/api/auth/session")
-async def create_session(request: Request):
-    """Create a new session token (alternative to master token)."""
-    _require_local_bootstrap(request)
-    token = create_new_session()
-    return {
-        "token": token,
-        "expires_in": "24 hours",
-    }
-
-
-@app.get("/api/auth/verify")
-async def verify_token(request: Request, token: str):
-    """Verify if a token is valid."""
-    _require_local_bootstrap(request)
-    is_valid = verify_session(token)
-    return {"valid": is_valid}
 
 
 if __name__ == "__main__":

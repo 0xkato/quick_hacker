@@ -26,13 +26,11 @@ class AgentStatus(str, Enum):
 
 
 class AgentType(str, Enum):
-    DEEP_SCAN = "deep_scan"
     QUICK_AUDIT = "quick_audit"
     CUSTOM = "custom"
     STRICT_ANALYSIS = "strict_analysis"  # Zero false positive tolerance
     ULTRA_STRICT = "ultra_strict"  # Double verification, maximum precision
     DEEP_AUDIT = "deep_audit"  # Long-running, coverage-oriented deep audit (ReAct)
-    ULTRATHINK = "ultrathink"  # Maximum cognitive depth with hierarchical cascade
 
 
 class ProviderType(str, Enum):
@@ -295,12 +293,6 @@ class WSMessageType(str, Enum):
     TOOL_DETAIL = "tool_detail"  # Detailed tool execution info
     STATE_SYNC = "state_sync"  # Full state snapshot on pause/stop
     REPORT_READY = "report_ready"  # Report generated, ready for download
-    # Ultrathink events
-    ULTRATHINK_CASCADE_START = "ultrathink_cascade_start"
-    ULTRATHINK_GATE_START = "ultrathink_gate_start"
-    ULTRATHINK_GATE_COMPLETE = "ultrathink_gate_complete"
-    ULTRATHINK_THINKING_UPDATE = "ultrathink_thinking_update"
-    ULTRATHINK_CASCADE_COMPLETE = "ultrathink_cascade_complete"
     # Session hibernation events
     SESSION_PAUSING = "session_pausing"
     SESSION_PAUSED = "session_paused"

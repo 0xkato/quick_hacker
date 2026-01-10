@@ -9,7 +9,6 @@ import {
   Plus,
   Bug,
   Zap,
-  Search,
   Wrench,
   X,
   Layers,
@@ -36,12 +35,6 @@ const AGENT_TYPES: { value: AgentType; label: string; icon: React.ReactNode; des
     label: 'Quick',
     icon: <Zap className="w-4 h-4" />,
     description: 'Fast pattern scan',
-  },
-  {
-    value: 'deep_scan',
-    label: 'Deep',
-    icon: <Search className="w-4 h-4" />,
-    description: 'AI-powered analysis',
   },
   {
     value: 'deep_audit',

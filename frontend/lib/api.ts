@@ -89,80 +89,16 @@ class APIError extends Error {
   }
 }
 
-// Session token management
-let _sessionToken: string | null = null;
-let _tokenFetchPromise: Promise<string> | null = null;
-
-export async function initializeAuth(): Promise<string> {
-  /**
-   * Fetch and store the session token for authenticated requests.
-   * Call this once on app startup.
-   */
-  if (_sessionToken) return _sessionToken;
-
-  // Prevent multiple concurrent fetches
-  if (_tokenFetchPromise) return _tokenFetchPromise;
-
-  _tokenFetchPromise = (async (): Promise<string> => {
-    try {
-      const response = await fetch(`${API_BASE}/api/auth/token`);
-      if (response.ok) {
-        const data = await response.json();
-        const token: string = data.token || '';
-        _sessionToken = token;
-        console.log('[Auth] Token initialized');
-        return token;
-      }
-    } catch (err) {
-      console.error('Failed to initialize auth:', err);
-    } finally {
-      _tokenFetchPromise = null;
-    }
-    return '';
-  })();
-
-  return _tokenFetchPromise;
-}
-
-export async function refreshAuth(): Promise<string> {
-  /**
-   * Force refresh the session token.
-   * Use when WebSocket connection fails with auth error.
-   */
-  _sessionToken = null;
-  _tokenFetchPromise = null;
-  console.log('[Auth] Refreshing token...');
-  return initializeAuth();
-}
-
-export function getSessionToken(): string | null {
-  return _sessionToken;
-}
-
-export function isAuthInitialized(): boolean {
-  return _sessionToken !== null && _sessionToken.length > 0;
-}
-
-export function clearSessionToken(): void {
-  _sessionToken = null;
-  _tokenFetchPromise = null;
-}
-
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
 
-  // Include session token in headers if available
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...options.headers as Record<string, string>,
   };
-
-  if (_sessionToken) {
-    headers['X-Session-Token'] = _sessionToken;
-  }
 
   const response = await fetchWithAuth(url, {
     ...options,
@@ -384,9 +320,7 @@ export const agents = {
 
   async downloadReport(agentId: string, format: 'md' | 'json' | 'svg'): Promise<Blob> {
     const url = `${API_BASE}/api/agents/${agentId}/report/download?format=${format}`;
-    const response = await fetchWithAuth(url, {
-      headers: _sessionToken ? { 'X-Session-Token': _sessionToken } : {},
-    });
+    const response = await fetchWithAuth(url);
     if (!response.ok) {
       throw new APIError(response.status, 'Failed to download report');
     }

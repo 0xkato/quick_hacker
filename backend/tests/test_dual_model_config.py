@@ -10,7 +10,7 @@ class TestResolveDualModelConfig:
         """provider_config only → single-model mode."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
                 model="claude-opus-4-5-20251101"
@@ -27,7 +27,7 @@ class TestResolveDualModelConfig:
         """analyzer_config only → auto-select cheap scanner."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             analyzer_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
                 model="claude-opus-4-5-20251101",
@@ -48,7 +48,7 @@ class TestResolveDualModelConfig:
         """Both scanner + analyzer → use as specified."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             scanner_config=ProviderConfig(
                 provider=ProviderType.OPENAI,
                 model="gpt-4o-mini"
@@ -71,7 +71,7 @@ class TestResolveDualModelConfig:
         """scanner_config only → error."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             scanner_config=ProviderConfig(
                 provider=ProviderType.OPENAI,
                 model="gpt-4o-mini"
@@ -85,7 +85,7 @@ class TestResolveDualModelConfig:
         """Ollama analyzer → scanner uses same model."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             analyzer_config=ProviderConfig(
                 provider=ProviderType.OLLAMA,
                 model="llama3.3"
@@ -103,7 +103,7 @@ class TestGetHandoffMode:
         """Default handoff mode is sink_identification."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
                 model="claude-opus-4-5-20251101"
@@ -117,7 +117,7 @@ class TestGetHandoffMode:
         """Explicit exploration handoff mode."""
         request = AgentCreateRequest(
             repo_id="test-repo",
-            agent_type=AgentType.DEEP_SCAN,
+            agent_type=AgentType.CUSTOM,
             analyzer_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
                 model="claude-opus-4-5-20251101"

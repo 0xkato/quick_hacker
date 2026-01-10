@@ -21,8 +21,6 @@ from models.schemas import (
     WSMessageType,
 )
 from providers import BaseProvider, Message, get_provider
-from prompts.system_prompts import get_system_prompt
-from prompts.audit_methodology import get_audit_prompt
 from services.attack_surface_service import attack_surface_service
 from services.flow_service import flow_service
 from services.project_service import project_service
@@ -416,115 +414,22 @@ class BaseAgent(ABC):
         )
 
     async def analyze_file(self, file_path: str, content: str) -> list[Finding]:
-        """Analyze a single file for vulnerabilities."""
-        # Use multi-stage pipeline if enabled
-        if self.use_pipeline:
-            return await self._analyze_file_with_pipeline(file_path, content)
+        """Analyze a single file for vulnerabilities.
 
-        # Use structured methodology for strict modes
-        use_structured = self.agent_type in [AgentType.STRICT_ANALYSIS, AgentType.ULTRA_STRICT]
-
-        if use_structured:
-            system_prompt = get_audit_prompt(
-                agent_type=self.agent_type,
-                repo_name=self.repo_path.split("/")[-1],
-                language=self._detect_language(file_path),
-                custom_instructions=self.custom_prompt,
-            )
-        else:
-            system_prompt = get_system_prompt(
-                agent_type=self.agent_type,
-                repo_name=self.repo_path.split("/")[-1],
-                file_path=file_path,
-                focus_areas=self.focus_areas,
-                custom_instructions=self.custom_prompt,
-            )
-
-        # Build user message
-        user_message = self._build_analysis_prompt(file_path, content, structured=use_structured)
-
-        messages = [Message(role="user", content=user_message)]
-
-        # Generate analysis
-        findings = []
-        full_response = ""
-
-        async for chunk in self.provider.generate_stream(messages, system_prompt):
-            full_response += chunk.content
-
-            if chunk.is_complete:
-                break
-
-        # Parse findings from response
-        if use_structured:
-            parsed_findings = self._parse_structured_findings(full_response, file_path)
-        else:
-            parsed_findings = self._parse_findings(full_response, file_path)
-
-        for fc in parsed_findings:
-            finding = self.add_finding(fc)
-            await self.emit_finding(finding)
-            findings.append(finding)
-
-        return findings
+        Note: This method is deprecated. Use ReActSecurityAgent for file analysis.
+        """
+        raise NotImplementedError(
+            "analyze_file is deprecated. Use ReActSecurityAgent for security analysis."
+        )
 
     async def _analyze_file_with_pipeline(self, file_path: str, content: str) -> list[Finding]:
-        """Analyze a file using the multi-stage prompt pipeline."""
-        await self.emit_log(f"Using multi-stage pipeline for {file_path}")
+        """Analyze a file using the multi-stage prompt pipeline.
 
-        # Get base system prompt
-        use_structured = self.agent_type in [AgentType.STRICT_ANALYSIS, AgentType.ULTRA_STRICT]
-
-        if use_structured:
-            system_prompt = get_audit_prompt(
-                agent_type=self.agent_type,
-                repo_name=self.repo_path.split("/")[-1],
-                language=self._detect_language(file_path),
-                custom_instructions=self.custom_prompt,
-            )
-        else:
-            system_prompt = get_system_prompt(
-                agent_type=self.agent_type,
-                repo_name=self.repo_path.split("/")[-1],
-                file_path=file_path,
-                focus_areas=self.focus_areas,
-                custom_instructions=self.custom_prompt,
-            )
-
-        # Build base prompt
-        base_prompt = self._build_analysis_prompt(file_path, content, structured=use_structured)
-
-        # Execute the pipeline
-        result = await self.pipeline.execute(
-            base_prompt=base_prompt,
-            code_context=content,
-            system_prompt=system_prompt,
-            file_path=file_path,
-            language=self._detect_language(file_path),
+        Note: This method is deprecated. Use ReActSecurityAgent for file analysis.
+        """
+        raise NotImplementedError(
+            "_analyze_file_with_pipeline is deprecated. Use ReActSecurityAgent for security analysis."
         )
-
-        # Log pipeline stats
-        await self.emit_log(
-            f"Pipeline complete: {result.total_tokens_in} tokens in, "
-            f"{result.total_tokens_out} tokens out, "
-            f"${result.total_cost_usd:.4f} estimated cost"
-        )
-
-        # Parse findings from the execution output (and verification if available)
-        response_to_parse = result.verified_output or result.execution_output
-
-        if use_structured:
-            parsed_findings = self._parse_structured_findings(response_to_parse, file_path)
-        else:
-            parsed_findings = self._parse_findings(response_to_parse, file_path)
-
-        findings = []
-        for fc in parsed_findings:
-            finding = self.add_finding(fc)
-            await self.emit_finding(finding)
-            findings.append(finding)
-
-        return findings
 
     def _detect_language(self, file_path: str) -> str:
         """Detect language from file extension."""

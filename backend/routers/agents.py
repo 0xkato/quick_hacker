@@ -266,31 +266,6 @@ async def get_observability_stats(agent_id: str):
     return observability_service.get_stats(agent_id)
 
 
-@router.get("/{agent_id}/flow")
-async def get_agent_flow(agent_id: str):
-    """Get investigation flow for an agent."""
-    flow = flow_service.get_flow(agent_id)
-    if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
-    return flow.to_dict()
-
-
-@router.get("/{agent_id}/flow/stats")
-async def get_flow_stats(agent_id: str):
-    """Get flow statistics for an agent."""
-    stats = flow_service.get_flow_stats(agent_id)
-    if not stats:
-        raise HTTPException(status_code=404, detail="Flow not found")
-    return stats
-
-
-@router.delete("/{agent_id}/flow")
-async def clear_agent_flow(agent_id: str):
-    """Clear investigation flow for an agent."""
-    flow_service.clear_flow(agent_id)
-    return APIResponse(success=True, message="Flow cleared")
-
-
 # === Investigation Queue ===
 
 class QueueInvestigationRequest(BaseModel):

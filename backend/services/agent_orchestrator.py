@@ -158,7 +158,7 @@ class AgentOrchestrator:
                     ):
                         print(
                             "[Orchestrator] Claude SDK mode: no Anthropic API key configured; "
-                            "relying on Claude Code auth (setup-token) or ANTHROPIC_API_KEY env var."
+                            "relying on Claude Code auth (setup-token) or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN env var."
                         )
                         continue
                     raise ValueError(

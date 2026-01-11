@@ -267,6 +267,13 @@ async def validate_api_key(
     user: User = Depends(get_current_user),
 ):
     """Validate an API key by making an actual API call."""
+    # Claude Code subscription / Teams auth can use OAuth-style tokens (commonly `sk-ant-oat*`).
+    # These are not valid for the raw API-key (`x-api-key`) validation call below, but they are
+    # valid credentials for Claude Code / Agent SDK, so accept them here to unblock UI saving.
+    candidate = (request.api_key or "").strip()
+    if request.provider == "anthropic" and candidate.lower().startswith("sk-ant-oat"):
+        return {"valid": True, "provider": request.provider}
+
     from providers import get_provider
     from providers.base_provider import Message
     from models.schemas import ProviderConfig, ProviderType

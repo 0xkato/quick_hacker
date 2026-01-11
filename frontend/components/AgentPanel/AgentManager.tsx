@@ -317,7 +317,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
               <label htmlFor="use-claude-sdk" className="flex-1 cursor-pointer">
                 <span className="text-vsc-sm font-medium text-vsc-text">Use Claude Agent SDK</span>
                 <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
-                  Native tool loop with better performance. Uses ANTHROPIC_API_KEY env var.
+                  Native tool loop with better performance. Uses ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN (or Claude Code setup-token).
                 </p>
               </label>
             </div>

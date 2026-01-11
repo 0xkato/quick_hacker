@@ -27,6 +27,7 @@ services:
       # API keys from .env (can be overridden in settings UI)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
       - OLLAMA_BASE_URL=http://ollama:11434
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql+asyncpg://quickhack:quickhack_dev@postgres:5432/quickhack

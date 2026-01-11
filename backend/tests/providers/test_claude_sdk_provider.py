@@ -103,6 +103,82 @@ class TestClaudeSDKProviderLifecycle:
             mock_client.connect.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_start_session_uses_anthropic_auth_token_for_oat_token(self, mock_tool_core, tmp_path):
+        """OAuth-style tokens should be passed via ANTHROPIC_AUTH_TOKEN, not ANTHROPIC_API_KEY."""
+        from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
+
+        if not SDK_AVAILABLE:
+            pytest.skip("Claude SDK not installed")
+
+        repo = tmp_path / "repo"
+        oauth_token = "sk-ant-oat01-test-token"
+
+        provider = ClaudeSDKProvider(
+            repo_path=str(repo),
+            project_id="test-project",
+            tool_core=mock_tool_core,
+            config={
+                "model": "claude-sonnet-4-20250514",
+                "api_key": oauth_token,
+            },
+        )
+
+        with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
+             patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
+            mock_options = MagicMock()
+            mock_options.model = "claude-sonnet-4-20250514"
+            MockOptions.return_value = mock_options
+
+            mock_client = AsyncMock()
+            mock_client.connect = AsyncMock()
+            MockClient.return_value = mock_client
+
+            await provider.start_session(audit_policy="read_only")
+
+            options_kwargs = MockOptions.call_args.kwargs
+            env = options_kwargs.get("env", {})
+            assert env.get("ANTHROPIC_AUTH_TOKEN") == oauth_token
+            assert "ANTHROPIC_API_KEY" not in env
+
+    @pytest.mark.asyncio
+    async def test_start_session_passes_through_anthropic_auth_token_env_var(self, mock_tool_core, tmp_path, monkeypatch):
+        """If ANTHROPIC_AUTH_TOKEN is set in the process env, pass it to Claude Code subprocess."""
+        from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
+
+        if not SDK_AVAILABLE:
+            pytest.skip("Claude SDK not installed")
+
+        oauth_token = "sk-ant-oat01-env-token"
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", oauth_token)
+
+        repo = tmp_path / "repo"
+
+        provider = ClaudeSDKProvider(
+            repo_path=str(repo),
+            project_id="test-project",
+            tool_core=mock_tool_core,
+            config={
+                "model": "claude-sonnet-4-20250514",
+            },
+        )
+
+        with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
+             patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
+            mock_options = MagicMock()
+            mock_options.model = "claude-sonnet-4-20250514"
+            MockOptions.return_value = mock_options
+
+            mock_client = AsyncMock()
+            mock_client.connect = AsyncMock()
+            MockClient.return_value = mock_client
+
+            await provider.start_session(audit_policy="read_only")
+
+            options_kwargs = MockOptions.call_args.kwargs
+            env = options_kwargs.get("env", {})
+            assert env.get("ANTHROPIC_AUTH_TOKEN") == oauth_token
+
+    @pytest.mark.asyncio
     async def test_start_session_with_resume_session_id(self, mock_tool_core, tmp_path):
         """start_session should use provided session_id when resuming."""
         from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE

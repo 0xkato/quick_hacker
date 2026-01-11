@@ -243,7 +243,7 @@ The backend can run audits through Claude Code via `claude-agent-sdk` (which use
 - Docker: the backend image installs both `claude-agent-sdk` (Python) and `@anthropic-ai/claude-code` (Node).
 - Local dev: install Python deps in `backend/` and `npm i -g @anthropic-ai/claude-code`.
 - Enable per agent with `use_claude_sdk: true` (provider stays `anthropic`).
-- Auth: either set `ANTHROPIC_API_KEY` (env or Settings UI) or authenticate Claude Code via `claude setup-token` in the same environment (Docker has its own `$HOME`).
+- Auth: either set `ANTHROPIC_API_KEY` (API key) or `ANTHROPIC_AUTH_TOKEN` (OAuth token) (env or Settings UI), or authenticate Claude Code via `claude setup-token` in the same environment (Docker has its own `$HOME`).
   - In Docker (once): `docker compose exec -it backend claude setup-token`
   - Compose mounts a persistent volume at `/home/appuser/.claude` so Claude Code auth survives container rebuilds.
 
@@ -390,7 +390,7 @@ See `.env.example` for the full list. Common knobs:
 | `NEXT_PUBLIC_WS_URL` | WebSocket URL (usually `ws://localhost:8000/ws`) |
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Provider keys (fallback; UI settings override) |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | Provider credentials (fallback; UI settings override) |
 | `SETTINGS_SECRET` | Used to obfuscate stored settings |
 | `JWT_SECRET_KEY` | JWT signing secret (change in production) |
 | `SANDBOX_ENABLED` | Enables Docker-based sandbox execution |

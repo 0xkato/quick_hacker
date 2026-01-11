@@ -370,7 +370,7 @@ class ClaudeSDKOrchestrator:
             return (
                 "Claude Code authentication required. "
                 "Run `claude setup-token` (Docker: `docker compose exec -it backend claude setup-token`) "
-                "or set `ANTHROPIC_API_KEY`."
+                "or set `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`."
             )
 
         return message

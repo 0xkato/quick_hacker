@@ -7,6 +7,7 @@ providers.
 """
 from __future__ import annotations
 
+import os
 import logging
 import uuid
 from typing import Any, Callable
@@ -137,6 +138,7 @@ class ClaudeSDKProvider:
         max_budget = self.config.get("max_budget_usd")
         permission_mode = self.config.get("permission_mode", "bypassPermissions")
         api_key = self.config.get("api_key")
+        auth_token = self.config.get("auth_token")
 
         print(f"[ClaudeSDKProvider] Creating ClaudeAgentOptions:")
         print(f"  model={model}")
@@ -145,15 +147,27 @@ class ClaudeSDKProvider:
         print(f"  max_budget_usd={max_budget}")
         print(f"  permission_mode={permission_mode}")
         print(f"  api_key={'SET' if api_key else 'NOT SET'}")
+        print(f"  auth_token={'SET' if auth_token else 'NOT SET'}")
         print(f"  mcp_servers keys: {list({'quickhack': self._mcp_server}.keys())}")
         print(f"  mcp_server type: {type(self._mcp_server)}")
         print(f"  system_prompt length: {len(system_prompt)}")
 
         env: dict[str, str] = {}
-        # Claude Code reads the API key from environment variables, so pass it directly
+        # Claude Code reads credentials from environment variables; pass them directly
         # to the CLI subprocess environment (avoid mutating the backend process env).
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
+        # - `ANTHROPIC_API_KEY` for API key auth (X-Api-Key)
+        # - `ANTHROPIC_AUTH_TOKEN` for OAuth-style tokens (Authorization: Bearer)
+        resolved_auth_token = (auth_token or "").strip() or (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+        resolved_api_key = (api_key or "").strip() or (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+        if resolved_auth_token:
+            env["ANTHROPIC_AUTH_TOKEN"] = resolved_auth_token
+        elif resolved_api_key:
+            # Heuristic: OAuth tokens are commonly `sk-ant-oat*`; treat them as auth tokens.
+            if resolved_api_key.lower().startswith("sk-ant-oat"):
+                env["ANTHROPIC_AUTH_TOKEN"] = resolved_api_key
+            else:
+                env["ANTHROPIC_API_KEY"] = resolved_api_key
 
         options = ClaudeAgentOptions(
             model=model,

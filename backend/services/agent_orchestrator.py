@@ -30,6 +30,8 @@ from services.settings_service import settings_service
 from services.persistence_service import persistence_service
 from services.report_service import report_service
 from services.scan_tier_service import resolve_scan_budget
+from services.flow_service import flow_service
+from services.observability_service import observability_service
 
 
 # Agent type to class mapping
@@ -76,6 +78,14 @@ class AgentOrchestrator:
                 callback(message)
             except Exception as e:
                 print(f"Callback error: {e}")
+
+    @staticmethod
+    def _is_masked_credential(value: str | None) -> bool:
+        """Heuristic to detect masked credentials coming back from the UI/settings export."""
+        if not value:
+            return False
+        candidate = value.strip()
+        return candidate == "****" or "..." in candidate
 
     async def create_agent(
         self,
@@ -318,20 +328,304 @@ class AgentOrchestrator:
         config = agent.request.provider_config
         scan_tier = getattr(agent.request, 'scan_tier', 'quick') or 'quick'
 
+        # Re-resolve credentials at run-time for SDK mode.
+        #
+        # This covers cases where:
+        # - An agent was created before the user saved credentials in Settings, or
+        # - The UI supplied a masked credential (e.g. `sk-a...wxyz`) which is not usable.
+        sdk_api_key: str | None = None
+        if config is not None:
+            sdk_api_key = getattr(config, "api_key", None)
+        sdk_api_key = (sdk_api_key or "").strip() or None
+
+        if sdk_api_key is None or self._is_masked_credential(sdk_api_key):
+            try:
+                provider_name = "anthropic"
+                if config is not None and hasattr(config, "provider"):
+                    raw_provider = config.provider.value if hasattr(config.provider, "value") else str(config.provider)
+                    normalized_provider = (raw_provider or "").strip().lower()
+                    provider_name = "anthropic" if normalized_provider in ("anthropic", "claude_sdk") else normalized_provider
+
+                if provider_name == "anthropic":
+                    app_settings = await settings_service.get_settings()
+                    provider_settings = app_settings.providers.get("anthropic")
+                    candidate = (provider_settings.api_key or "").strip() if provider_settings else ""
+                    if candidate:
+                        sdk_api_key = candidate
+                        print("[Orchestrator] Loaded Anthropic credential from Settings for Claude SDK run")
+            except Exception:
+                # Best-effort only: fall back to env vars / Claude Code login state.
+                pass
+
+        # === Initialize Flow and Observability Services ===
+        # Initialize investigation flow for visualization
+        flow_service.initialize_flow(agent.id)
+        start_node = flow_service.add_node(
+            agent.id, "user_input", "Start Investigation",
+            {"agent_type": agent.request.agent_type.value if hasattr(agent.request, 'agent_type') else "sdk_audit"}
+        )
+        flow_service.update_node_status(agent.id, start_node.id, "completed")
+
+        # Broadcast initial flow
+        flow = flow_service.get_flow(agent.id)
+        if flow:
+            self._broadcast_message(WSMessage(
+                type=WSMessageType.PROGRESS,
+                agent_id=agent.id,
+                data={"type": "flow_update", "flow": flow.to_dict()}
+            ))
+
+        # Set broadcast callback for observability service
+        observability_service.set_broadcast_callback(self._broadcast_message)
+
         # Create ClaudeSDKOrchestrator first to get make_fresh_limits
         # We need a temporary orchestrator to get the limits factory
         agent_id = agent.id  # Capture for lambda closure
 
+        # Track state for tool call correlation
+        current_tool_calls: list[dict] = []
+        current_request_id: str | None = None
+        current_tool_node_id: str | None = None
+
         def on_sdk_event(event: dict) -> None:
-            """Broadcast SDK events as WebSocket messages."""
+            """Broadcast SDK events as WebSocket messages with flow + observability integration."""
+            nonlocal current_tool_calls, current_request_id, current_tool_node_id
+
             event_type_str = event.get("type", "sdk_event")
-            # Map SDK event types to WSMessageType or use LOG as fallback
-            try:
-                ws_type = WSMessageType(event_type_str)
-            except ValueError:
-                ws_type = WSMessageType.LOG
+
+            # Map SDK event types to WSMessageType
+            SDK_TO_WS_MAP = {
+                # LLM request (prompt sent to Claude) -> blue in UI
+                "llm_request": WSMessageType.LLM_REQUEST,
+                # Text/thinking from Claude -> LLM response
+                "agent_text": WSMessageType.LLM_RESPONSE,
+                "agent_thinking": WSMessageType.LLM_RESPONSE,
+                # Tool events -> Tool detail
+                "tool_call": WSMessageType.TOOL_DETAIL,
+                "tool_result": WSMessageType.TOOL_DETAIL,
+                # System/session events -> Progress
+                "system": WSMessageType.PROGRESS,
+                "session_started": WSMessageType.PROGRESS,
+                "turn_complete": WSMessageType.PROGRESS,
+                "phase_change": WSMessageType.PROGRESS,
+                # Findings
+                "finding": WSMessageType.FINDING,
+                # Errors stay as errors
+                "error": WSMessageType.ERROR,
+            }
+
+            ws_type = SDK_TO_WS_MAP.get(event_type_str)
+            if ws_type is None:
+                try:
+                    ws_type = WSMessageType(event_type_str)
+                except ValueError:
+                    ws_type = WSMessageType.LOG
+
+            # Transform event data to match frontend expectations
+            import uuid as uuid_mod
+            from datetime import datetime as dt
+            import json
+            ws_data = dict(event)
+            timestamp = dt.utcnow().isoformat()
+
+            if event_type_str == "llm_request":
+                prompt = event.get("prompt", "")
+                turn = event.get("turn", 0)
+                phase = event.get("phase", "scanner")
+
+                # Log to observability service
+                current_request_id = observability_service.log_llm_request(
+                    agent_id=agent_id,
+                    messages=[{"role": "user", "content": prompt}],
+                    tools_available=None,  # SDK manages tools internally
+                    model="claude-sdk",
+                    provider="claude_sdk",
+                )
+
+                ws_data = {
+                    "id": current_request_id,
+                    "agent_id": agent_id,
+                    "interaction_type": "request",
+                    "timestamp": timestamp,
+                    "summary": f"Turn {turn} ({phase}): {prompt[:100]}..." if len(prompt) > 100 else f"Turn {turn} ({phase}): {prompt}",
+                    "full_content": prompt,
+                    "model": "claude-sdk",
+                    "provider": "claude_sdk",
+                }
+
+            elif event_type_str == "agent_text":
+                text = event.get("text", "")
+
+                # Log to observability service
+                if current_request_id and text:
+                    observability_service.log_llm_response(
+                        agent_id=agent_id,
+                        request_id=current_request_id,
+                        content=text,
+                        tool_calls=current_tool_calls if current_tool_calls else None,
+                        model="claude-sdk",
+                        provider="claude_sdk",
+                    )
+                    current_tool_calls = []  # Reset for next response
+
+                ws_data = {
+                    "id": str(uuid_mod.uuid4()),
+                    "agent_id": agent_id,
+                    "interaction_type": "response",
+                    "timestamp": timestamp,
+                    "summary": text[:200] + "..." if len(text) > 200 else text,
+                    "full_content": text,
+                    "model": "claude-sdk",
+                    "provider": "claude_sdk",
+                }
+
+            elif event_type_str == "tool_call":
+                tool_id = event.get("id", "") or str(uuid_mod.uuid4())
+                tool_name = event.get("name", "")
+                tool_args = event.get("args", {})
+
+                # Track for correlation with results
+                current_tool_calls.append({
+                    "id": tool_id,
+                    "name": tool_name,
+                    "args": tool_args,
+                })
+
+                # === Add Flow Node for Tool Call ===
+                # Determine node type based on tool
+                node_type = "tool_call"
+                if tool_name in ("read_file", "list_directory"):
+                    node_type = "code_read"
+                elif tool_name in ("search_code", "grep_semantic"):
+                    node_type = "search"
+                elif tool_name in ("scan_repo_for_secrets", "dependency_audit"):
+                    node_type = "scan"
+                elif tool_name == "report_finding":
+                    node_type = "finding"
+                elif tool_name == "upsert_sink_signal":
+                    kind = tool_args.get("kind", "")
+                    node_type = "entry_point" if kind == "entry_point" else "dangerous_sink"
+
+                # Create node label
+                args_preview = str(tool_args)[:50]
+                label = f"{tool_name}: {args_preview}..."
+
+                # Add flow node
+                tool_node = flow_service.add_node(
+                    agent_id, node_type, label,
+                    {"tool": tool_name, "args": tool_args}
+                )
+                flow_service.update_node_status(agent_id, tool_node.id, "running")
+                current_tool_node_id = tool_node.id
+
+                # Broadcast flow update
+                flow = flow_service.get_flow(agent_id)
+                if flow:
+                    self._broadcast_message(WSMessage(
+                        type=WSMessageType.PROGRESS,
+                        agent_id=agent_id,
+                        data={"type": "flow_update", "flow": flow.to_dict()}
+                    ))
+
+                ws_data = {
+                    "id": tool_id,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_id,
+                    "arguments": tool_args,
+                    "arguments_summary": str(tool_args)[:100],
+                    "timestamp": timestamp,
+                    "success": True,
+                    "duration_ms": 0,
+                }
+
+            elif event_type_str == "tool_result":
+                tool_use_id = event.get("tool_use_id", "") or str(uuid_mod.uuid4())
+                result = event.get("result", "")
+                is_error = event.get("is_error", False)
+
+                # Find the corresponding tool_call
+                tool_name = "unknown"
+                tool_args = {}
+                for tc in current_tool_calls:
+                    if tc.get("id") == tool_use_id:
+                        tool_name = tc.get("name", "unknown")
+                        tool_args = tc.get("args", {})
+                        break
+
+                # Log to observability service
+                observability_service.log_tool_execution(
+                    agent_id=agent_id,
+                    tool_name=tool_name,
+                    tool_call_id=tool_use_id,
+                    arguments=tool_args,
+                    result=result,
+                    success=not is_error,
+                    duration_ms=0,  # SDK doesn't provide timing
+                    error_message=str(result) if is_error else None,
+                )
+
+                # === Update Flow Node Status ===
+                if current_tool_node_id:
+                    status = "failed" if is_error else "completed"
+                    flow_service.update_node_status(agent_id, current_tool_node_id, status)
+
+                    # === Add finding/signal nodes if applicable ===
+                    if tool_name == "report_finding" and not is_error:
+                        try:
+                            finding_data = json.loads(result) if isinstance(result, str) else result
+                            if isinstance(finding_data, dict) and "finding" in finding_data:
+                                finding = finding_data["finding"]
+                                severity = finding.get("severity", "medium")
+                                title = finding.get("title", "Finding")
+                                # Add finding node to flow
+                                finding_node = flow_service.add_node(
+                                    agent_id, "finding", f"{severity.upper()}: {title}",
+                                    {"severity": severity, "finding": finding}
+                                )
+                                flow_service.update_node_status(agent_id, finding_node.id, "completed")
+                        except Exception as e:
+                            print(f"[Orchestrator] Failed to add finding node: {e}")
+
+                    elif tool_name == "upsert_sink_signal" and not is_error:
+                        try:
+                            signal_data = json.loads(result) if isinstance(result, str) else result
+                            if isinstance(signal_data, dict) and "signal" in signal_data:
+                                signal = signal_data["signal"]
+                                kind = signal.get("kind", "sink")
+                                label = signal.get("label", "Signal")
+                                node_type = "entry_point" if kind == "entry_point" else "dangerous_sink"
+                                signal_node = flow_service.add_node(
+                                    agent_id, node_type, label,
+                                    {"signal": signal}
+                                )
+                                flow_service.update_node_status(agent_id, signal_node.id, "completed")
+                        except Exception as e:
+                            print(f"[Orchestrator] Failed to add signal node: {e}")
+
+                    current_tool_node_id = None
+
+                    # Broadcast flow update
+                    flow = flow_service.get_flow(agent_id)
+                    if flow:
+                        self._broadcast_message(WSMessage(
+                            type=WSMessageType.PROGRESS,
+                            agent_id=agent_id,
+                            data={"type": "flow_update", "flow": flow.to_dict()}
+                        ))
+
+                ws_data = {
+                    "id": tool_use_id,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_use_id,
+                    "result": result,
+                    "result_summary": str(result)[:200],
+                    "success": not is_error,
+                    "timestamp": timestamp,
+                    "duration_ms": 0,
+                }
+
             self._broadcast_message(
-                WSMessage(type=ws_type, agent_id=agent_id, data=event)
+                WSMessage(type=ws_type, agent_id=agent_id, data=ws_data)
             )
 
         sdk_orchestrator = ClaudeSDKOrchestrator(
@@ -351,7 +645,7 @@ class AgentOrchestrator:
         # Create ClaudeSDKProvider
         provider_config = {
             "model": config.model if config else "claude-sonnet-4-20250514",
-            "api_key": config.api_key if config else None,
+            "api_key": sdk_api_key,
             "max_tokens": config.max_tokens if config else 8192,
         }
 
@@ -398,6 +692,30 @@ class AgentOrchestrator:
 
             # Update agent findings
             agent.findings = findings
+
+            # === Add completion node to flow ===
+            completion_status = "completed" if result.get("success", True) else "failed"
+            flow_service.add_node(
+                agent.id, "analysis", f"Audit {completion_status.title()}",
+                {"findings_count": len(findings), "elapsed_s": result.get("elapsed_s", 0)}
+            )
+
+            # Broadcast final flow update
+            flow = flow_service.get_flow(agent.id)
+            if flow:
+                self._broadcast_message(WSMessage(
+                    type=WSMessageType.PROGRESS,
+                    agent_id=agent.id,
+                    data={"type": "flow_update", "flow": flow.to_dict()}
+                ))
+
+            # === Generate report on successful completion ===
+            if result.get("success", True) and findings:
+                try:
+                    report_service.generate_report(agent)
+                    print(f"[Orchestrator] Generated report for SDK agent {agent.id}")
+                except Exception as e:
+                    print(f"[Orchestrator] Failed to generate report: {e}")
 
             # If the SDK run failed, propagate an error so the agent is marked FAILED.
             if not result.get("success", True):

@@ -18,8 +18,14 @@ from .base import (
     normalize_path,
     read_file_safe,
 )
+from .secrets import (
+    shannon_entropy,
+    SECRET_PATTERNS,
+    scan_for_secrets,
+)
 
 __all__ = [
+    # Base types
     "Severity",
     "ScannerTool",
     "WorkspacePolicy",
@@ -30,4 +36,8 @@ __all__ = [
     "fingerprint_secret",
     "normalize_path",
     "read_file_safe",
+    # Secrets scanner
+    "shannon_entropy",
+    "SECRET_PATTERNS",
+    "scan_for_secrets",
 ]

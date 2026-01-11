@@ -1945,7 +1945,7 @@ Continue following the main audit instructions above."""
         # Python functions
         pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
         for match in re.finditer(pattern, code, re.MULTILINE):
-            line_num = code[:match.start()].count('\n') + 1
+            line_num = code[:match.end()].count('\n') + 1
             functions.append({
                 "name": match.group(1),
                 "signature": match.group(0).strip(),
@@ -1955,7 +1955,7 @@ Continue following the main audit instructions above."""
         # JavaScript/TypeScript functions
         js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
         for match in re.finditer(js_pattern, code, re.MULTILINE):
-            line_num = code[:match.start()].count('\n') + 1
+            line_num = code[:match.end()].count('\n') + 1
             # Extract the actual matched signature
             sig_match = re.match(r'^\s*(.+?)\s*\(', match.group(0))
             signature = sig_match.group(1).strip() + "()" if sig_match else f"function {match.group(1)}()"

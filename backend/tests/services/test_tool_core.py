@@ -142,6 +142,21 @@ class TestToolCoreListDirectory:
         with pytest.raises(NotADirectoryError):
             await tool_core.list_directory("src/main.py")
 
+    @pytest.mark.asyncio
+    async def test_list_directory_recursive(self, tool_core, temp_repo):
+        """Should list files recursively."""
+        (temp_repo / "subdir").mkdir()
+        (temp_repo / "subdir" / "nested.py").write_text("pass")
+
+        result = await tool_core.list_directory(".", recursive=True)
+        assert any("nested.py" in item for item in result["items"])
+
+    @pytest.mark.asyncio
+    async def test_list_directory_rejects_excluded_dir(self, tool_core, temp_repo):
+        """Should reject listing excluded directories."""
+        with pytest.raises(ValueError, match="excluded"):
+            await tool_core.list_directory("node_modules")
+
 
 class TestToolCoreSearchCode:
     """Tests for ToolCore.search_code()."""

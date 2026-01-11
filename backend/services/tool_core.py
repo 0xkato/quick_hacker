@@ -201,6 +201,14 @@ class ToolCore:
             Dict with items list and metadata
         """
         dir_path = self._validate_dir(path)
+
+        # Check if starting path is an excluded directory
+        if dir_path != self.repo_path:  # Don't check root
+            rel_parts = dir_path.relative_to(self.repo_path).parts
+            for part in rel_parts:
+                if part in self.DEFAULT_EXCLUDED_DIRS:
+                    raise ValueError(f"Path in excluded directory: {path}")
+
         items: list[str] = []
 
         def collect_items():

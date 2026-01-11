@@ -1932,13 +1932,18 @@ Continue following the main audit instructions above."""
     def _extract_functions_from_code(self, code: str) -> list[dict]:
         """Extract function definitions from code.
 
+        Note: Only matches single-line function signatures. Multiline signatures
+        are not currently supported.
+
         Returns list of dicts with: name, signature, line_number
         """
+        if not code or not isinstance(code, str):
+            return []
+
         functions = []
-        import re
 
         # Python functions
-        pattern = r'^\s*def\s+(\w+)\s*\((.*?)\):'
+        pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
         for match in re.finditer(pattern, code, re.MULTILINE):
             line_num = code[:match.start()].count('\n') + 1
             functions.append({
@@ -1948,12 +1953,15 @@ Continue following the main audit instructions above."""
             })
 
         # JavaScript/TypeScript functions
-        js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\('
+        js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
         for match in re.finditer(js_pattern, code, re.MULTILINE):
             line_num = code[:match.start()].count('\n') + 1
+            # Extract the actual matched signature
+            sig_match = re.match(r'^\s*(.+?)\s*\(', match.group(0))
+            signature = sig_match.group(1).strip() + "()" if sig_match else f"function {match.group(1)}()"
             functions.append({
                 "name": match.group(1),
-                "signature": f"function {match.group(1)}()",
+                "signature": signature,
                 "line_number": line_num
             })
 
@@ -1964,8 +1972,10 @@ Continue following the main audit instructions above."""
 
         Returns list of dicts with: target_function, call_type
         """
+        if not analysis or not isinstance(analysis, str):
+            return []
+
         calls = []
-        import re
 
         # Look for patterns like "calls functionName()" or "invokes X.Y()"
         pattern = r'(?:calls?|invokes?|executes?)\s+([a-zA-Z_][\w\.]*)\s*\('

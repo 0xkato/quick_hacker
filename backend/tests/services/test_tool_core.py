@@ -183,3 +183,31 @@ class TestToolCoreSearchCode:
         """Should handle invalid regex gracefully."""
         with pytest.raises(ValueError, match="regex"):
             await tool_core.search_code(r"[invalid")
+
+
+class TestToolCoreSecurityScanners:
+    """Tests for ToolCore security scanner methods."""
+
+    @pytest.mark.asyncio
+    async def test_scan_for_secrets_returns_result(self, tool_core, temp_repo):
+        """Should return scan result."""
+        # Create file with fake secret pattern
+        (temp_repo / "config.py").write_text('API_KEY = "sk-1234567890abcdef"')
+
+        result = await tool_core.scan_for_secrets()
+        assert "files_scanned" in result
+        assert "findings" in result
+
+    @pytest.mark.asyncio
+    async def test_dependency_audit_returns_result(self, tool_core, temp_repo):
+        """Should return audit result even with no lockfiles."""
+        result = await tool_core.dependency_audit()
+        assert "success" in result
+
+    @pytest.mark.asyncio
+    async def test_grep_semantic_finds_pattern(self, tool_core, temp_repo):
+        """Should find pattern matches with context."""
+        (temp_repo / "vuln.py").write_text("eval(user_input)")
+
+        result = await tool_core.grep_semantic(r"eval\s*\(")
+        assert result["success"]

@@ -1928,3 +1928,51 @@ Continue following the main audit instructions above."""
             # Note: Full flow restoration would require flow_service enhancements
 
         self._log(f"Restored from snapshot: {len(self.files_examined)} files, {len(self.findings)} findings")
+
+    def _extract_functions_from_code(self, code: str) -> list[dict]:
+        """Extract function definitions from code.
+
+        Returns list of dicts with: name, signature, line_number
+        """
+        functions = []
+        import re
+
+        # Python functions
+        pattern = r'^\s*def\s+(\w+)\s*\((.*?)\):'
+        for match in re.finditer(pattern, code, re.MULTILINE):
+            line_num = code[:match.start()].count('\n') + 1
+            functions.append({
+                "name": match.group(1),
+                "signature": match.group(0).strip(),
+                "line_number": line_num
+            })
+
+        # JavaScript/TypeScript functions
+        js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\('
+        for match in re.finditer(js_pattern, code, re.MULTILINE):
+            line_num = code[:match.start()].count('\n') + 1
+            functions.append({
+                "name": match.group(1),
+                "signature": f"function {match.group(1)}()",
+                "line_number": line_num
+            })
+
+        return functions
+
+    def _extract_calls_from_analysis(self, analysis: str) -> list[dict]:
+        """Extract function calls from LLM analysis.
+
+        Returns list of dicts with: target_function, call_type
+        """
+        calls = []
+        import re
+
+        # Look for patterns like "calls functionName()" or "invokes X.Y()"
+        pattern = r'(?:calls?|invokes?|executes?)\s+([a-zA-Z_][\w\.]*)\s*\('
+        for match in re.finditer(pattern, analysis, re.IGNORECASE):
+            calls.append({
+                "target_function": match.group(1),
+                "call_type": "internal"
+            })
+
+        return calls

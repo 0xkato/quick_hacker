@@ -19,6 +19,8 @@ class FlowContext:
     current_function: Optional[str] = None
     current_candidate_node_id: Optional[str] = None
     investigation_root_id: Optional[str] = None
+    call_depth: int = 0              # NEW: Current depth in call chain
+    max_call_depth: int = 3          # NEW: Configurable limit
 
 
 NodeType = Literal[

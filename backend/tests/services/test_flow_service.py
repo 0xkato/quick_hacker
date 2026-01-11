@@ -238,3 +238,26 @@ def test_add_node_explicit_parent_overrides_auto():
     edge = next((e for e in flow.edges if e.target == node3.id), None)
     assert edge is not None
     assert edge.source == node2.id
+
+
+def test_flow_context_has_call_depth_fields():
+    """FlowContext should have call_depth and max_call_depth fields."""
+    from services.flow_service import FlowContext
+
+    context = FlowContext(
+        call_depth=2,
+        max_call_depth=5
+    )
+
+    assert context.call_depth == 2
+    assert context.max_call_depth == 5
+
+
+def test_flow_context_defaults():
+    """FlowContext should default call_depth=0 and max_call_depth=3."""
+    from services.flow_service import FlowContext
+
+    context = FlowContext()
+
+    assert context.call_depth == 0
+    assert context.max_call_depth == 3

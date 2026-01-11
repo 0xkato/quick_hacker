@@ -7,6 +7,7 @@ just like a human security researcher would.
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 from dataclasses import dataclass
@@ -14,6 +15,16 @@ from dataclasses import dataclass
 from services.coverage_tracker import CoverageTracker, PathStatus
 from models.sink_signals import RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
 from services.sink_signal_service import compute_signal_fingerprint, sink_signal_service
+from services.security_scanners import (
+    ScanFinding,
+    ScanLimits,
+    ScanResult,
+    WorkspacePolicy,
+    scan_for_secrets,
+    audit_dependencies,
+    semantic_grep,
+    generate_report,
+)
 
 
 @dataclass
@@ -390,6 +401,68 @@ AGENT_TOOLS = [
                 }
             }
         }
+    },
+    {
+        "name": "scan_repo_for_secrets",
+        "description": "Scan the repository for hardcoded secrets, API keys, and credentials using pattern and entropy-based detection.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entropy_threshold": {
+                    "type": "number",
+                    "description": "Minimum Shannon entropy threshold for detecting high-randomness strings (default: 4.5)"
+                }
+            }
+        }
+    },
+    {
+        "name": "dependency_audit",
+        "description": "Audit project dependencies for known vulnerabilities by scanning lockfiles (package-lock.json, yarn.lock, requirements.txt, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lockfile_path": {
+                    "type": "string",
+                    "description": "Optional: Specific lockfile path to audit. If not provided, auto-detects lockfiles."
+                }
+            }
+        }
+    },
+    {
+        "name": "grep_semantic",
+        "description": "Search code using regex patterns with context lines. Validates patterns to prevent ReDoS.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern to search for (e.g., 'eval\\s*\\(', 'subprocess\\.call')"
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after match (default: 3)"
+                },
+                "file_glob": {
+                    "type": "string",
+                    "description": "Glob pattern to filter files (default: '**/*', e.g., '*.py', 'src/**/*.js')"
+                }
+            },
+            "required": ["pattern"]
+        }
+    },
+    {
+        "name": "generate_security_report",
+        "description": "Generate a security report from accumulated scan findings in the specified format.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "output_format": {
+                    "type": "string",
+                    "enum": ["markdown", "json", "sarif"],
+                    "description": "Output format for the report (default: 'markdown')"
+                }
+            }
+        }
     }
 ]
 
@@ -491,10 +564,25 @@ TOOL_DEFINITIONS = {tool["name"]: tool for tool in AGENT_TOOLS}
 class ToolExecutor:
     """Executes tools for the security research agent."""
 
-    def __init__(self, repo_path: str, project_id: Optional[str] = None):
+    # Default time budget of 10 minutes if not specified
+    DEFAULT_TIME_BUDGET_MS = 600_000
+
+    def __init__(
+        self,
+        repo_path: str,
+        project_id: Optional[str] = None,
+        time_budget_ms: Optional[int] = None,
+    ):
         self.repo_path = Path(repo_path)
         self.project_id = project_id
         self.investigation_notes: list[dict] = []
+
+        # Security scanner support
+        self._session_start = time.monotonic()
+        budget_ms = time_budget_ms if time_budget_ms is not None else self.DEFAULT_TIME_BUDGET_MS
+        self._total_budget_s = budget_ms / 1000.0
+        self._security_scan_findings: dict[str, ScanFinding] = {}
+        self._findings_cap = 500
 
     def _safe_path(self, path: str) -> Path:
         """Ensure path doesn't escape repository."""
@@ -505,6 +593,59 @@ class ToolExecutor:
         except ValueError:
             raise ValueError(f"Path escapes repository: {path}")
         return full_path
+
+    def _remaining_budget_s(self) -> float:
+        """Calculate remaining time budget in seconds."""
+        elapsed = time.monotonic() - self._session_start
+        return max(0.0, self._total_budget_s - elapsed)
+
+    def _make_scan_limits(self) -> ScanLimits:
+        """Create ScanLimits with deadline based on remaining budget."""
+        deadline = time.monotonic() + self._remaining_budget_s()
+        return ScanLimits(deadline=deadline)
+
+    def _accumulate_security_findings(self, findings: list[ScanFinding]) -> None:
+        """Accumulate security findings, deduplicating by fingerprint and capping at limit."""
+        for finding in findings:
+            # Use fingerprint from details if available, otherwise create one from file+line
+            fingerprint = finding.details.get("fingerprint")
+            if not fingerprint:
+                fingerprint = f"{finding.file_path}:{finding.line_start}:{finding.title}"
+
+            # Skip if already accumulated
+            if fingerprint in self._security_scan_findings:
+                continue
+
+            # Check cap
+            if len(self._security_scan_findings) >= self._findings_cap:
+                break
+
+            self._security_scan_findings[fingerprint] = finding
+
+    def _format_security_scan_result(self, result: ScanResult) -> dict:
+        """Format a ScanResult into a data dict for ToolResult."""
+        return {
+            "success": result.success,
+            "files_scanned": result.files_scanned,
+            "files_skipped": result.files_skipped,
+            "bytes_scanned": result.bytes_scanned,
+            "duration_ms": result.duration_ms,
+            "cancelled": result.cancelled,
+            "error": result.error,
+            "findings": [f.to_dict() for f in result.findings],
+            "total_accumulated": len(self._security_scan_findings),
+        }
+
+    def _make_workspace_policy(self) -> WorkspacePolicy:
+        """Create a WorkspacePolicy for the repository."""
+        return WorkspacePolicy(
+            workspace_root=str(self.repo_path),
+            max_file_size=10 * 1024 * 1024,  # 10MB
+            excluded_dirs={
+                ".git", "node_modules", "__pycache__", ".venv", "venv",
+                "dist", "build", ".next", ".nuxt", "coverage", "target",
+            },
+        )
 
     async def execute(self, tool_name: str, arguments: dict) -> ToolResult:
         """Execute a tool and return the result."""
@@ -1135,6 +1276,106 @@ class ToolExecutor:
             'count': len(all_entries),
             'truncated': len(all_entries) > 100
         })
+
+    async def _tool_scan_repo_for_secrets(
+        self,
+        entropy_threshold: float = 4.5,
+    ) -> ToolResult:
+        """Scan repository for hardcoded secrets and credentials."""
+        try:
+            policy = self._make_workspace_policy()
+            limits = self._make_scan_limits()
+
+            result = await scan_for_secrets(
+                policy=policy,
+                limits=limits,
+                entropy_threshold=entropy_threshold,
+            )
+
+            # Accumulate findings
+            self._accumulate_security_findings(result.findings)
+
+            return ToolResult(True, self._format_security_scan_result(result))
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+    async def _tool_dependency_audit(
+        self,
+        lockfile_path: Optional[str] = None,
+    ) -> ToolResult:
+        """Audit dependencies for known vulnerabilities."""
+        try:
+            policy = self._make_workspace_policy()
+            limits = self._make_scan_limits()
+
+            # Convert relative path to absolute if provided
+            abs_lockfile_path = None
+            if lockfile_path:
+                abs_lockfile_path = str(self._safe_path(lockfile_path))
+
+            result = await audit_dependencies(
+                policy=policy,
+                limits=limits,
+                lockfile_path=abs_lockfile_path,
+            )
+
+            # Accumulate findings
+            self._accumulate_security_findings(result.findings)
+
+            return ToolResult(True, self._format_security_scan_result(result))
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+    async def _tool_grep_semantic(
+        self,
+        pattern: str,
+        context_lines: int = 3,
+        file_glob: str = "**/*",
+    ) -> ToolResult:
+        """Search code using regex patterns with context."""
+        try:
+            policy = self._make_workspace_policy()
+            limits = self._make_scan_limits()
+
+            result = await semantic_grep(
+                policy=policy,
+                pattern=pattern,
+                limits=limits,
+                context_lines=context_lines,
+                file_glob=file_glob,
+            )
+
+            if not result.success:
+                return ToolResult(False, None, result.error or "Grep failed")
+
+            # Accumulate findings
+            self._accumulate_security_findings(result.findings)
+
+            return ToolResult(True, self._format_security_scan_result(result))
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+    async def _tool_generate_security_report(
+        self,
+        output_format: str = "markdown",
+    ) -> ToolResult:
+        """Generate a security report from accumulated findings."""
+        try:
+            # Get all accumulated findings
+            findings = list(self._security_scan_findings.values())
+
+            # Generate report
+            report = generate_report(findings, output_format)
+
+            return ToolResult(True, {
+                "report": report,
+                "format": output_format,
+                "findings_count": len(findings),
+            })
+        except ValueError as e:
+            return ToolResult(False, None, str(e))
+        except Exception as e:
+            return ToolResult(False, None, str(e))
 
 
 def handle_trace_path_verdict(

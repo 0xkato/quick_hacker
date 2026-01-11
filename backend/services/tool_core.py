@@ -37,6 +37,9 @@ class ToolCore:
         workspace_policy: Policy enforcing security boundaries
     """
 
+    # Valid severity values for report_finding
+    VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
+
     # Default excluded directories
     DEFAULT_EXCLUDED_DIRS = frozenset({
         ".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -596,9 +599,52 @@ class ToolCore:
         This returns the finding data; the actual persistence is handled
         by the orchestrator after validation.
 
+        Args:
+            severity: Severity level (critical/high/medium/low/info)
+            title: Finding title
+            vulnerability_type: Type of vulnerability
+            file_path: Path to the vulnerable file
+            line_start: Starting line number (must be positive integer)
+            vulnerable_code: The vulnerable code snippet
+            description: Description of the vulnerability
+            confidence: Confidence score (0.0 to 1.0)
+            cwe_id: Optional CWE identifier
+            line_end: Optional ending line (must be >= line_start if provided)
+            source_trace: Optional source trace list
+            attack_scenario: Optional attack scenario description
+            proof_of_concept: Optional PoC code
+            recommended_fix: Optional fix recommendation
+
         Returns:
             Dict with reported finding data
+
+        Raises:
+            ValueError: If any input validation fails
         """
+        # Validate severity
+        severity_lower = severity.lower()
+        if severity_lower not in self.VALID_SEVERITIES:
+            raise ValueError(
+                f"Invalid severity: {severity}. Must be one of: {sorted(self.VALID_SEVERITIES)}"
+            )
+
+        # Validate confidence (0.0-1.0 float)
+        if not isinstance(confidence, (int, float)):
+            raise ValueError("confidence must be a float")
+        if confidence < 0.0 or confidence > 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+
+        # Validate line_start (positive integer)
+        if not isinstance(line_start, int) or line_start < 1:
+            raise ValueError("line_start must be a positive integer")
+
+        # Validate line_end >= line_start if provided
+        if line_end is not None:
+            if not isinstance(line_end, int) or line_end < 1:
+                raise ValueError("line_end must be a positive integer")
+            if line_end < line_start:
+                raise ValueError("line_end must be >= line_start")
+
         finding = {
             "severity": severity,
             "title": title,

@@ -255,6 +255,95 @@ class TestToolCoreSinkSignals:
         assert result["signal"]["kind"] == "sink"
 
 
+class TestUpsertSinkSignalValidation:
+    """Tests for upsert_sink_signal() validation edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_invalid_kind_raises(self, tool_core):
+        """Should raise ValueError for invalid kind."""
+        with pytest.raises(ValueError, match="Invalid kind"):
+            await tool_core.upsert_sink_signal(
+                kind="invalid_kind",
+                label="test",
+                file_path="src/main.py",
+            )
+
+    @pytest.mark.asyncio
+    async def test_upsert_invalid_status_raises(self, tool_core):
+        """Should raise ValueError for invalid status."""
+        with pytest.raises(ValueError, match="Invalid status"):
+            await tool_core.upsert_sink_signal(
+                kind="sink",
+                label="test",
+                file_path="src/main.py",
+                status="invalid_status",
+            )
+
+    @pytest.mark.asyncio
+    async def test_upsert_invalid_risk_tier_raises(self, tool_core):
+        """Should raise ValueError for invalid llm_risk_tier."""
+        with pytest.raises(ValueError, match="Invalid risk tier"):
+            await tool_core.upsert_sink_signal(
+                kind="sink",
+                label="test",
+                file_path="src/main.py",
+                llm_risk_tier="X",  # Invalid tier
+            )
+
+    @pytest.mark.asyncio
+    async def test_upsert_llm_score_below_zero_raises(self, tool_core):
+        """Should raise ValueError for llm_score < 0."""
+        with pytest.raises(ValueError, match="llm_score must be 0-100"):
+            await tool_core.upsert_sink_signal(
+                kind="sink",
+                label="test",
+                file_path="src/main.py",
+                llm_score=-1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_upsert_llm_score_above_100_raises(self, tool_core):
+        """Should raise ValueError for llm_score > 100."""
+        with pytest.raises(ValueError, match="llm_score must be 0-100"):
+            await tool_core.upsert_sink_signal(
+                kind="sink",
+                label="test",
+                file_path="src/main.py",
+                llm_score=101,
+            )
+
+
+class TestListSinkSignalsValidation:
+    """Tests for list_sink_signals() validation edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_list_invalid_status_raises(self, tool_core):
+        """Should raise ValueError for invalid status filter."""
+        with pytest.raises(ValueError, match="Invalid status"):
+            await tool_core.list_sink_signals(status="invalid_status")
+
+    @pytest.mark.asyncio
+    async def test_list_limit_clamped_to_minimum(self, tool_core):
+        """Should clamp limit to minimum of 1."""
+        result = await tool_core.list_sink_signals(limit=0)
+        # Should not fail and should clamp to 1
+        assert "signals" in result
+
+    @pytest.mark.asyncio
+    async def test_list_limit_clamped_to_maximum(self, tool_core):
+        """Should clamp limit to maximum of 200."""
+        result = await tool_core.list_sink_signals(limit=500)
+        # Should not fail and should clamp to 200
+        assert "signals" in result
+
+    @pytest.mark.asyncio
+    async def test_list_negative_limit_clamped(self, tool_core):
+        """Should clamp negative limit to 1."""
+        result = await tool_core.list_sink_signals(limit=-10)
+        # Should not fail and should clamp to 1
+        assert "signals" in result
+
+
 class TestToolCoreReportFinding:
     """Tests for ToolCore.report_finding()."""
 
@@ -273,3 +362,193 @@ class TestToolCoreReportFinding:
         )
         assert result["reported"]
         assert result["finding"]["severity"] == "high"
+
+
+class TestReportFindingValidation:
+    """Tests for report_finding() input validation."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_severity_raises(self, tool_core):
+        """Should raise ValueError for invalid severity."""
+        with pytest.raises(ValueError, match="Invalid severity"):
+            await tool_core.report_finding(
+                severity="invalid",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=1,
+                vulnerable_code="code",
+                description="desc",
+                confidence=0.5,
+            )
+
+    @pytest.mark.asyncio
+    async def test_all_valid_severities_accepted(self, tool_core):
+        """Should accept all valid severity values."""
+        for severity in ["critical", "high", "medium", "low", "info"]:
+            result = await tool_core.report_finding(
+                severity=severity,
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=1,
+                vulnerable_code="code",
+                description="desc",
+                confidence=0.5,
+            )
+            assert result["reported"]
+
+    @pytest.mark.asyncio
+    async def test_severity_case_insensitive(self, tool_core):
+        """Should accept severity values case-insensitively."""
+        result = await tool_core.report_finding(
+            severity="HIGH",
+            title="Test",
+            vulnerability_type="Test",
+            file_path="test.py",
+            line_start=1,
+            vulnerable_code="code",
+            description="desc",
+            confidence=0.5,
+        )
+        assert result["reported"]
+
+    @pytest.mark.asyncio
+    async def test_confidence_below_zero_raises(self, tool_core):
+        """Should raise ValueError for confidence < 0."""
+        with pytest.raises(ValueError, match="confidence must be between 0.0 and 1.0"):
+            await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=1,
+                vulnerable_code="code",
+                description="desc",
+                confidence=-0.1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_confidence_above_one_raises(self, tool_core):
+        """Should raise ValueError for confidence > 1.0."""
+        with pytest.raises(ValueError, match="confidence must be between 0.0 and 1.0"):
+            await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=1,
+                vulnerable_code="code",
+                description="desc",
+                confidence=1.5,
+            )
+
+    @pytest.mark.asyncio
+    async def test_confidence_boundary_values_accepted(self, tool_core):
+        """Should accept boundary values 0.0 and 1.0 for confidence."""
+        for confidence in [0.0, 1.0]:
+            result = await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=1,
+                vulnerable_code="code",
+                description="desc",
+                confidence=confidence,
+            )
+            assert result["reported"]
+
+    @pytest.mark.asyncio
+    async def test_line_start_zero_raises(self, tool_core):
+        """Should raise ValueError for line_start = 0."""
+        with pytest.raises(ValueError, match="line_start must be a positive integer"):
+            await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=0,
+                vulnerable_code="code",
+                description="desc",
+                confidence=0.5,
+            )
+
+    @pytest.mark.asyncio
+    async def test_line_start_negative_raises(self, tool_core):
+        """Should raise ValueError for negative line_start."""
+        with pytest.raises(ValueError, match="line_start must be a positive integer"):
+            await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=-5,
+                vulnerable_code="code",
+                description="desc",
+                confidence=0.5,
+            )
+
+    @pytest.mark.asyncio
+    async def test_line_end_less_than_line_start_raises(self, tool_core):
+        """Should raise ValueError when line_end < line_start."""
+        with pytest.raises(ValueError, match="line_end must be >= line_start"):
+            await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=10,
+                line_end=5,
+                vulnerable_code="code",
+                description="desc",
+                confidence=0.5,
+            )
+
+    @pytest.mark.asyncio
+    async def test_line_end_zero_raises(self, tool_core):
+        """Should raise ValueError for line_end = 0."""
+        with pytest.raises(ValueError, match="line_end must be a positive integer"):
+            await tool_core.report_finding(
+                severity="high",
+                title="Test",
+                vulnerability_type="Test",
+                file_path="test.py",
+                line_start=1,
+                line_end=0,
+                vulnerable_code="code",
+                description="desc",
+                confidence=0.5,
+            )
+
+    @pytest.mark.asyncio
+    async def test_line_end_equal_to_line_start_accepted(self, tool_core):
+        """Should accept line_end equal to line_start."""
+        result = await tool_core.report_finding(
+            severity="high",
+            title="Test",
+            vulnerability_type="Test",
+            file_path="test.py",
+            line_start=10,
+            line_end=10,
+            vulnerable_code="code",
+            description="desc",
+            confidence=0.5,
+        )
+        assert result["reported"]
+
+    @pytest.mark.asyncio
+    async def test_line_end_greater_than_line_start_accepted(self, tool_core):
+        """Should accept line_end greater than line_start."""
+        result = await tool_core.report_finding(
+            severity="high",
+            title="Test",
+            vulnerability_type="Test",
+            file_path="test.py",
+            line_start=10,
+            line_end=20,
+            vulnerable_code="code",
+            description="desc",
+            confidence=0.5,
+        )
+        assert result["reported"]

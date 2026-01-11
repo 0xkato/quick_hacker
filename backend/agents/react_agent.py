@@ -168,6 +168,7 @@ class ReActSecurityAgent:
         on_message: Optional[Callable[[WSMessage], None]] = None,
     ):
         self.id = str(uuid.uuid4())[:8]
+        self.request = request  # Store for SDK mode fallback in to_schema()/get_state_snapshot()
         self.repo_id = request.repo_id
         self.repo_path = repo_path
         self.agent_type = request.agent_type
@@ -1817,16 +1818,26 @@ Continue following the main audit instructions above."""
     def to_schema(self):
         """Convert to API schema."""
         from models.schemas import Agent, ProviderConfig
+        # Build provider_config - use request config for SDK mode (provider is None)
+        if self.provider is not None:
+            provider_config = ProviderConfig(
+                provider=self.provider.provider_type,
+                model=self.provider.model
+            )
+        elif self.request.provider_config is not None:
+            # SDK mode: use the original request config
+            provider_config = self.request.provider_config
+        else:
+            # Fallback
+            provider_config = ProviderConfig(provider="anthropic", model="claude-sonnet-4-20250514")
+
         return Agent(
             id=self.id,
             repo_id=self.repo_id,
             name=self.name,
             agent_type=self.agent_type,
             status=self.status,
-            provider_config=ProviderConfig(
-                provider=self.provider.provider_type,
-                model=self.provider.model
-            ),
+            provider_config=provider_config,
             scan_tier=self.scan_tier,
             time_budget_seconds=self.time_budget_seconds,
             custom_prompt=self.custom_prompt,
@@ -1851,16 +1862,27 @@ Continue following the main audit instructions above."""
         # Get token usage
         usage = observability_service.get_token_usage(self.id)
 
+        # Build provider_config dict - handle SDK mode where provider is None
+        if self.provider is not None:
+            provider_config_dict = {
+                "provider": self.provider.provider_type,
+                "model": self.provider.model,
+            }
+        elif self.request.provider_config is not None:
+            provider_config_dict = {
+                "provider": self.request.provider_config.provider.value if hasattr(self.request.provider_config.provider, 'value') else str(self.request.provider_config.provider),
+                "model": self.request.provider_config.model,
+            }
+        else:
+            provider_config_dict = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
+
         return AgentStateSnapshot(
             id=str(uuid.uuid4())[:12],
             agent_id=self.id,
             repo_id=self.repo_id,
             repo_path=self.repo_path,
             agent_type=self.agent_type.value,
-            provider_config={
-                "provider": self.provider.provider_type,
-                "model": self.provider.model,
-            },
+            provider_config=provider_config_dict,
             custom_prompt=self.custom_prompt,
             status=self.status.value,
             files_analyzed=len(self.files_examined),

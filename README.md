@@ -42,41 +42,185 @@ This system distinguishes **leads** from **reported vulnerabilities**:
 
 ## Architecture
 
+### System Overview
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                           Frontend (Next.js / React)                         │
 │                                                                              │
-│  - Project selector + repo explorer (Monaco)                                 │
-│  - Agent panel (scan tiers + custom prompts)                                 │
-│  - Findings panel + report viewer                                             │
-│  - Flow diagram (live investigation graph)                                   │
-│  - Call tree diagram + code graph                                             │
-│  - Settings (per-user provider keys) + Auth UI                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   Project   │  │    Agent    │  │  Findings   │  │    Flow Diagram     │  │
+│  │  Selector   │  │   Panel     │  │   Panel     │  │ (Investigation Tree)│  │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│  ┌─────────────────────────────┐  ┌─────────────────────────────────────────┐│
+│  │      Monaco Code Editor     │  │         Call Tree + Code Graph          ││
+│  └─────────────────────────────┘  └─────────────────────────────────────────┘│
 └───────────────────────────────────────┬──────────────────────────────────────┘
                                         │ REST `/api/*` + WebSocket `/ws`
                                         ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                               Backend (FastAPI)                              │
 │                                                                              │
-│  Routers:                                                                     │
-│  - `/api/auth/*` (JWT login/register + per-user provider keys)                │
-│  - `/api/projects/*` (projects, clone/refresh, sink signals)                  │
-│  - `/api/agents/*` (create/start/pause/resume, findings, reports, state)      │
-│  - `/api/agents/{id}/flow` (investigation flow graph)                         │
-│  - `/api/calltree/*` + `/api/agents/{id}/graph/*` (static + dynamic graphs)   │
-│  - `/ws` (live updates + observability stream)                                │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                              API Layer                                  │  │
+│  │  /api/auth/*     /api/projects/*    /api/agents/*    /ws (WebSocket)   │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                        │                                      │
+│  ┌─────────────────────────────────────┴──────────────────────────────────┐  │
+│  │                          Agent Orchestrator                             │  │
+│  │                                                                         │  │
+│  │   ┌─────────────┐    ┌─────────────────────────────────────────────┐   │  │
+│  │   │  ReAct Loop │───▶│              Tool Executor                  │   │  │
+│  │   │ (Deep Audit)│    │                                             │   │  │
+│  │   └─────────────┘    │  ┌───────────────────────────────────────┐  │   │  │
+│  │                      │  │         Security Scanners             │  │   │  │
+│  │                      │  │  • scan_repo_for_secrets              │  │   │  │
+│  │                      │  │  • dependency_audit                   │  │   │  │
+│  │                      │  │  • grep_semantic                      │  │   │  │
+│  │                      │  │  • generate_security_report           │  │   │  │
+│  │                      │  └───────────────────────────────────────┘  │   │  │
+│  │                      │  ┌───────────────────────────────────────┐  │   │  │
+│  │                      │  │         Code Analysis Tools           │  │   │  │
+│  │                      │  │  • read_file / search_code            │  │   │  │
+│  │                      │  │  • list_files / get_file_tree         │  │   │  │
+│  │                      │  │  • analyze_ast / trace_dataflow       │  │   │  │
+│  │                      │  └───────────────────────────────────────┘  │   │  │
+│  │                      │  ┌───────────────────────────────────────┐  │   │  │
+│  │                      │  │         Execution Tools               │  │   │  │
+│  │                      │  │  • run_command (sandboxed)            │  │   │  │
+│  │                      │  │  • run_tests                          │  │   │  │
+│  │                      │  └───────────────────────────────────────┘  │   │  │
+│  │                      └─────────────────────────────────────────────┘   │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
-│  Services:                                                                    │
-│  - Agent orchestrator + ReAct-based deep audit agent                          │
-│  - Attack-surface scan/triage → sink signals                                  │
-│  - Observability + reports + session snapshots                                │
-│  - Sandbox (optional): Docker-based execution via docker.sock                 │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐   │
+│  │  Sink Signals    │  │    Findings      │  │   Flow Graph Service     │   │
+│  │  (Leads/Hotspots)│  │   (Reported)     │  │  (Investigation Tree)    │   │
+│  └──────────────────┘  └──────────────────┘  └──────────────────────────┘   │
 └───────────────┬───────────────────────────┬───────────────────────────┬──────┘
                 │                           │                           │
                 ▼                           ▼                           ▼
          Postgres (users, keys)      Redis (optional cache)     LLM providers
                                                            (Anthropic / OpenAI / Ollama)
 ```
+
+### Security Scanners Module
+
+The `backend/services/security_scanners/` module provides four specialized security analysis tools:
+
+```
+security_scanners/
+├── base.py          # Core types: ScanFinding, ScanResult, WorkspacePolicy, ScanLimits
+├── secrets.py       # Pattern + entropy-based secret detection
+├── dependencies.py  # Lockfile parsing + vulnerability database lookup
+├── grep.py          # Regex code search with context lines
+├── report.py        # Report generation (Markdown, JSON, SARIF)
+└── data/
+    └── advisory_db.json  # Bundled vulnerability database
+```
+
+| Tool | Description | Key Features |
+|------|-------------|--------------|
+| `scan_repo_for_secrets` | Detect hardcoded secrets | Pattern matching (AWS, GitHub, JWT), entropy analysis, fingerprint deduplication |
+| `dependency_audit` | Check dependencies for CVEs | Parses npm, yarn, pnpm, pip lockfiles; checks against advisory DB |
+| `grep_semantic` | Regex search with context | ReDoS protection, configurable context lines, file glob filtering |
+| `generate_security_report` | Aggregate findings | Markdown (human), JSON (machine), SARIF (CI/CD integration) |
+
+**Security Boundaries:**
+- `WorkspacePolicy` enforces: path validation, excluded directories, file size limits, symlink rejection
+- `ScanLimits` provides: time budgets, cancellation callbacks, resource caps (max files/matches)
+- Secrets are always redacted in output using `redact_secret()` with fingerprinting for deduplication
+
+### Agent Tool Execution Flow
+
+```
+User Request (e.g., "start medium scan")
+         │
+         ▼
+┌─────────────────────┐
+│  Agent Orchestrator │
+│  (time budget: 15m) │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        ReAct Loop                                │
+│                                                                  │
+│   1. Observe: Read current state, findings, coverage            │
+│   2. Think: Decide next investigation step                      │
+│   3. Act: Call tool (e.g., scan_repo_for_secrets)               │
+│   4. Repeat until budget exhausted or audit complete            │
+│                                                                  │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │                    Tool Executor                         │   │
+│   │                                                          │   │
+│   │   • Validates tool name + parameters                     │   │
+│   │   • Creates WorkspacePolicy for repo                     │   │
+│   │   • Creates ScanLimits with fraction of remaining budget │   │
+│   │   • Executes tool async                                  │   │
+│   │   • Accumulates findings (deduped, capped at 500)        │   │
+│   │   • Returns structured ToolResult                        │   │
+│   └─────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────┐
+│   Findings + Report │
+│   (Markdown/SARIF)  │
+└─────────────────────┘
+```
+
+### Data Flow
+
+```
+                     ┌─────────────────────────────────────────┐
+                     │              Repository                 │
+                     │  (cloned to data/projects/<id>/repo/)   │
+                     └───────────────────┬─────────────────────┘
+                                         │
+         ┌───────────────────────────────┼───────────────────────────────┐
+         │                               │                               │
+         ▼                               ▼                               ▼
+┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
+│ Secrets Scanner │           │ Dependency Audit│           │  Grep Semantic  │
+│                 │           │                 │           │                 │
+│ • Scan all text │           │ • Find lockfiles│           │ • Pattern search│
+│ • Pattern match │           │ • Parse deps    │           │ • Context lines │
+│ • Entropy check │           │ • Check CVEs    │           │ • File filtering│
+└────────┬────────┘           └────────┬────────┘           └────────┬────────┘
+         │                             │                             │
+         └─────────────────────────────┼─────────────────────────────┘
+                                       │
+                                       ▼
+                            ┌─────────────────────┐
+                            │   ScanFinding[]     │
+                            │                     │
+                            │ • tool, severity    │
+                            │ • file_path, lines  │
+                            │ • snippet, details  │
+                            │ • confidence        │
+                            └──────────┬──────────┘
+                                       │
+                    ┌──────────────────┼──────────────────┐
+                    │                  │                  │
+                    ▼                  ▼                  ▼
+          ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+          │    Markdown     │ │      JSON       │ │      SARIF      │
+          │    Report       │ │     Export      │ │  (CI/CD tools)  │
+          └─────────────────┘ └─────────────────┘ └─────────────────┘
+```
+
+### Key Design Decisions
+
+1. **Time-Budgeted Scans**: Agents operate within explicit time budgets (5m to 24h). Each tool gets a fraction of remaining budget via `ScanLimits.deadline`.
+
+2. **Signals vs Findings**: Raw scanner output produces "signals" (leads). The agent promotes verified signals to "findings" after investigation.
+
+3. **Finding Accumulation**: Findings are deduplicated by fingerprint and capped at 500 per session. Priority eviction keeps highest-severity findings.
+
+4. **Async by Default**: All scanners use `asyncio.to_thread()` to avoid blocking the event loop during file I/O and regex operations.
+
+5. **Offline-First Scanning**: Security scanners work without network access. Vulnerability databases are bundled locally.
 
 ## Quick Start
 
@@ -175,12 +319,26 @@ curl http://localhost:8000/api/projects/$PROJECT_ID/sink-signals \
 quick_hack/
 ├── backend/
 │   ├── main.py                 # FastAPI app + router wiring
-│   ├── agents/                 # Agents + tools (ReAct deep audit lives here)
+│   ├── agents/
+│   │   ├── tools.py            # ToolExecutor + AGENT_TOOLS definitions
+│   │   └── deep_audit.py       # ReAct-based audit agent
 │   ├── routers/                # /api/* HTTP endpoints + /ws
-│   ├── services/               # Orchestrator, sink signals, flow, reports, etc.
+│   ├── services/
+│   │   ├── security_scanners/  # Security analysis tools
+│   │   │   ├── base.py         # Core types (ScanFinding, ScanResult, etc.)
+│   │   │   ├── secrets.py      # Secret detection (patterns + entropy)
+│   │   │   ├── dependencies.py # Dependency vulnerability audit
+│   │   │   ├── grep.py         # Semantic code search
+│   │   │   ├── report.py       # Report generation (MD/JSON/SARIF)
+│   │   │   └── data/           # Bundled vulnerability database
+│   │   ├── orchestrator.py     # Agent lifecycle management
+│   │   ├── sink_signals.py     # Lead/hotspot tracking
+│   │   └── flow.py             # Investigation graph service
 │   ├── database/               # SQLAlchemy models + connection
 │   ├── prompts/                # Prompt templates / policies
-│   └── tests/                  # Pytest suite
+│   └── tests/
+│       ├── services/security_scanners/  # Scanner unit tests (201 tests)
+│       └── agents/             # Tool integration tests
 ├── frontend/
 │   ├── app/                    # Next.js App Router
 │   ├── components/             # Panels, diagrams, modals

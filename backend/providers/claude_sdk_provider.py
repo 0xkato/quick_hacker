@@ -209,15 +209,55 @@ and providing actionable security insights."""
 
         events: list[dict[str, Any]] = []
 
+        # Debug: Check what methods the client has
+        print(f"[ClaudeSDKProvider] Client type: {type(self.client)}")
+        print(f"[ClaudeSDKProvider] Client methods: {[m for m in dir(self.client) if not m.startswith('_')]}")
+
         # Send query and process response stream
-        # The SDK's query() returns a coroutine that resolves to an async iterator
-        response_stream = await self.client.query(prompt)
-        async for message in response_stream:
-            ws_events = self._to_ws_events(message)
-            for event in ws_events:
-                events.append(event)
-                if on_event:
-                    on_event(event)
+        # Try different approaches based on SDK API
+        try:
+            # Approach 1: query() might be a sync method returning async iterator
+            query_result = self.client.query(prompt)
+            print(f"[ClaudeSDKProvider] query() returned: {type(query_result)}")
+
+            # Check if it's a coroutine that needs awaiting
+            import inspect
+            if inspect.iscoroutine(query_result):
+                print("[ClaudeSDKProvider] query() returned coroutine, awaiting...")
+                query_result = await query_result
+                print(f"[ClaudeSDKProvider] After await: {type(query_result)}")
+
+            # Check if result is iterable
+            if query_result is None:
+                print("[ClaudeSDKProvider] query() returned None - SDK may use different pattern")
+                # Maybe the SDK sends messages to a callback instead?
+                # Return empty for now
+                return events
+
+            if hasattr(query_result, '__aiter__'):
+                async for message in query_result:
+                    print(f"[ClaudeSDKProvider] Got message: {type(message)}")
+                    ws_events = self._to_ws_events(message)
+                    for event in ws_events:
+                        events.append(event)
+                        if on_event:
+                            on_event(event)
+            elif hasattr(query_result, '__iter__'):
+                for message in query_result:
+                    print(f"[ClaudeSDKProvider] Got message: {type(message)}")
+                    ws_events = self._to_ws_events(message)
+                    for event in ws_events:
+                        events.append(event)
+                        if on_event:
+                            on_event(event)
+            else:
+                print(f"[ClaudeSDKProvider] Unexpected query result: {query_result}")
+
+        except Exception as e:
+            print(f"[ClaudeSDKProvider] Error in run_turn: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
         return events
 

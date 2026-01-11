@@ -195,7 +195,7 @@ def _semantic_grep_sync(
             break
 
         # Read file content (will skip binary files)
-        content = read_file_safe(path)
+        content, _ = read_file_safe(path)
         if content is None:
             files_skipped += 1
             continue
@@ -237,19 +237,24 @@ def _semantic_grep_sync(
             # Build context snippet
             snippet = _build_context_snippet(lines, line_no, context_lines)
 
+            # Calculate line_end based on context
+            line_end = min(line_no + context_lines, len(lines)) if context_lines > 0 else None
+
             # Create finding
             finding = ScanFinding(
                 tool=ScannerTool.GREP,
                 severity=Severity.INFO,
                 title=f"Pattern match: {pattern[:50]}{'...' if len(pattern) > 50 else ''}",
-                description=f"Found pattern match in source code at line {line_no}",
                 file_path=str(path),
-                line_number=line_no,
-                matched_text=snippet[:500] if snippet else match.group(0)[:100],
-                metadata={
+                line_start=line_no,
+                line_end=line_end,
+                snippet=snippet[:500] if snippet else match.group(0)[:100],
+                confidence=1.0,  # High confidence for exact pattern matches
+                details={
                     "pattern": pattern,
                     "match": match.group(0)[:100],
                     "context_lines": context_lines,
+                    "description": f"Found pattern match in source code at line {line_no}",
                 },
             )
             findings.append(finding)

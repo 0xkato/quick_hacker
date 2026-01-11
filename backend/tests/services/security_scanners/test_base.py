@@ -2,8 +2,8 @@
 import pytest
 import tempfile
 import os
+import time
 from pathlib import Path
-from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from services.security_scanners.base import (
@@ -83,37 +83,43 @@ class TestWorkspacePolicy:
             yield tmpdir
 
     def test_validate_path_valid_file(self, temp_workspace):
-        """validate_path returns True for valid files within workspace."""
+        """validate_path returns (True, None) for valid files within workspace."""
         policy = WorkspacePolicy(
             workspace_root=temp_workspace,
             max_file_size=1024 * 1024,
             excluded_dirs={"node_modules", ".git", "__pycache__"},
         )
         test_file = Path(temp_workspace) / "test.py"
-        assert policy.validate_path(test_file) is True
+        is_valid, error = policy.validate_path(test_file)
+        assert is_valid is True
+        assert error is None
 
     def test_validate_path_rejects_outside_workspace(self, temp_workspace):
-        """validate_path returns False for files outside workspace."""
+        """validate_path returns (False, error) for files outside workspace."""
         policy = WorkspacePolicy(
             workspace_root=temp_workspace,
             max_file_size=1024 * 1024,
             excluded_dirs={"node_modules", ".git"},
         )
         outside_file = Path("/etc/passwd")
-        assert policy.validate_path(outside_file) is False
+        is_valid, error = policy.validate_path(outside_file)
+        assert is_valid is False
+        assert error is not None
 
     def test_validate_path_rejects_excluded_dirs(self, temp_workspace):
-        """validate_path returns False for files in excluded directories."""
+        """validate_path returns (False, error) for files in excluded directories."""
         policy = WorkspacePolicy(
             workspace_root=temp_workspace,
             max_file_size=1024 * 1024,
             excluded_dirs={"node_modules", ".git"},
         )
         excluded_file = Path(temp_workspace) / "node_modules" / "package.json"
-        assert policy.validate_path(excluded_file) is False
+        is_valid, error = policy.validate_path(excluded_file)
+        assert is_valid is False
+        assert "excluded" in error.lower()
 
     def test_validate_path_rejects_oversized_files(self, temp_workspace):
-        """validate_path returns False for files exceeding max size."""
+        """validate_path returns (False, error) for files exceeding max size."""
         policy = WorkspacePolicy(
             workspace_root=temp_workspace,
             max_file_size=10,  # Very small limit
@@ -121,10 +127,12 @@ class TestWorkspacePolicy:
         )
         test_file = Path(temp_workspace) / "test.py"
         # File content is "print('hello')" which is > 10 bytes
-        assert policy.validate_path(test_file) is False
+        is_valid, error = policy.validate_path(test_file)
+        assert is_valid is False
+        assert "size" in error.lower()
 
     def test_validate_path_rejects_symlinks(self, temp_workspace):
-        """validate_path returns False for symlinks."""
+        """validate_path returns (False, error) for symlinks."""
         policy = WorkspacePolicy(
             workspace_root=temp_workspace,
             max_file_size=1024 * 1024,
@@ -133,17 +141,21 @@ class TestWorkspacePolicy:
         symlink_path = Path(temp_workspace) / "link.py"
         target_path = Path(temp_workspace) / "test.py"
         symlink_path.symlink_to(target_path)
-        assert policy.validate_path(symlink_path) is False
+        is_valid, error = policy.validate_path(symlink_path)
+        assert is_valid is False
+        assert "symlink" in error.lower()
 
     def test_validate_path_rejects_nonexistent_files(self, temp_workspace):
-        """validate_path returns False for non-existent files."""
+        """validate_path returns (False, error) for non-existent files."""
         policy = WorkspacePolicy(
             workspace_root=temp_workspace,
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
         nonexistent = Path(temp_workspace) / "does_not_exist.py"
-        assert policy.validate_path(nonexistent) is False
+        is_valid, error = policy.validate_path(nonexistent)
+        assert is_valid is False
+        assert "exist" in error.lower()
 
     def test_iter_files_yields_valid_files(self, temp_workspace):
         """iter_files yields only valid files."""
@@ -175,31 +187,49 @@ class TestScanLimits:
     def test_is_cancelled_false_initially(self):
         """is_cancelled returns False when not cancelled."""
         limits = ScanLimits(
-            deadline=datetime.now() + timedelta(minutes=5),
-            cancelled=False,
+            deadline=time.monotonic() + 300,  # 5 minutes from now
+            cancelled=None,
         )
         assert limits.is_cancelled() is False
 
-    def test_is_cancelled_true_when_set(self):
-        """is_cancelled returns True when cancelled flag is set."""
+    def test_is_cancelled_true_when_callable_returns_true(self):
+        """is_cancelled returns True when cancelled callable returns True."""
         limits = ScanLimits(
-            deadline=datetime.now() + timedelta(minutes=5),
-            cancelled=True,
+            deadline=time.monotonic() + 300,
+            cancelled=lambda: True,
         )
         assert limits.is_cancelled() is True
+
+    def test_is_cancelled_false_when_callable_returns_false(self):
+        """is_cancelled returns False when cancelled callable returns False."""
+        limits = ScanLimits(
+            deadline=time.monotonic() + 300,
+            cancelled=lambda: False,
+        )
+        assert limits.is_cancelled() is False
 
     def test_is_cancelled_true_when_deadline_passed(self):
         """is_cancelled returns True when deadline has passed."""
         limits = ScanLimits(
-            deadline=datetime.now() - timedelta(seconds=1),
-            cancelled=False,
+            deadline=time.monotonic() - 1,  # 1 second in the past
+            cancelled=None,
         )
         assert limits.is_cancelled() is True
 
     def test_scan_limits_with_no_deadline(self):
         """ScanLimits works with None deadline."""
-        limits = ScanLimits(deadline=None, cancelled=False)
+        limits = ScanLimits(deadline=None, cancelled=None)
         assert limits.is_cancelled() is False
+
+    def test_scan_limits_default_values(self):
+        """ScanLimits has correct default values."""
+        limits = ScanLimits()
+        assert limits.cancelled is None
+        assert limits.deadline is None
+        assert limits.max_files == 10000
+        assert limits.max_matches_total == 1000
+        assert limits.max_matches_per_file == 100
+        assert limits.regex_timeout_ms == 5000
 
 
 class TestScanFinding:
@@ -211,14 +241,17 @@ class TestScanFinding:
             tool=ScannerTool.SECRETS,
             severity=Severity.HIGH,
             title="Hardcoded API Key",
-            description="Found hardcoded API key in source",
             file_path="/app/config.py",
-            line_number=42,
-            matched_text="sk-live-xxxxx",
+            line_start=42,
+            line_end=None,
+            snippet="sk-live-xxxxx",
+            confidence=0.9,
         )
         assert finding.tool == ScannerTool.SECRETS
         assert finding.severity == Severity.HIGH
-        assert finding.line_number == 42
+        assert finding.line_start == 42
+        assert finding.line_end is None
+        assert finding.confidence == 0.9
 
     def test_scan_finding_to_dict(self):
         """ScanFinding.to_dict returns proper dictionary."""
@@ -226,10 +259,11 @@ class TestScanFinding:
             tool=ScannerTool.GREP,
             severity=Severity.MEDIUM,
             title="SQL Query Pattern",
-            description="Found raw SQL query",
             file_path="/app/db.py",
-            line_number=10,
-            matched_text="SELECT * FROM users",
+            line_start=10,
+            line_end=12,
+            snippet="SELECT * FROM users",
+            confidence=1.0,
         )
         result = finding.to_dict()
         assert isinstance(result, dict)
@@ -237,22 +271,40 @@ class TestScanFinding:
         assert result["severity"] == "medium"
         assert result["title"] == "SQL Query Pattern"
         assert result["file_path"] == "/app/db.py"
-        assert result["line_number"] == 10
+        assert result["line_start"] == 10
+        assert result["line_end"] == 12
+        assert result["snippet"] == "SELECT * FROM users"
+        assert result["confidence"] == 1.0
 
-    def test_scan_finding_optional_fields(self):
-        """ScanFinding handles optional metadata field."""
+    def test_scan_finding_with_details(self):
+        """ScanFinding handles details field."""
         finding = ScanFinding(
             tool=ScannerTool.DEPENDENCIES,
             severity=Severity.CRITICAL,
             title="Vulnerable Dependency",
-            description="CVE-2024-1234 in package",
             file_path="/app/requirements.txt",
-            line_number=5,
-            matched_text="requests==2.25.0",
-            metadata={"cve_id": "CVE-2024-1234", "fixed_version": "2.31.0"},
+            line_start=5,
+            line_end=None,
+            snippet="requests==2.25.0",
+            confidence=1.0,
+            details={"cve_id": "CVE-2024-1234", "fixed_version": "2.31.0"},
         )
         result = finding.to_dict()
-        assert result["metadata"]["cve_id"] == "CVE-2024-1234"
+        assert result["details"]["cve_id"] == "CVE-2024-1234"
+
+    def test_scan_finding_default_details(self):
+        """ScanFinding has empty dict as default for details."""
+        finding = ScanFinding(
+            tool=ScannerTool.SECRETS,
+            severity=Severity.HIGH,
+            title="Test",
+            file_path="/test.py",
+            line_start=1,
+            line_end=None,
+            snippet="test",
+            confidence=0.8,
+        )
+        assert finding.details == {}
 
 
 class TestScanResult:
@@ -264,10 +316,11 @@ class TestScanResult:
             tool=ScannerTool.SECRETS,
             severity=Severity.HIGH,
             title="Test Finding",
-            description="Test",
             file_path="/test.py",
-            line_number=1,
-            matched_text="secret",
+            line_start=1,
+            line_end=None,
+            snippet="secret",
+            confidence=0.9,
         )
         result = ScanResult(
             success=True,
@@ -341,10 +394,11 @@ class TestScanResult:
             tool=ScannerTool.SECRETS,
             severity=Severity.MEDIUM,
             title="Test",
-            description="Test finding",
             file_path="/test.py",
-            line_number=1,
-            matched_text="test",
+            line_start=1,
+            line_end=None,
+            snippet="test",
+            confidence=0.8,
         )
         result = ScanResult(
             success=True,
@@ -437,39 +491,46 @@ class TestReadFileSafe:
     """Tests for read_file_safe utility function."""
 
     def test_read_file_safe_reads_content(self):
-        """read_file_safe reads file content."""
+        """read_file_safe reads file content and returns (content, None)."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("Hello, World!")
             f.flush()
             try:
-                content = read_file_safe(Path(f.name))
+                content, error = read_file_safe(Path(f.name))
                 assert content == "Hello, World!"
+                assert error is None
             finally:
                 os.unlink(f.name)
 
-    def test_read_file_safe_returns_none_for_missing(self):
-        """read_file_safe returns None for missing files."""
-        result = read_file_safe(Path("/nonexistent/file.txt"))
-        assert result is None
+    def test_read_file_safe_returns_error_for_missing(self):
+        """read_file_safe returns (None, error) for missing files."""
+        content, error = read_file_safe(Path("/nonexistent/file.txt"))
+        assert content is None
+        assert error is not None
+        assert "exist" in error.lower()
 
-    def test_read_file_safe_returns_none_for_binary(self):
-        """read_file_safe returns None for binary files."""
+    def test_read_file_safe_returns_error_for_binary(self):
+        """read_file_safe returns (None, error) for binary files."""
         with tempfile.NamedTemporaryFile(mode="wb", suffix=".bin", delete=False) as f:
             f.write(b"\x00\x01\x02\xff\xfe\xfd")
             f.flush()
             try:
-                result = read_file_safe(Path(f.name))
-                assert result is None
+                content, error = read_file_safe(Path(f.name))
+                assert content is None
+                assert error is not None
+                assert "binary" in error.lower()
             finally:
                 os.unlink(f.name)
 
     def test_read_file_safe_respects_max_size(self):
-        """read_file_safe returns None for files exceeding max_size."""
+        """read_file_safe returns (None, error) for files exceeding max_size."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("x" * 1000)
             f.flush()
             try:
-                result = read_file_safe(Path(f.name), max_size=100)
-                assert result is None
+                content, error = read_file_safe(Path(f.name), max_size=100)
+                assert content is None
+                assert error is not None
+                assert "size" in error.lower()
             finally:
                 os.unlink(f.name)

@@ -459,7 +459,8 @@ def _audit_dependencies_sync(
     if lockfile_path:
         # Scan specific lockfile
         path = Path(lockfile_path)
-        if path.exists() and policy.validate_path(path):
+        is_valid, _ = policy.validate_path(path)
+        if path.exists() and is_valid:
             lockfiles_to_scan.append(path)
     else:
         # Auto-detect lockfiles
@@ -485,7 +486,7 @@ def _audit_dependencies_sync(
             break
 
         # Read lockfile content
-        content = read_file_safe(lockfile)
+        content, _ = read_file_safe(lockfile)
         if content is None:
             files_skipped += 1
             continue
@@ -531,11 +532,12 @@ def _audit_dependencies_sync(
                         tool=ScannerTool.DEPENDENCIES,
                         severity=severity,
                         title=f"Vulnerable dependency: {pkg_name}",
-                        description=f"Package {pkg_name}@{pkg_version} has a known vulnerability: {title}",
                         file_path=str(lockfile),
-                        line_number=1,  # Lockfiles don't have meaningful line numbers
-                        matched_text=f"{pkg_name}@{pkg_version}",
-                        metadata={
+                        line_start=1,  # Lockfiles don't have meaningful line numbers
+                        line_end=None,
+                        snippet=f"{pkg_name}@{pkg_version}",
+                        confidence=1.0,  # High confidence for known vulnerabilities
+                        details={
                             "ecosystem": ecosystem,
                             "package": pkg_name,
                             "installed_version": pkg_version,
@@ -544,6 +546,7 @@ def _audit_dependencies_sync(
                             "vulnerable_range": vuln_range,
                             "advisory_title": title,
                             "source_db_version": db_version,
+                            "description": f"Package {pkg_name}@{pkg_version} has a known vulnerability: {title}",
                         },
                     )
                     findings.append(finding)

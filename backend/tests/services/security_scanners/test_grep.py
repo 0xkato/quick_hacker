@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.security_scanners.base import WorkspacePolicy, ScanLimits
-from backend.services.security_scanners.grep import (
+from services.security_scanners.base import WorkspacePolicy, ScanLimits
+from services.security_scanners.grep import (
     semantic_grep,
     validate_pattern,
 )
@@ -74,8 +74,8 @@ class TestSemanticGrep:
 
         assert result.success is True
         for finding in result.findings:
-            # matched_text should contain the match with context
-            assert finding.matched_text is not None
+            # snippet should contain the match with context
+            assert finding.snippet is not None
 
     @pytest.mark.asyncio
     async def test_respects_file_glob(self, code_repo):
@@ -125,7 +125,7 @@ class TestSemanticGrep:
         assert len(result.findings) == 1
 
     @pytest.mark.asyncio
-    async def test_includes_match_in_metadata(self, code_repo):
+    async def test_includes_match_in_details(self, code_repo):
         policy = WorkspacePolicy(
             workspace_root=str(code_repo),
             max_file_size=10 * 1024 * 1024,
@@ -133,9 +133,9 @@ class TestSemanticGrep:
         result = await semantic_grep(policy, pattern=r"eval\([^)]+\)")
 
         for finding in result.findings:
-            assert finding.metadata is not None
-            assert "match" in finding.metadata
-            assert "pattern" in finding.metadata
+            assert finding.details is not None
+            assert "match" in finding.details
+            assert "pattern" in finding.details
 
     @pytest.mark.asyncio
     async def test_cancellation_support(self, code_repo):
@@ -143,7 +143,7 @@ class TestSemanticGrep:
             workspace_root=str(code_repo),
             max_file_size=10 * 1024 * 1024,
         )
-        limits = ScanLimits(cancelled=True)
+        limits = ScanLimits(cancelled=lambda: True)
         result = await semantic_grep(policy, pattern=r"return", limits=limits)
 
         # Should return early due to cancellation

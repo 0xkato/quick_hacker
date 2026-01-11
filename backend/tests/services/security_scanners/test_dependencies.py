@@ -3,8 +3,8 @@ import pytest
 import tempfile
 import json
 import os
+import time
 from pathlib import Path
-from datetime import datetime, timedelta
 
 from services.security_scanners.base import (
     WorkspacePolicy,
@@ -429,13 +429,13 @@ class TestDetectVulnerableNpmPackage:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         assert result.success is True
         # Should find vulnerability in lodash 4.17.15
-        lodash_findings = [f for f in result.findings if "lodash" in f.description.lower()]
+        lodash_findings = [f for f in result.findings if "lodash" in f.title.lower()]
         assert len(lodash_findings) >= 1
 
     def test_detect_vulnerable_minimist(self, temp_workspace):
@@ -458,12 +458,12 @@ class TestDetectVulnerableNpmPackage:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         assert result.success is True
-        minimist_findings = [f for f in result.findings if "minimist" in f.description.lower()]
+        minimist_findings = [f for f in result.findings if "minimist" in f.title.lower()]
         assert len(minimist_findings) >= 1
 
 
@@ -493,12 +493,12 @@ class TestDetectVulnerablePythonPackage:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         assert result.success is True
-        requests_findings = [f for f in result.findings if "requests" in f.description.lower()]
+        requests_findings = [f for f in result.findings if "requests" in f.title.lower()]
         assert len(requests_findings) >= 1
 
     def test_detect_vulnerable_urllib3(self, temp_workspace):
@@ -512,12 +512,12 @@ class TestDetectVulnerablePythonPackage:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         assert result.success is True
-        urllib3_findings = [f for f in result.findings if "urllib3" in f.description.lower()]
+        urllib3_findings = [f for f in result.findings if "urllib3" in f.title.lower()]
         assert len(urllib3_findings) >= 1
 
     def test_detect_vulnerable_pyyaml(self, temp_workspace):
@@ -531,12 +531,12 @@ class TestDetectVulnerablePythonPackage:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         assert result.success is True
-        pyyaml_findings = [f for f in result.findings if "pyyaml" in f.description.lower()]
+        pyyaml_findings = [f for f in result.findings if "pyyaml" in f.title.lower()]
         assert len(pyyaml_findings) >= 1
 
 
@@ -556,7 +556,7 @@ class TestAdvisoryDetails:
             yield tmpdir
 
     def test_finding_contains_ecosystem(self, temp_workspace):
-        """Finding metadata should contain ecosystem."""
+        """Finding details should contain ecosystem."""
         lockfile = {
             "name": "test-project",
             "version": "1.0.0",
@@ -573,18 +573,18 @@ class TestAdvisoryDetails:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         if result.findings:
             finding = result.findings[0]
-            assert finding.metadata is not None
-            assert "ecosystem" in finding.metadata
-            assert finding.metadata["ecosystem"] in ["npm", "pypi"]
+            assert finding.details is not None
+            assert "ecosystem" in finding.details
+            assert finding.details["ecosystem"] in ["npm", "pypi"]
 
     def test_finding_contains_package_info(self, temp_workspace):
-        """Finding metadata should contain package and version info."""
+        """Finding details should contain package and version info."""
         requirements = """requests==2.19.0
 """
         (Path(temp_workspace) / "requirements.txt").write_text(requirements)
@@ -594,18 +594,18 @@ class TestAdvisoryDetails:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         if result.findings:
             finding = result.findings[0]
-            assert finding.metadata is not None
-            assert "package" in finding.metadata
-            assert "installed_version" in finding.metadata
+            assert finding.details is not None
+            assert "package" in finding.details
+            assert "installed_version" in finding.details
 
     def test_finding_contains_advisory_info(self, temp_workspace):
-        """Finding metadata should contain advisory details."""
+        """Finding details should contain advisory details."""
         lockfile = {
             "name": "test-project",
             "version": "1.0.0",
@@ -622,19 +622,19 @@ class TestAdvisoryDetails:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         if result.findings:
             finding = result.findings[0]
-            assert finding.metadata is not None
-            assert "advisory_id" in finding.metadata
-            assert "vulnerable_range" in finding.metadata
-            assert "advisory_title" in finding.metadata
+            assert finding.details is not None
+            assert "advisory_id" in finding.details
+            assert "vulnerable_range" in finding.details
+            assert "advisory_title" in finding.details
 
     def test_finding_contains_cve(self, temp_workspace):
-        """Finding metadata should contain CVE if available."""
+        """Finding details should contain CVE if available."""
         lockfile = {
             "name": "test-project",
             "version": "1.0.0",
@@ -651,18 +651,18 @@ class TestAdvisoryDetails:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         if result.findings:
             finding = result.findings[0]
-            assert finding.metadata is not None
+            assert finding.details is not None
             # CVE may be None or a string
-            assert "cve" in finding.metadata
+            assert "cve" in finding.details
 
     def test_finding_contains_source_db_version(self, temp_workspace):
-        """Finding metadata should contain source DB version."""
+        """Finding details should contain source DB version."""
         requirements = """requests==2.19.0
 """
         (Path(temp_workspace) / "requirements.txt").write_text(requirements)
@@ -672,14 +672,14 @@ class TestAdvisoryDetails:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
         if result.findings:
             finding = result.findings[0]
-            assert finding.metadata is not None
-            assert "source_db_version" in finding.metadata
+            assert finding.details is not None
+            assert "source_db_version" in finding.details
 
 
 class TestAutoDetectLockfiles:
@@ -715,7 +715,7 @@ class TestAutoDetectLockfiles:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -733,7 +733,7 @@ class TestAutoDetectLockfiles:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -764,7 +764,7 @@ class TestAutoDetectLockfiles:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -772,7 +772,7 @@ class TestAutoDetectLockfiles:
         # Should have scanned both lockfiles
         assert result.files_scanned >= 2
         # Should find vulnerabilities from both ecosystems
-        ecosystems = set(f.metadata.get("ecosystem") for f in result.findings if f.metadata)
+        ecosystems = set(f.details.get("ecosystem") for f in result.findings if f.details)
         assert len(ecosystems) >= 2 or len(result.findings) >= 2
 
 
@@ -815,7 +815,7 @@ class TestSpecificLockfilePath:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         # Specify only the npm lockfile
         lockfile_path = str(Path(temp_workspace) / "package-lock.json")
@@ -826,8 +826,8 @@ class TestSpecificLockfilePath:
         assert result.files_scanned == 1
         # All findings should be from npm ecosystem
         for finding in result.findings:
-            if finding.metadata:
-                assert finding.metadata.get("ecosystem") == "npm"
+            if finding.details:
+                assert finding.details.get("ecosystem") == "npm"
 
 
 class TestScanLimits:
@@ -864,7 +864,7 @@ class TestScanLimits:
             excluded_dirs=set(),
         )
         # Pre-cancel
-        limits = ScanLimits(cancelled=True)
+        limits = ScanLimits(cancelled=lambda: True)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -891,7 +891,7 @@ class TestScanLimits:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits, max_matches=1)
 
@@ -944,7 +944,7 @@ class TestExcludedDirectories:
             max_file_size=1024 * 1024,
             excluded_dirs={"node_modules"},
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -987,7 +987,7 @@ class TestAsyncWrapper:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = await audit_dependencies(policy, limits)
 
@@ -1005,7 +1005,7 @@ class TestAsyncWrapper:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         # Should not raise
         result = await audit_dependencies(policy, limits)
@@ -1043,7 +1043,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -1058,7 +1058,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 
@@ -1075,7 +1075,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _audit_dependencies_sync(policy, limits)
 

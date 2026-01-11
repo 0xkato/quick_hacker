@@ -192,7 +192,7 @@ def _scan_for_secrets_sync(
             break
 
         # Read file content (will skip binary files)
-        content = read_file_safe(file_path)
+        content, _ = read_file_safe(file_path)
         if content is None:
             files_skipped += 1
             continue
@@ -221,13 +221,15 @@ def _scan_for_secrets_sync(
                         tool=ScannerTool.SECRETS,
                         severity=pattern_def["severity"],
                         title=pattern_def["description"],
-                        description=f"Found {pattern_def['description']} in source code",
                         file_path=str(file_path),
-                        line_number=line_num,
-                        matched_text=redacted,
-                        metadata={
+                        line_start=line_num,
+                        line_end=None,
+                        snippet=redacted,
+                        confidence=0.9,  # High confidence for pattern matches
+                        details={
                             "pattern_name": pattern_def["name"],
                             "fingerprint": fp,
+                            "description": f"Found {pattern_def['description']} in source code",
                         },
                     )
                     findings.append(finding)
@@ -260,14 +262,16 @@ def _scan_for_secrets_sync(
                         tool=ScannerTool.SECRETS,
                         severity=Severity.MEDIUM,
                         title="High Entropy String",
-                        description=f"Found high-entropy string (entropy: {entropy:.2f}) in secret-like context",
                         file_path=str(file_path),
-                        line_number=line_num,
-                        matched_text=redacted,
-                        metadata={
+                        line_start=line_num,
+                        line_end=None,
+                        snippet=redacted,
+                        confidence=0.7,  # Medium confidence for entropy-based detection
+                        details={
                             "pattern_name": "high_entropy",
                             "fingerprint": fp,
                             "entropy": entropy,
+                            "description": f"Found high-entropy string (entropy: {entropy:.2f}) in secret-like context",
                         },
                     )
                     findings.append(finding)

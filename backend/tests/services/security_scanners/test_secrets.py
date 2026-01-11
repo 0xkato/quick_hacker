@@ -3,8 +3,8 @@ import pytest
 import tempfile
 import os
 import asyncio
+import time
 from pathlib import Path
-from datetime import datetime, timedelta
 
 from services.security_scanners.base import (
     WorkspacePolicy,
@@ -182,7 +182,7 @@ class TestPatternDetection:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -190,7 +190,7 @@ class TestPatternDetection:
         assert len(result.findings) >= 1
 
         # Find the AWS key finding
-        aws_findings = [f for f in result.findings if "aws" in f.title.lower() or "AKIA" in f.matched_text]
+        aws_findings = [f for f in result.findings if "aws" in f.title.lower() or "AKIA" in f.snippet]
         assert len(aws_findings) >= 1
 
     def test_detect_github_token(self, temp_workspace):
@@ -203,11 +203,11 @@ class TestPatternDetection:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
-        github_findings = [f for f in result.findings if "github" in f.title.lower() or "ghp_" in f.matched_text]
+        github_findings = [f for f in result.findings if "github" in f.title.lower() or "ghp_" in f.snippet]
         assert len(github_findings) >= 1
 
     def test_detect_generic_api_key(self, temp_workspace):
@@ -220,7 +220,7 @@ class TestPatternDetection:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -242,8 +242,8 @@ class TestSecretRedaction:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield tmpdir
 
-    def test_secret_is_redacted_in_matched_text(self, temp_workspace):
-        """Matched text should have the secret redacted."""
+    def test_secret_is_redacted_in_snippet(self, temp_workspace):
+        """Snippet should have the secret redacted."""
         test_file = Path(temp_workspace) / "config.py"
         secret = "AKIAIOSFODNN7EXAMPLE"
         test_file.write_text(f'AWS_KEY = "{secret}"')
@@ -253,15 +253,15 @@ class TestSecretRedaction:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
         for finding in result.findings:
-            # Full secret should not appear in matched_text
-            if "AKIA" in finding.matched_text:
+            # Full secret should not appear in snippet
+            if "AKIA" in finding.snippet:
                 # Should be redacted
-                assert "***" in finding.matched_text or secret not in finding.matched_text
+                assert "***" in finding.snippet or secret not in finding.snippet
 
 
 class TestFingerprintInDetails:
@@ -279,8 +279,8 @@ class TestFingerprintInDetails:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield tmpdir
 
-    def test_fingerprint_included_in_metadata(self, temp_workspace):
-        """Finding metadata should include fingerprint."""
+    def test_fingerprint_included_in_details(self, temp_workspace):
+        """Finding details should include fingerprint."""
         test_file = Path(temp_workspace) / "config.py"
         test_file.write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"')
 
@@ -289,16 +289,16 @@ class TestFingerprintInDetails:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
         for finding in result.findings:
-            assert finding.metadata is not None
-            assert "fingerprint" in finding.metadata
+            assert finding.details is not None
+            assert "fingerprint" in finding.details
             # Fingerprint should be a non-empty string
-            assert isinstance(finding.metadata["fingerprint"], str)
-            assert len(finding.metadata["fingerprint"]) > 0
+            assert isinstance(finding.details["fingerprint"], str)
+            assert len(finding.details["fingerprint"]) > 0
 
 
 class TestCancellationSupport:
@@ -326,7 +326,7 @@ class TestCancellationSupport:
             excluded_dirs=set(),
         )
         # Pre-cancel the scan
-        limits = ScanLimits(cancelled=True)
+        limits = ScanLimits(cancelled=lambda: True)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -341,7 +341,7 @@ class TestCancellationSupport:
             excluded_dirs=set(),
         )
         # Deadline already passed
-        limits = ScanLimits(deadline=datetime.now() - timedelta(seconds=1))
+        limits = ScanLimits(deadline=time.monotonic() - 1)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -376,7 +376,7 @@ class TestEntropyDetection:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits, entropy_threshold=3.5)
 
@@ -396,7 +396,7 @@ class TestEntropyDetection:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits, entropy_threshold=4.5)
 
@@ -435,7 +435,7 @@ class TestBinaryFileSkipping:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -473,7 +473,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -488,7 +488,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -511,7 +511,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -528,7 +528,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -546,7 +546,7 @@ class TestScanMetrics:
             excluded_dirs=set(),
         )
         # Pre-cancel the scan
-        limits = ScanLimits(cancelled=True)
+        limits = ScanLimits(cancelled=lambda: True)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -562,7 +562,7 @@ class TestScanMetrics:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
@@ -596,7 +596,7 @@ class TestAsyncWrapper:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = await scan_for_secrets(policy, limits)
 
@@ -617,7 +617,7 @@ class TestAsyncWrapper:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         # Should not raise
         result = await scan_for_secrets(policy, limits)
@@ -651,11 +651,11 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyf8gM...
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
-        key_findings = [f for f in result.findings if "private key" in f.title.lower() or "PRIVATE KEY" in f.matched_text]
+        key_findings = [f for f in result.findings if "private key" in f.title.lower() or "PRIVATE KEY" in f.snippet]
         assert len(key_findings) >= 1
 
 
@@ -686,9 +686,9 @@ class TestJWTDetection:
             max_file_size=1024 * 1024,
             excluded_dirs=set(),
         )
-        limits = ScanLimits(cancelled=False)
+        limits = ScanLimits(cancelled=None)
 
         result = _scan_for_secrets_sync(policy, limits)
 
-        jwt_findings = [f for f in result.findings if "jwt" in f.title.lower() or "eyJ" in f.matched_text]
+        jwt_findings = [f for f in result.findings if "jwt" in f.title.lower() or "eyJ" in f.snippet]
         assert len(jwt_findings) >= 1

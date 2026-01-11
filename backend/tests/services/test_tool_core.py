@@ -54,3 +54,15 @@ class TestToolCorePathValidation:
         """File paths should be rejected by _validate_dir."""
         with pytest.raises(NotADirectoryError):
             tool_core._validate_dir("src/main.py")
+
+    def test_validate_dir_rejects_symlink(self, tool_core, temp_repo):
+        """Symlink directories should be rejected."""
+        (temp_repo / "real_dir").mkdir()
+        (temp_repo / "link_dir").symlink_to(temp_repo / "real_dir")
+        with pytest.raises(ValueError, match="Symlink"):
+            tool_core._validate_dir("link_dir")
+
+    def test_validate_dir_rejects_path_traversal(self, tool_core):
+        """Directory path traversal should be rejected."""
+        with pytest.raises(ValueError, match="escapes"):
+            tool_core._validate_dir("../../../tmp")

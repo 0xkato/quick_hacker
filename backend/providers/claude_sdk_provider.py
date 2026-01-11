@@ -210,7 +210,9 @@ and providing actionable security insights."""
         events: list[dict[str, Any]] = []
 
         # Send query and process response stream
-        async for message in self.client.query(prompt):
+        # The SDK's query() returns a coroutine that resolves to an async iterator
+        response_stream = await self.client.query(prompt)
+        async for message in response_stream:
             ws_events = self._to_ws_events(message)
             for event in ws_events:
                 events.append(event)

@@ -33,6 +33,10 @@ from .dependencies import (
     _check_version_in_range,
     _audit_dependencies_sync,
 )
+from .grep import (
+    semantic_grep,
+    validate_pattern,
+)
 
 __all__ = [
     # Base types
@@ -59,4 +63,7 @@ __all__ = [
     "_parse_pipfile_lock",
     "_check_version_in_range",
     "_audit_dependencies_sync",
+    # Grep scanner
+    "semantic_grep",
+    "validate_pattern",
 ]

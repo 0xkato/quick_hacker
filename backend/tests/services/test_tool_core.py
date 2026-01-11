@@ -118,3 +118,53 @@ class TestToolCoreReadFile:
         """Should reject path traversal attempts."""
         with pytest.raises(ValueError, match="escapes"):
             await tool_core.read_file("../../../etc/passwd")
+
+
+class TestToolCoreListDirectory:
+    """Tests for ToolCore.list_directory()."""
+
+    @pytest.mark.asyncio
+    async def test_list_directory_returns_items(self, tool_core, temp_repo):
+        """Should return directory contents."""
+        result = await tool_core.list_directory(".")
+        assert "src/" in result["items"] or "src" in [i.rstrip("/") for i in result["items"]]
+
+    @pytest.mark.asyncio
+    async def test_list_directory_excludes_hidden(self, tool_core, temp_repo):
+        """Should exclude hidden files/dirs."""
+        (temp_repo / ".hidden").write_text("secret")
+        result = await tool_core.list_directory(".")
+        assert ".hidden" not in result["items"]
+
+    @pytest.mark.asyncio
+    async def test_list_directory_raises_not_dir(self, tool_core):
+        """Should raise for non-directory paths."""
+        with pytest.raises(NotADirectoryError):
+            await tool_core.list_directory("src/main.py")
+
+
+class TestToolCoreSearchCode:
+    """Tests for ToolCore.search_code()."""
+
+    @pytest.mark.asyncio
+    async def test_search_code_finds_matches(self, tool_core, temp_repo):
+        """Should find pattern matches."""
+        result = await tool_core.search_code(r"def\s+\w+")
+        assert result["count"] > 0
+        assert any("main.py" in m["file"] for m in result["matches"])
+
+    @pytest.mark.asyncio
+    async def test_search_code_respects_max_results(self, tool_core, temp_repo):
+        """Should respect max_results limit."""
+        # Create files with many matches
+        for i in range(20):
+            (temp_repo / f"file{i}.py").write_text(f"def func{i}(): pass")
+
+        result = await tool_core.search_code(r"def\s+\w+", max_results=5)
+        assert result["count"] <= 5
+
+    @pytest.mark.asyncio
+    async def test_search_code_invalid_regex(self, tool_core):
+        """Should handle invalid regex gracefully."""
+        with pytest.raises(ValueError, match="regex"):
+            await tool_core.search_code(r"[invalid")

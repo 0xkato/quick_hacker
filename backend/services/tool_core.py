@@ -6,8 +6,9 @@ behavior between Claude SDK (MCP) and legacy ReAct providers.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
 
@@ -180,3 +181,140 @@ class ToolCore:
         # Add line numbers
         numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(sliced)]
         return "\n".join(numbered)
+
+    async def list_directory(
+        self,
+        path: str = ".",
+        recursive: bool = False,
+        pattern: str | None = None,
+        max_items: int = 500,
+    ) -> dict[str, Any]:
+        """List directory contents.
+
+        Args:
+            path: Relative path from repo root (use "." for root)
+            recursive: If True, list all files recursively
+            pattern: Optional glob pattern to filter files
+            max_items: Maximum items to return
+
+        Returns:
+            Dict with items list and metadata
+        """
+        dir_path = self._validate_dir(path)
+        items: list[str] = []
+
+        def collect_items():
+            nonlocal items
+            if recursive:
+                for root, dirs, files in os.walk(dir_path):
+                    # Filter excluded dirs
+                    dirs[:] = [d for d in dirs
+                              if not d.startswith(".")
+                              and d not in self.DEFAULT_EXCLUDED_DIRS]
+
+                    for f in files:
+                        if f.startswith("."):
+                            continue
+                        if pattern and not Path(f).match(pattern):
+                            continue
+                        rel = (Path(root) / f).relative_to(self.repo_path)
+                        items.append(str(rel))
+                        if len(items) >= max_items:
+                            return
+            else:
+                for item in sorted(dir_path.iterdir()):
+                    if item.name.startswith("."):
+                        continue
+                    if pattern and not item.match(pattern):
+                        continue
+                    rel = item.relative_to(self.repo_path)
+                    suffix = "/" if item.is_dir() else ""
+                    items.append(f"{rel}{suffix}")
+                    if len(items) >= max_items:
+                        return
+
+        await asyncio.to_thread(collect_items)
+
+        return {
+            "path": path,
+            "items": items[:max_items],
+            "count": len(items),
+            "truncated": len(items) >= max_items,
+        }
+
+    async def search_code(
+        self,
+        pattern: str,
+        file_pattern: str | None = None,
+        max_results: int = 50,
+    ) -> dict[str, Any]:
+        """Search for regex pattern across codebase.
+
+        Args:
+            pattern: Regex pattern to search for
+            file_pattern: Optional glob to filter files
+            max_results: Maximum matches to return
+
+        Returns:
+            Dict with matches list and metadata
+        """
+        import re
+
+        try:
+            regex = re.compile(pattern, re.IGNORECASE)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+
+        results: list[dict] = []
+        files_searched = 0
+
+        def search_files():
+            nonlocal results, files_searched
+
+            for root, dirs, files in os.walk(self.repo_path):
+                # Skip excluded directories
+                dirs[:] = [d for d in dirs
+                          if not d.startswith(".")
+                          and d not in self.DEFAULT_EXCLUDED_DIRS]
+
+                for filename in files:
+                    if filename.startswith("."):
+                        continue
+                    if file_pattern and not Path(filename).match(file_pattern.replace("**/", "")):
+                        continue
+
+                    file_path = Path(root) / filename
+                    rel_path = file_path.relative_to(self.repo_path)
+
+                    # Skip binary files
+                    if file_path.suffix in {".png", ".jpg", ".gif", ".ico", ".woff",
+                                           ".ttf", ".eot", ".pdf", ".zip", ".tar", ".gz"}:
+                        continue
+
+                    try:
+                        content = file_path.read_text(errors="ignore")
+                        files_searched += 1
+
+                        for i, line in enumerate(content.split("\n"), 1):
+                            if regex.search(line):
+                                results.append({
+                                    "file": str(rel_path),
+                                    "line": i,
+                                    "content": line.strip()[:200]
+                                })
+                                if len(results) >= max_results:
+                                    return
+                    except Exception:
+                        continue
+
+                if len(results) >= max_results:
+                    return
+
+        await asyncio.to_thread(search_files)
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "files_searched": files_searched,
+            "truncated": len(results) >= max_results,
+        }

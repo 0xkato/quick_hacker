@@ -564,8 +564,10 @@ function calculateLayout(
 
   // Layout each tree separately
   for (const root of roots) {
-    const subtreeWidth = calculateSubtreeWidth(root.id, children, NODE_WIDTH);
+    const visitedWidth = new Set<string>();
+    const subtreeWidth = calculateSubtreeWidth(root.id, children, NODE_WIDTH, visitedWidth);
 
+    const visitedLayout = new Set<string>();
     layoutSubtree(
       root.id,
       children,
@@ -573,7 +575,8 @@ function calculateLayout(
       currentXOffset,
       0,
       NODE_WIDTH,
-      NODE_HEIGHT
+      NODE_HEIGHT,
+      visitedLayout
     );
 
     currentXOffset += subtreeWidth + TREE_HORIZONTAL_SPACING;
@@ -588,8 +591,13 @@ function calculateLayout(
 function calculateSubtreeWidth(
   nodeId: string,
   children: Map<string, string[]>,
-  nodeWidth: number
+  nodeWidth: number,
+  visited: Set<string>
 ): number {
+  // Prevent infinite recursion on cycles
+  if (visited.has(nodeId)) return nodeWidth;
+  visited.add(nodeId);
+
   const childIds = children.get(nodeId) || [];
 
   if (childIds.length === 0) {
@@ -598,7 +606,7 @@ function calculateSubtreeWidth(
 
   // Subtree width is sum of all children's subtree widths
   const childrenWidth = childIds.reduce((sum, childId) => {
-    return sum + calculateSubtreeWidth(childId, children, nodeWidth);
+    return sum + calculateSubtreeWidth(childId, children, nodeWidth, visited);
   }, 0);
 
   return Math.max(nodeWidth, childrenWidth);
@@ -614,8 +622,13 @@ function layoutSubtree(
   x: number,
   depth: number,
   nodeWidth: number,
-  nodeHeight: number
+  nodeHeight: number,
+  visited: Set<string>
 ): number {
+  // Prevent infinite recursion on cycles
+  if (visited.has(nodeId)) return nodeWidth;
+  visited.add(nodeId);
+
   const childIds = children.get(nodeId) || [];
 
   if (childIds.length === 0) {
@@ -636,7 +649,8 @@ function layoutSubtree(
       currentChildX,
       depth + 1,
       nodeWidth,
-      nodeHeight
+      nodeHeight,
+      visited
     );
 
     // Store center position of this child

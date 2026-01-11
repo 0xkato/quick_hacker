@@ -196,16 +196,22 @@ class ScanResult:
     """Result of a scan operation.
 
     Attributes:
-        tool: The scanner tool that produced this result
+        success: Whether the scan completed successfully
         findings: List of findings from the scan
         files_scanned: Number of files processed
+        files_skipped: Number of files skipped (binary, unreadable, etc.)
+        bytes_scanned: Total bytes scanned
         duration_ms: Time taken in milliseconds
+        cancelled: Whether the scan was cancelled before completion
         error: Optional error message if scan failed
     """
-    tool: ScannerTool
+    success: bool
     findings: list[ScanFinding]
     files_scanned: int
+    files_skipped: int
+    bytes_scanned: int
     duration_ms: int
+    cancelled: bool = False
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -215,10 +221,13 @@ class ScanResult:
             Dictionary representation of the result
         """
         return {
-            "tool": str(self.tool),
+            "success": self.success,
             "findings": [f.to_dict() for f in self.findings],
             "files_scanned": self.files_scanned,
+            "files_skipped": self.files_skipped,
+            "bytes_scanned": self.bytes_scanned,
             "duration_ms": self.duration_ms,
+            "cancelled": self.cancelled,
             "error": self.error,
         }
 

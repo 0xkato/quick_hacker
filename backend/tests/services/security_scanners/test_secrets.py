@@ -186,7 +186,7 @@ class TestPatternDetection:
 
         result = _scan_for_secrets_sync(policy, limits)
 
-        assert result.tool == ScannerTool.SECRETS
+        assert result.success is True
         assert len(result.findings) >= 1
 
         # Find the AWS key finding
@@ -496,6 +496,80 @@ class TestScanMetrics:
         assert isinstance(result.duration_ms, int)
         assert result.duration_ms >= 0
 
+    def test_files_skipped_tracked(self, temp_workspace):
+        """files_skipped should be tracked for binary files."""
+        # Create a binary file (will be skipped)
+        binary_file = Path(temp_workspace) / "binary.dat"
+        binary_file.write_bytes(b"\x00\x01\x02\xff\xfe")
+
+        # Create a text file (will be scanned)
+        text_file = Path(temp_workspace) / "text.py"
+        text_file.write_text("# Normal text")
+
+        policy = WorkspacePolicy(
+            workspace_root=temp_workspace,
+            max_file_size=1024 * 1024,
+            excluded_dirs=set(),
+        )
+        limits = ScanLimits(cancelled=False)
+
+        result = _scan_for_secrets_sync(policy, limits)
+
+        assert result.files_scanned == 1
+        assert result.files_skipped == 1
+
+    def test_bytes_scanned_tracked(self, temp_workspace):
+        """bytes_scanned should be tracked."""
+        content = "# Test content with some text"
+        (Path(temp_workspace) / "test.py").write_text(content)
+
+        policy = WorkspacePolicy(
+            workspace_root=temp_workspace,
+            max_file_size=1024 * 1024,
+            excluded_dirs=set(),
+        )
+        limits = ScanLimits(cancelled=False)
+
+        result = _scan_for_secrets_sync(policy, limits)
+
+        # bytes_scanned should be the byte length of the content
+        assert result.bytes_scanned == len(content.encode("utf-8"))
+
+    def test_cancelled_flag_tracked(self, temp_workspace):
+        """cancelled flag should be tracked when scan is cancelled."""
+        for i in range(5):
+            (Path(temp_workspace) / f"file_{i}.py").write_text(f"# File {i}")
+
+        policy = WorkspacePolicy(
+            workspace_root=temp_workspace,
+            max_file_size=1024 * 1024,
+            excluded_dirs=set(),
+        )
+        # Pre-cancel the scan
+        limits = ScanLimits(cancelled=True)
+
+        result = _scan_for_secrets_sync(policy, limits)
+
+        assert result.cancelled is True
+        assert result.success is True  # Still successful, just cancelled early
+
+    def test_success_flag_true_on_normal_scan(self, temp_workspace):
+        """success flag should be True for normal scans."""
+        (Path(temp_workspace) / "test.py").write_text("# Test")
+
+        policy = WorkspacePolicy(
+            workspace_root=temp_workspace,
+            max_file_size=1024 * 1024,
+            excluded_dirs=set(),
+        )
+        limits = ScanLimits(cancelled=False)
+
+        result = _scan_for_secrets_sync(policy, limits)
+
+        assert result.success is True
+        assert result.cancelled is False
+        assert result.error is None
+
 
 class TestAsyncWrapper:
     """Tests for async wrapper function."""
@@ -526,9 +600,12 @@ class TestAsyncWrapper:
 
         result = await scan_for_secrets(policy, limits)
 
-        assert result.tool == ScannerTool.SECRETS
+        assert result.success is True
         assert isinstance(result.findings, list)
         assert isinstance(result.files_scanned, int)
+        assert isinstance(result.files_skipped, int)
+        assert isinstance(result.bytes_scanned, int)
+        assert isinstance(result.cancelled, bool)
 
     @pytest.mark.asyncio
     async def test_async_wrapper_is_awaitable(self, temp_workspace):

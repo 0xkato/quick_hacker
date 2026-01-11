@@ -30,11 +30,11 @@ from .base import (
     ScanLimits,
     ScanFinding,
     ScanResult,
-    ScannerTool,
     Severity,
     redact_secret,
     fingerprint_secret,
     read_file_safe,
+    ScannerTool,
 )
 
 
@@ -273,12 +273,17 @@ def _scan_for_secrets_sync(
                     findings.append(finding)
 
     duration_ms = int((time.time() - start_time) * 1000)
+    was_cancelled = limits.is_cancelled()
 
     return ScanResult(
-        tool=ScannerTool.SECRETS,
+        success=True,
         findings=findings,
         files_scanned=files_scanned,
+        files_skipped=files_skipped,
+        bytes_scanned=bytes_scanned,
         duration_ms=duration_ms,
+        cancelled=was_cancelled,
+        error=None,
     )
 
 

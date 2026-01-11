@@ -270,42 +270,97 @@ class TestScanResult:
             matched_text="secret",
         )
         result = ScanResult(
-            tool=ScannerTool.SECRETS,
+            success=True,
             findings=[finding],
             files_scanned=10,
+            files_skipped=2,
+            bytes_scanned=1024,
             duration_ms=150,
         )
-        assert result.tool == ScannerTool.SECRETS
+        assert result.success is True
         assert len(result.findings) == 1
         assert result.files_scanned == 10
+        assert result.files_skipped == 2
+        assert result.bytes_scanned == 1024
+        assert result.cancelled is False  # Default value
 
     def test_scan_result_to_dict(self):
         """ScanResult.to_dict returns proper dictionary."""
         result = ScanResult(
-            tool=ScannerTool.DEPENDENCIES,
+            success=True,
             findings=[],
             files_scanned=5,
+            files_skipped=1,
+            bytes_scanned=2048,
             duration_ms=100,
             error=None,
         )
         d = result.to_dict()
         assert isinstance(d, dict)
-        assert d["tool"] == "dependencies"
+        assert d["success"] is True
         assert d["findings"] == []
         assert d["files_scanned"] == 5
+        assert d["files_skipped"] == 1
+        assert d["bytes_scanned"] == 2048
         assert d["duration_ms"] == 100
+        assert d["cancelled"] is False
 
     def test_scan_result_with_error(self):
         """ScanResult can capture errors."""
         result = ScanResult(
-            tool=ScannerTool.GREP,
+            success=False,
             findings=[],
             files_scanned=0,
+            files_skipped=0,
+            bytes_scanned=0,
             duration_ms=50,
             error="Timeout exceeded",
         )
         d = result.to_dict()
+        assert d["success"] is False
         assert d["error"] == "Timeout exceeded"
+
+    def test_scan_result_with_cancellation(self):
+        """ScanResult can capture cancellation state."""
+        result = ScanResult(
+            success=True,
+            findings=[],
+            files_scanned=5,
+            files_skipped=0,
+            bytes_scanned=512,
+            duration_ms=25,
+            cancelled=True,
+        )
+        assert result.cancelled is True
+        d = result.to_dict()
+        assert d["cancelled"] is True
+
+    def test_scan_result_all_fields_in_to_dict(self):
+        """ScanResult.to_dict includes all required fields."""
+        finding = ScanFinding(
+            tool=ScannerTool.SECRETS,
+            severity=Severity.MEDIUM,
+            title="Test",
+            description="Test finding",
+            file_path="/test.py",
+            line_number=1,
+            matched_text="test",
+        )
+        result = ScanResult(
+            success=True,
+            findings=[finding],
+            files_scanned=10,
+            files_skipped=3,
+            bytes_scanned=4096,
+            duration_ms=200,
+            cancelled=False,
+            error=None,
+        )
+        d = result.to_dict()
+        # Verify all expected fields are present
+        expected_fields = {"success", "findings", "files_scanned", "files_skipped",
+                          "bytes_scanned", "duration_ms", "cancelled", "error"}
+        assert set(d.keys()) == expected_fields
 
 
 class TestRedactSecret:

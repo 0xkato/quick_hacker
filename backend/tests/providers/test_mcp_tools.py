@@ -8,8 +8,10 @@ from providers.mcp_tools import (
     MCPTool,
     create_quickhack_mcp_server,
     MAX_OUTPUT_SIZE,
+    _truncate_output,
 )
 from services.tool_core import ToolCore
+import json
 
 
 class TestMCPToolDefinitions:
@@ -182,3 +184,171 @@ class TestMCPToolHandlers:
 
         # Result should be JSON-like string or dict
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_search_code_handler(self, mock_tool_core):
+        """search_code handler should return search results."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        search_tool = next(t for t in tools if t.name == "search_code")
+        result = await search_tool.handler(pattern="def")
+
+        # Result should be valid JSON
+        parsed = json.loads(result)
+        assert isinstance(parsed, (list, dict))
+
+    @pytest.mark.asyncio
+    async def test_upsert_sink_signal_handler(self, mock_tool_core):
+        """upsert_sink_signal handler should create/update signals."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        upsert_tool = next(t for t in tools if t.name == "upsert_sink_signal")
+        result = await upsert_tool.handler(
+            kind="sink",
+            label="Test sink signal",
+            file_path="test.py",
+            line_number=1,
+        )
+
+        # Result should be valid JSON
+        parsed = json.loads(result)
+        assert isinstance(parsed, dict)
+
+    @pytest.mark.asyncio
+    async def test_report_finding_handler(self, mock_tool_core):
+        """report_finding handler should report vulnerabilities."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        report_tool = next(t for t in tools if t.name == "report_finding")
+        result = await report_tool.handler(
+            severity="high",
+            title="Test Finding",
+            vulnerability_type="SQL Injection",
+            file_path="test.py",
+            line_start=1,
+            vulnerable_code="query = 'SELECT * FROM users WHERE id=' + user_id",
+            description="SQL injection vulnerability",
+            confidence=0.9,
+        )
+
+        # Result should be valid JSON
+        parsed = json.loads(result)
+        assert isinstance(parsed, dict)
+
+    @pytest.mark.asyncio
+    async def test_scan_repo_for_secrets_handler(self, mock_tool_core):
+        """scan_repo_for_secrets handler should scan for secrets."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        scan_tool = next(t for t in tools if t.name == "scan_repo_for_secrets")
+        result = await scan_tool.handler()
+
+        # Result should be valid JSON
+        parsed = json.loads(result)
+        assert isinstance(parsed, (list, dict))
+
+    @pytest.mark.asyncio
+    async def test_dependency_audit_handler(self, mock_tool_core):
+        """dependency_audit handler should audit dependencies."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        audit_tool = next(t for t in tools if t.name == "dependency_audit")
+        result = await audit_tool.handler()
+
+        # Result should be valid JSON
+        parsed = json.loads(result)
+        assert isinstance(parsed, (list, dict))
+
+    @pytest.mark.asyncio
+    async def test_grep_semantic_handler(self, mock_tool_core):
+        """grep_semantic handler should search with context."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        grep_tool = next(t for t in tools if t.name == "grep_semantic")
+        result = await grep_tool.handler(pattern="def", context_lines=2)
+
+        # Result should be valid JSON
+        parsed = json.loads(result)
+        assert isinstance(parsed, (list, dict))
+
+    @pytest.mark.asyncio
+    async def test_generate_security_report_handler(self, mock_tool_core):
+        """generate_security_report handler should generate reports."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        report_tool = next(t for t in tools if t.name == "generate_security_report")
+        result = await report_tool.handler(
+            findings=[],
+            output_format="markdown",
+        )
+
+        # Result should be a string (markdown report)
+        assert isinstance(result, str)
+
+    @pytest.mark.asyncio
+    async def test_generate_security_report_handler_with_invalid_finding(self, mock_tool_core):
+        """generate_security_report handler should handle invalid findings."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        report_tool = next(t for t in tools if t.name == "generate_security_report")
+        # Pass an invalid finding dict (missing required fields)
+        result = await report_tool.handler(
+            findings=[{"invalid": "finding"}],
+            output_format="markdown",
+        )
+
+        # Should return error response
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert parsed["error"] == "ScanFindingConversionError"
+
+    @pytest.mark.asyncio
+    async def test_handler_returns_error_response_on_exception(self, mock_tool_core):
+        """Handlers should return structured error response on exception."""
+        _, tools = create_quickhack_mcp_server(mock_tool_core)
+
+        read_file_tool = next(t for t in tools if t.name == "read_file")
+        # Try to read a non-existent file
+        result = await read_file_tool.handler(path="nonexistent_file.txt")
+
+        # Should return structured error response
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "details" in parsed
+
+
+class TestTruncateOutput:
+    """Tests for _truncate_output function edge cases."""
+
+    def test_truncate_empty_string(self):
+        """Empty string should be returned as-is."""
+        result = _truncate_output("")
+        assert result == ""
+
+    def test_truncate_string_exactly_at_limit(self):
+        """String exactly at MAX_OUTPUT_SIZE should not be truncated."""
+        exact_string = "x" * MAX_OUTPUT_SIZE
+        result = _truncate_output(exact_string)
+        assert result == exact_string
+        assert len(result) == MAX_OUTPUT_SIZE
+        assert "[OUTPUT TRUNCATED]" not in result
+
+    def test_truncate_string_one_byte_over_limit(self):
+        """String one byte over MAX_OUTPUT_SIZE should be truncated."""
+        over_string = "x" * (MAX_OUTPUT_SIZE + 1)
+        result = _truncate_output(over_string)
+        assert len(result) <= MAX_OUTPUT_SIZE
+        assert "[OUTPUT TRUNCATED]" in result
+
+    def test_truncate_preserves_content_under_limit(self):
+        """Content under limit should be preserved exactly."""
+        content = "Hello, World!"
+        result = _truncate_output(content)
+        assert result == content
+
+    def test_truncate_large_content(self):
+        """Large content should be properly truncated with notice."""
+        large_content = "x" * (MAX_OUTPUT_SIZE + 10_000)
+        result = _truncate_output(large_content)
+        assert len(result) <= MAX_OUTPUT_SIZE
+        assert result.endswith("[OUTPUT TRUNCATED]")

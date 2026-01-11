@@ -362,12 +362,15 @@ def create_quickhack_mcp_server(
         end_line: int | None = None,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.read_file(
-            path=path,
-            start_line=start_line,
-            end_line=end_line,
-        )
-        return _truncate_output(result)
+        try:
+            result = await tool_core.read_file(
+                path=path,
+                start_line=start_line,
+                end_line=end_line,
+            )
+            return _truncate_output(result)
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def search_code_handler(
         pattern: str,
@@ -375,12 +378,15 @@ def create_quickhack_mcp_server(
         max_results: int = 50,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.search_code(
-            pattern=pattern,
-            file_pattern=file_pattern,
-            max_results=max_results,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.search_code(
+                pattern=pattern,
+                file_pattern=file_pattern,
+                max_results=max_results,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def list_directory_handler(
         path: str = ".",
@@ -389,24 +395,30 @@ def create_quickhack_mcp_server(
         max_items: int = 500,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.list_directory(
-            path=path,
-            recursive=recursive,
-            pattern=pattern,
-            max_items=max_items,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.list_directory(
+                path=path,
+                recursive=recursive,
+                pattern=pattern,
+                max_items=max_items,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def list_sink_signals_handler(
         status: str | None = None,
         limit: int = 50,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.list_sink_signals(
-            status=status,
-            limit=limit,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.list_sink_signals(
+                status=status,
+                limit=limit,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def upsert_sink_signal_handler(
         kind: str,
@@ -421,19 +433,22 @@ def create_quickhack_mcp_server(
         metadata: dict | None = None,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.upsert_sink_signal(
-            kind=kind,
-            label=label,
-            file_path=file_path,
-            fingerprint=fingerprint,
-            line_number=line_number,
-            status=status,
-            llm_risk_tier=llm_risk_tier,
-            llm_score=llm_score,
-            llm_reasoning=llm_reasoning,
-            metadata=metadata,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.upsert_sink_signal(
+                kind=kind,
+                label=label,
+                file_path=file_path,
+                fingerprint=fingerprint,
+                line_number=line_number,
+                status=status,
+                llm_risk_tier=llm_risk_tier,
+                llm_score=llm_score,
+                llm_reasoning=llm_reasoning,
+                metadata=metadata,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def report_finding_handler(
         severity: str,
@@ -452,41 +467,50 @@ def create_quickhack_mcp_server(
         recommended_fix: str | None = None,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.report_finding(
-            severity=severity,
-            title=title,
-            vulnerability_type=vulnerability_type,
-            file_path=file_path,
-            line_start=line_start,
-            vulnerable_code=vulnerable_code,
-            description=description,
-            confidence=confidence,
-            cwe_id=cwe_id,
-            line_end=line_end,
-            source_trace=source_trace,
-            attack_scenario=attack_scenario,
-            proof_of_concept=proof_of_concept,
-            recommended_fix=recommended_fix,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.report_finding(
+                severity=severity,
+                title=title,
+                vulnerability_type=vulnerability_type,
+                file_path=file_path,
+                line_start=line_start,
+                vulnerable_code=vulnerable_code,
+                description=description,
+                confidence=confidence,
+                cwe_id=cwe_id,
+                line_end=line_end,
+                source_trace=source_trace,
+                attack_scenario=attack_scenario,
+                proof_of_concept=proof_of_concept,
+                recommended_fix=recommended_fix,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def scan_repo_for_secrets_handler(
         entropy_threshold: float = 4.5,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.scan_for_secrets(
-            entropy_threshold=entropy_threshold,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.scan_for_secrets(
+                entropy_threshold=entropy_threshold,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def dependency_audit_handler(
         lockfile_path: str | None = None,
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.dependency_audit(
-            lockfile_path=lockfile_path,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.dependency_audit(
+                lockfile_path=lockfile_path,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def grep_semantic_handler(
         pattern: str,
@@ -494,33 +518,45 @@ def create_quickhack_mcp_server(
         file_glob: str = "**/*",
         **kwargs: Any,
     ) -> str:
-        result = await tool_core.grep_semantic(
-            pattern=pattern,
-            context_lines=context_lines,
-            file_glob=file_glob,
-        )
-        return _truncate_output(json.dumps(result, indent=2))
+        try:
+            result = await tool_core.grep_semantic(
+                pattern=pattern,
+                context_lines=context_lines,
+                file_glob=file_glob,
+            )
+            return _truncate_output(json.dumps(result, indent=2))
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     async def generate_security_report_handler(
         findings: list[dict[str, Any]],
         output_format: str = "markdown",
         **kwargs: Any,
     ) -> str:
-        # Convert dict findings to ScanFinding objects if needed
-        from services.security_scanners import ScanFinding
+        try:
+            # Convert dict findings to ScanFinding objects if needed
+            from services.security_scanners import ScanFinding
 
-        scan_findings = []
-        for f in findings:
-            if isinstance(f, dict):
-                scan_findings.append(ScanFinding(**f))
-            else:
-                scan_findings.append(f)
+            scan_findings = []
+            for f in findings:
+                if isinstance(f, dict):
+                    try:
+                        scan_findings.append(ScanFinding(**f))
+                    except (TypeError, ValueError) as conv_err:
+                        return json.dumps({
+                            "error": "ScanFindingConversionError",
+                            "details": f"Failed to convert finding: {conv_err}"
+                        })
+                else:
+                    scan_findings.append(f)
 
-        result = await tool_core.generate_security_report(
-            findings=scan_findings,
-            output_format=output_format,
-        )
-        return _truncate_output(result)
+            result = await tool_core.generate_security_report(
+                findings=scan_findings,
+                output_format=output_format,
+            )
+            return _truncate_output(result)
+        except Exception as e:
+            return json.dumps({"error": type(e).__name__, "details": str(e)})
 
     # Map tool names to handlers
     handler_map: dict[str, Callable[..., Coroutine[Any, Any, Any]]] = {

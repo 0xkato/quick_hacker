@@ -5,6 +5,8 @@ from .base_provider import BaseProvider, Message, StreamChunk
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
 from .ollama_provider import OllamaProvider
+from .claude_sdk_provider import ClaudeSDKProvider
+from .mcp_tools import create_quickhack_mcp_server, MCP_TOOLS
 
 
 def get_provider(config: ProviderConfig) -> BaseProvider:
@@ -38,6 +40,9 @@ __all__ = [
     "OpenAIProvider",
     "AnthropicProvider",
     "OllamaProvider",
+    "ClaudeSDKProvider",
+    "create_quickhack_mcp_server",
+    "MCP_TOOLS",
     "get_provider",
     "list_all_models",
 ]

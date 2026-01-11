@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 def test_can_import_all_public_api():
-    from backend.services.security_scanners import (
+    from services.security_scanners import (
         # Types
         Severity,
         ScannerTool,

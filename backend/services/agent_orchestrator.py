@@ -20,6 +20,9 @@ from models.schemas import (
 from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
 from agents.react_agent import ReActSecurityAgent
+from providers.claude_sdk_provider import ClaudeSDKProvider
+from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
+from services.tool_core import ToolCore
 from services import git_service
 from services.project_service import project_service
 from services.settings_service import settings_service
@@ -199,7 +202,20 @@ class AgentOrchestrator:
         """Run agent and handle completion."""
         print(f"[Orchestrator] _run_agent started for {agent.id}")
         try:
-            findings = await agent.run()
+            # Check if this agent should use Claude SDK provider
+            config = getattr(agent.request, 'provider_config', None)
+            if config and hasattr(config, 'provider'):
+                provider_name = (
+                    config.provider.value
+                    if hasattr(config.provider, 'value')
+                    else str(config.provider)
+                )
+                if provider_name.lower() == "claude_sdk":
+                    findings = await self._run_sdk_agent(agent)
+                else:
+                    findings = await agent.run()
+            else:
+                findings = await agent.run()
             print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")
             self._findings[agent.id] = findings
 
@@ -246,6 +262,132 @@ class AgentOrchestrator:
             # Cleanup task reference
             if agent.id in self._tasks:
                 del self._tasks[agent.id]
+
+    async def _run_sdk_agent(self, agent: BaseAgent) -> list[Finding]:
+        """Run an agent using the Claude SDK provider.
+
+        Creates ToolCore with limits factory, ClaudeSDKProvider, and
+        ClaudeSDKOrchestrator to run the security audit.
+
+        Args:
+            agent: The agent to run with SDK provider
+
+        Returns:
+            List of Finding objects from the audit
+        """
+        print(f"[Orchestrator] Running SDK agent {agent.id}")
+
+        config = agent.request.provider_config
+        scan_tier = getattr(agent.request, 'scan_tier', 'quick') or 'quick'
+
+        # Create ClaudeSDKOrchestrator first to get make_fresh_limits
+        # We need a temporary orchestrator to get the limits factory
+        sdk_orchestrator = ClaudeSDKOrchestrator(
+            scan_tier=scan_tier,
+            on_ws_event=lambda event: self._broadcast_message(
+                WSMessage(type=event.get("type", "sdk_event"), data=event)
+            ),
+            provider=None,  # Will be set after provider is created
+            tool_core=None,  # Will be set after tool_core is created
+        )
+
+        # Create ToolCore with limits factory from orchestrator
+        tool_core = ToolCore(
+            repo_path=agent.repo_path,
+            project_id=agent.repo_id,
+            get_scan_limits=sdk_orchestrator.make_fresh_limits,
+        )
+
+        # Create ClaudeSDKProvider
+        provider_config = {
+            "model": config.model if config else "claude-sonnet-4-20250514",
+            "api_key": config.api_key if config else None,
+            "max_tokens": config.max_tokens if config else 8192,
+        }
+
+        provider = ClaudeSDKProvider(
+            repo_path=agent.repo_path,
+            project_id=agent.repo_id,
+            tool_core=tool_core,
+            config=provider_config,
+        )
+
+        # Store provider reference on agent for cancellation
+        agent._sdk_provider = provider
+
+        # Update orchestrator with actual provider and tool_core
+        sdk_orchestrator.provider = provider
+        sdk_orchestrator.tool_core = tool_core
+
+        # Store SDK orchestrator reference on agent for cancellation
+        agent._sdk_orchestrator = sdk_orchestrator
+
+        try:
+            # Build initial prompt for the audit
+            initial_prompt = self._build_initial_audit_prompt(agent)
+
+            # Run the audit
+            result = await sdk_orchestrator.run_audit(initial_prompt)
+
+            # Convert findings from dict to Finding objects
+            findings: list[Finding] = []
+            for finding_data in result.get("findings", []):
+                try:
+                    finding = Finding(
+                        id=f"{agent.id}-{len(findings)}",
+                        agent_id=agent.id,
+                        title=finding_data.get("title", "Untitled Finding"),
+                        description=finding_data.get("description", ""),
+                        severity=finding_data.get("severity", "medium"),
+                        file_path=finding_data.get("file_path", ""),
+                        line_start=finding_data.get("line_start"),
+                        line_end=finding_data.get("line_end"),
+                        vulnerable_code=finding_data.get("vulnerable_code", ""),
+                        recommendation=finding_data.get("recommended_fix", ""),
+                    )
+                    findings.append(finding)
+                except Exception as e:
+                    print(f"[Orchestrator] Failed to convert finding: {e}")
+
+            # Update agent findings
+            agent.findings = findings
+            agent.status = AgentStatus.COMPLETED
+
+            return findings
+
+        finally:
+            # Clean up provider
+            await provider.close()
+
+    def _build_initial_audit_prompt(self, agent: BaseAgent) -> str:
+        """Build the initial prompt for a security audit.
+
+        Args:
+            agent: The agent with audit configuration
+
+        Returns:
+            Initial prompt string for the audit
+        """
+        prompt_parts = [
+            f"Perform a security audit of the repository at {agent.repo_path}.",
+            "Focus on identifying vulnerabilities, security misconfigurations, and potential attack vectors.",
+        ]
+
+        # Add custom prompt if provided
+        if hasattr(agent.request, 'custom_prompt') and agent.request.custom_prompt:
+            prompt_parts.append(f"Additional instructions: {agent.request.custom_prompt}")
+
+        # Add focus areas if provided
+        if hasattr(agent.request, 'focus_areas') and agent.request.focus_areas:
+            focus_str = ", ".join(agent.request.focus_areas)
+            prompt_parts.append(f"Focus particularly on: {focus_str}")
+
+        # Add target files if provided
+        if hasattr(agent.request, 'target_files') and agent.request.target_files:
+            files_str = ", ".join(agent.request.target_files)
+            prompt_parts.append(f"Prioritize analyzing these files: {files_str}")
+
+        return " ".join(prompt_parts)
 
     async def pause_agent(self, agent_id: str) -> Agent:
         """Pause a running agent."""
@@ -318,6 +460,22 @@ class AgentOrchestrator:
                 persistence_service.save_agent_state(snapshot)
             except Exception as e:
                 print(f"[Orchestrator] Failed to save state on cancel: {e}")
+
+        # For SDK agents, call interrupt on the provider
+        if hasattr(agent, '_sdk_provider') and agent._sdk_provider is not None:
+            try:
+                agent._sdk_provider.interrupt()
+                print(f"[Orchestrator] Interrupted SDK provider for agent {agent_id}")
+            except Exception as e:
+                print(f"[Orchestrator] Failed to interrupt SDK provider: {e}")
+
+        # For SDK agents with orchestrator, call cancel on the orchestrator
+        if hasattr(agent, '_sdk_orchestrator') and agent._sdk_orchestrator is not None:
+            try:
+                agent._sdk_orchestrator.cancel()
+                print(f"[Orchestrator] Cancelled SDK orchestrator for agent {agent_id}")
+            except Exception as e:
+                print(f"[Orchestrator] Failed to cancel SDK orchestrator: {e}")
 
         agent.cancel()
 

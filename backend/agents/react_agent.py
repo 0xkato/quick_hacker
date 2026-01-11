@@ -1498,26 +1498,39 @@ Continue following the main audit instructions above."""
             if tool_name == "read_file":
                 file_path = arguments.get("path", "")
 
-                # Get or create file node
-                file_node = flow_service.get_or_create_file_node(self.id, file_path)
+                # Validate file path
+                if not file_path:
+                    self._log("read_file called with empty path", "warning")
+                    # Skip file node creation, let tool execute normally
+                    pass  # Fall through to normal execution
+                else:
+                    # Get or create file node
+                    file_node = flow_service.get_or_create_file_node(self.id, file_path)
 
-                if not file_node:
-                    # Create new file node
-                    file_node = flow_service.add_node(
-                        self.id,
-                        "file",
-                        f"📄 {os.path.basename(file_path)}",
-                        {
-                            "file_path": file_path,
-                            "full_path": file_path,
-                            "tool": "read_file"
-                        },
-                        auto_parent=True
-                    )
+                    if not file_node:
+                        # Create new file node
+                        file_node = flow_service.add_node(
+                            self.id,
+                            "file",
+                            f"📄 {os.path.basename(file_path)}",
+                            {
+                                "file_path": file_path,
+                                "full_path": file_path,
+                                "tool": "read_file"
+                            },
+                            auto_parent=True
+                        )
 
-                # Update context
-                flow_service.update_context(self.id, current_file=file_path)
-                flow_service.update_node_status(self.id, file_node.id, "running")
+                    # Update context
+                    try:
+                        flow_service.update_context(self.id, current_file=file_path)
+                    except Exception as e:
+                        self._log(f"Failed to update flow context: {e}", "warning")
+
+                    try:
+                        flow_service.update_node_status(self.id, file_node.id, "running")
+                    except Exception as e:
+                        self._log(f"Failed to update flow node status: {e}", "warning")
 
             # Execute tool
             result = await self.tool_executor.execute(tool_name, arguments)
@@ -1537,33 +1550,51 @@ Continue following the main audit instructions above."""
                     self._log(f"Failed to mark file visited in code graph: {e}", "warning")
 
                 # Complete file node and extract functions
-                file_node = flow_service.get_or_create_file_node(self.id, file_path)
-                if file_node:
-                    flow_service.update_node_status(self.id, file_node.id, "completed")
+                # file_node already exists from pre-execution logic
+                # No need to call get_or_create_file_node again
+                if file_path:
+                    file_node = flow_service.get_or_create_file_node(self.id, file_path)
+                    if file_node:
+                        try:
+                            flow_service.update_node_status(self.id, file_node.id, "completed")
+                        except Exception as e:
+                            self._log(f"Failed to update flow node status: {e}", "warning")
 
-                    # Parse result to extract functions
-                    try:
-                        # Get the actual content - result.data is a string from read_file
-                        content = result.data if isinstance(result.data, str) else str(result.data)
-                        functions = self._extract_functions_from_code(content)
-                        for func in functions[:10]:  # Limit to first 10 functions
-                            func_node = flow_service.add_node(
-                                self.id,
-                                "function",
-                                f"⚡ {func['name']}()",
-                                {
-                                    "function_name": func["name"],
-                                    "line_number": func.get("line_number"),
-                                    "signature": func.get("signature"),
-                                },
-                                parent_id=file_node.id,
-                                auto_parent=False,
-                                set_current=False
-                            )
-                    except Exception:
-                        pass  # If parsing fails, just skip function nodes
+                        # Parse result to extract functions
+                        try:
+                            # read_file tool returns string directly as data
+                            if not isinstance(result.data, str):
+                                self._log(f"Unexpected data type from read_file: {type(result.data)}", "warning")
+                                content = str(result.data)
+                            else:
+                                content = result.data
 
-                    self._broadcast_flow_update()
+                            functions = self._extract_functions_from_code(content)
+                            for func in functions[:10]:  # Limit to first 10 functions
+                                try:
+                                    func_node = flow_service.add_node(
+                                        self.id,
+                                        "function",
+                                        f"⚡ {func['name']}()",
+                                        {
+                                            "function_name": func["name"],
+                                            "line_number": func.get("line_number"),
+                                            "signature": func.get("signature"),
+                                        },
+                                        parent_id=file_node.id,
+                                        auto_parent=False,
+                                        set_current=False
+                                    )
+                                except Exception as e:
+                                    self._log(f"Failed to add function node: {e}", "warning")
+                        except Exception as e:
+                            self._log(f"Failed to extract functions from {file_path}: {e}", "debug")
+                            # Continue without function nodes - this is non-critical
+
+                        try:
+                            self._broadcast_flow_update()
+                        except Exception as e:
+                            self._log(f"Failed to broadcast flow update: {e}", "warning")
 
             tool_success = result.success
             tool_error = result.error
@@ -1996,29 +2027,31 @@ Continue following the main audit instructions above."""
             return []
 
         functions = []
+        lines = code.split('\n')  # Split once for O(n) performance
 
         # Python functions
         pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
-        for match in re.finditer(pattern, code, re.MULTILINE):
-            line_num = code[:match.end()].count('\n') + 1
-            functions.append({
-                "name": match.group(1),
-                "signature": match.group(0).strip(),
-                "line_number": line_num
-            })
+        for line_num, line in enumerate(lines, start=1):
+            match = re.match(pattern, line)
+            if match:
+                functions.append({
+                    "name": match.group(1),
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num
+                })
 
         # JavaScript/TypeScript functions
         js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
-        for match in re.finditer(js_pattern, code, re.MULTILINE):
-            line_num = code[:match.end()].count('\n') + 1
-            # Extract the actual matched signature
-            sig_match = re.match(r'^\s*(.+?)\s*\(', match.group(0))
-            signature = sig_match.group(1).strip() + "()" if sig_match else f"function {match.group(1)}()"
-            functions.append({
-                "name": match.group(1),
-                "signature": signature,
-                "line_number": line_num
-            })
+        for line_num, line in enumerate(lines, start=1):
+            match = re.match(js_pattern, line)
+            if match:
+                sig_match = re.match(r'^\s*(.+?)\s*\(', match.group(0))
+                signature = sig_match.group(1).strip() + "()" if sig_match else f"function {match.group(1)}()"
+                functions.append({
+                    "name": match.group(1),
+                    "signature": signature,
+                    "line_number": line_num
+                })
 
         return functions
 

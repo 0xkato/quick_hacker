@@ -201,10 +201,76 @@ class ClaudeSDKOrchestrator:
         policy: str,
         limits: ScanLimits,
     ) -> Dict[str, Any]:
-        """Execute a single turn with the Claude SDK provider."""
-        # This would integrate with ClaudeSDKProvider
-        # For now, return empty response as placeholder
-        return {"content": "", "tool_calls": []}
+        """Execute a single turn with the Claude SDK provider.
+
+        Integrates with ClaudeSDKProvider to run the actual SDK agent loop.
+
+        Args:
+            prompt: User prompt for this turn
+            policy: System policy (scanner or analyzer)
+            limits: Scan limits for this turn
+
+        Returns:
+            Dict with 'content' (text response) and 'tool_calls' (list of calls)
+        """
+        if self.provider is None:
+            self._emit_event("error", {"message": "No provider configured"})
+            return {"content": "", "tool_calls": []}
+
+        # Start session on first turn
+        if self._turn_count == 1:
+            try:
+                self._session_id = await self.provider.start_session(
+                    audit_policy=policy,
+                    resume_session_id=self._session_id,
+                )
+                self._emit_event("session_started", {"session_id": self._session_id})
+            except Exception as e:
+                self._emit_event("error", {"message": f"Failed to start session: {e}"})
+                raise
+
+        # Collect response content and tool calls from events
+        content_parts: List[str] = []
+        tool_calls: List[Dict[str, Any]] = []
+
+        def on_event(event: Dict[str, Any]) -> None:
+            """Process SDK events and collect response data."""
+            event_type = event.get("type", "")
+
+            # Emit all events to WebSocket
+            self._emit_event(event_type, event)
+
+            # Collect text content
+            if event_type == "agent_text":
+                text = event.get("text", "")
+                if text:
+                    content_parts.append(text)
+
+            # Collect tool calls
+            elif event_type == "tool_call":
+                tool_calls.append({
+                    "id": event.get("id", ""),
+                    "name": event.get("name", ""),
+                    "args": event.get("args", {}),
+                })
+
+            # Extract findings from tool results
+            elif event_type == "tool_result":
+                result = event.get("result", "")
+                if isinstance(result, dict) and result.get("type") == "finding":
+                    self._findings.append(result.get("data", {}))
+
+        try:
+            # Run turn with event callback
+            await self.provider.run_turn(prompt, on_event=on_event)
+        except Exception as e:
+            self._emit_event("error", {"message": f"Turn failed: {e}"})
+            raise
+
+        return {
+            "content": "".join(content_parts),
+            "tool_calls": tool_calls,
+        }
 
     def _emit_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Emit a WebSocket event."""

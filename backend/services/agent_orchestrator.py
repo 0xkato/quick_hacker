@@ -15,6 +15,7 @@ from models.schemas import (
     AgentType,
     Finding,
     WSMessage,
+    WSMessageType,
     ProviderConfig,
 )
 from agents.base_agent import BaseAgent
@@ -300,16 +301,37 @@ class AgentOrchestrator:
         """
         print(f"[Orchestrator] Running SDK agent {agent.id}")
 
+        # Update agent status to RUNNING
+        agent.status = AgentStatus.RUNNING
+        agent.started_at = datetime.utcnow()
+        self._broadcast_message(WSMessage(
+            type=WSMessageType.AGENT_STATUS,
+            agent_id=agent.id,
+            data={"status": "running"}
+        ))
+
         config = agent.request.provider_config
         scan_tier = getattr(agent.request, 'scan_tier', 'quick') or 'quick'
 
         # Create ClaudeSDKOrchestrator first to get make_fresh_limits
         # We need a temporary orchestrator to get the limits factory
+        agent_id = agent.id  # Capture for lambda closure
+
+        def on_sdk_event(event: dict) -> None:
+            """Broadcast SDK events as WebSocket messages."""
+            event_type_str = event.get("type", "sdk_event")
+            # Map SDK event types to WSMessageType or use LOG as fallback
+            try:
+                ws_type = WSMessageType(event_type_str)
+            except ValueError:
+                ws_type = WSMessageType.LOG
+            self._broadcast_message(
+                WSMessage(type=ws_type, agent_id=agent_id, data=event)
+            )
+
         sdk_orchestrator = ClaudeSDKOrchestrator(
             scan_tier=scan_tier,
-            on_ws_event=lambda event: self._broadcast_message(
-                WSMessage(type=event.get("type", "sdk_event"), data=event)
-            ),
+            on_ws_event=on_sdk_event,
             provider=None,  # Will be set after provider is created
             tool_core=None,  # Will be set after tool_core is created
         )

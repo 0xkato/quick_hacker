@@ -109,6 +109,29 @@ class FlowService:
         """Get flow for an agent."""
         return self._flows.get(agent_id)
 
+    def update_context(
+        self,
+        agent_id: str,
+        *,
+        current_file: Optional[str] = None,
+        current_function: Optional[str] = None,
+        current_candidate_node_id: Optional[str] = None,
+        investigation_root_id: Optional[str] = None,
+    ) -> None:
+        """Update investigation context for proper tree branching."""
+        flow = self._flows.get(agent_id)
+        if not flow:
+            return
+
+        if current_file is not None:
+            flow.context.current_file = current_file
+        if current_function is not None:
+            flow.context.current_function = current_function
+        if current_candidate_node_id is not None:
+            flow.context.current_candidate_node_id = current_candidate_node_id
+        if investigation_root_id is not None:
+            flow.context.investigation_root_id = investigation_root_id
+
     def add_node(
         self,
         agent_id: str,

@@ -65,3 +65,39 @@ def test_create_call_node():
         {"target_function": "process"}
     )
     assert node.type == "call"
+
+
+def test_update_context_file():
+    """Test updating context with current file."""
+    flow_service.initialize_flow("test-agent")
+    flow_service.update_context("test-agent", current_file="/app/routes.py")
+
+    flow = flow_service.get_flow("test-agent")
+    assert flow.context.current_file == "/app/routes.py"
+
+
+def test_update_context_multiple_fields():
+    """Test updating multiple context fields."""
+    flow_service.initialize_flow("test-agent")
+    flow_service.update_context(
+        "test-agent",
+        current_file="/app/routes.py",
+        current_function="handle_request",
+        current_candidate_node_id="abc123"
+    )
+
+    flow = flow_service.get_flow("test-agent")
+    assert flow.context.current_file == "/app/routes.py"
+    assert flow.context.current_function == "handle_request"
+    assert flow.context.current_candidate_node_id == "abc123"
+
+
+def test_update_context_preserves_other_fields():
+    """Test updating one field preserves others."""
+    flow_service.initialize_flow("test-agent")
+    flow_service.update_context("test-agent", current_file="/app/routes.py")
+    flow_service.update_context("test-agent", current_function="handle_request")
+
+    flow = flow_service.get_flow("test-agent")
+    assert flow.context.current_file == "/app/routes.py"
+    assert flow.context.current_function == "handle_request"

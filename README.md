@@ -243,6 +243,7 @@ The backend can run audits through Claude Code via `claude-agent-sdk` (which use
 - Docker: the backend image installs both `claude-agent-sdk` (Python) and `@anthropic-ai/claude-code` (Node).
 - Local dev: install Python deps in `backend/` and `npm i -g @anthropic-ai/claude-code`.
 - Enable per agent with `use_claude_sdk: true` (provider stays `anthropic`).
+- Auth: either set `ANTHROPIC_API_KEY` (env or Settings UI) or authenticate Claude Code via `claude setup-token` in the same environment (Docker has its own `$HOME`).
 
 ### Option B: Local Development (no Docker)
 

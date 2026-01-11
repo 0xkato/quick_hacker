@@ -149,6 +149,18 @@ class AgentOrchestrator:
                 )
 
                 if not api_key and provider_name != "ollama":
+                    # Claude SDK mode can authenticate via Claude Code subscription token
+                    # (`claude setup-token`) instead of an Anthropic API key.
+                    if (
+                        use_claude_sdk
+                        and provider_name.strip().lower() == "anthropic"
+                        and config_name == "provider_config"
+                    ):
+                        print(
+                            "[Orchestrator] Claude SDK mode: no Anthropic API key configured; "
+                            "relying on Claude Code auth (setup-token) or ANTHROPIC_API_KEY env var."
+                        )
+                        continue
                     raise ValueError(
                         f"No {provider_name.capitalize()} API key found for {config_name}. "
                         f"Please add your API key in Settings."

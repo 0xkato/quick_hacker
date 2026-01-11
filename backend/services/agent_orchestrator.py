@@ -386,10 +386,13 @@ class AgentOrchestrator:
         current_tool_calls: list[dict] = []
         current_request_id: str | None = None
         current_tool_node_id: str | None = None
+        # Track findings as they're reported (for real-time broadcast)
+        sdk_findings: list[Finding] = []
+        finding_counter = [0]  # Use list to allow mutation in nested function
 
         def on_sdk_event(event: dict) -> None:
             """Broadcast SDK events as WebSocket messages with flow + observability integration."""
-            nonlocal current_tool_calls, current_request_id, current_tool_node_id
+            nonlocal current_tool_calls, current_request_id, current_tool_node_id, sdk_findings
 
             event_type_str = event.get("type", "sdk_event")
 
@@ -574,15 +577,64 @@ class AgentOrchestrator:
                         try:
                             finding_data = json.loads(result) if isinstance(result, str) else result
                             if isinstance(finding_data, dict) and "finding" in finding_data:
-                                finding = finding_data["finding"]
-                                severity = finding.get("severity", "medium")
-                                title = finding.get("title", "Finding")
+                                raw_finding = finding_data["finding"]
+                                severity_str = raw_finding.get("severity", "medium")
+                                title = raw_finding.get("title", "Finding")
+
                                 # Add finding node to flow
                                 finding_node = flow_service.add_node(
-                                    agent_id, "finding", f"{severity.upper()}: {title}",
-                                    {"severity": severity, "finding": finding}
+                                    agent_id, "finding", f"{severity_str.upper()}: {title}",
+                                    {"severity": severity_str, "finding": raw_finding}
                                 )
                                 flow_service.update_node_status(agent_id, finding_node.id, "completed")
+
+                                # === Create Finding object and broadcast to Findings panel ===
+                                finding_counter[0] += 1
+                                try:
+                                    # Map severity string to Severity enum
+                                    from models.schemas import Severity
+                                    severity_map = {
+                                        "critical": Severity.CRITICAL,
+                                        "high": Severity.HIGH,
+                                        "medium": Severity.MEDIUM,
+                                        "low": Severity.LOW,
+                                        "info": Severity.INFO,
+                                    }
+                                    severity_enum = severity_map.get(severity_str.lower(), Severity.MEDIUM)
+
+                                    finding_obj = Finding(
+                                        id=f"{agent_id}-finding-{finding_counter[0]}",
+                                        agent_id=agent_id,
+                                        repo_id=agent.repo_id,
+                                        severity=severity_enum,
+                                        title=title,
+                                        description=raw_finding.get("description", ""),
+                                        file_path=raw_finding.get("file_path", ""),
+                                        line_start=raw_finding.get("line_start", 1),
+                                        line_end=raw_finding.get("line_end"),
+                                        code_snippet=raw_finding.get("vulnerable_code", ""),
+                                        vulnerable_code=raw_finding.get("vulnerable_code", ""),
+                                        vulnerability_type=raw_finding.get("vulnerability_type", "Unknown"),
+                                        cwe_id=raw_finding.get("cwe_id"),
+                                        attack_scenario=raw_finding.get("attack_scenario"),
+                                        proof_of_concept=raw_finding.get("proof_of_concept"),
+                                        recommended_fix=raw_finding.get("recommended_fix"),
+                                        confidence=raw_finding.get("confidence", 0.5),
+                                        source_trace=raw_finding.get("source_trace"),
+                                        created_at=datetime.utcnow(),
+                                        metadata={"source": "sdk_audit"},
+                                    )
+                                    sdk_findings.append(finding_obj)
+
+                                    # Broadcast finding to frontend
+                                    self._broadcast_message(WSMessage(
+                                        type=WSMessageType.FINDING,
+                                        agent_id=agent_id,
+                                        data=finding_obj.model_dump(mode='json'),
+                                    ))
+                                    print(f"[Orchestrator] Broadcast finding: {title} ({severity_str})")
+                                except Exception as finding_err:
+                                    print(f"[Orchestrator] Failed to create/broadcast finding: {finding_err}")
                         except Exception as e:
                             print(f"[Orchestrator] Failed to add finding node: {e}")
 
@@ -690,14 +742,16 @@ class AgentOrchestrator:
                 except Exception as e:
                     print(f"[Orchestrator] Failed to convert finding: {e}")
 
-            # Update agent findings
-            agent.findings = findings
+            # Use sdk_findings (broadcast in real-time) if available, else use result findings
+            all_findings = sdk_findings if sdk_findings else findings
+            agent.findings = all_findings
+            print(f"[Orchestrator] Total findings: {len(all_findings)}")
 
             # === Add completion node to flow ===
             completion_status = "completed" if result.get("success", True) else "failed"
             flow_service.add_node(
                 agent.id, "analysis", f"Audit {completion_status.title()}",
-                {"findings_count": len(findings), "elapsed_s": result.get("elapsed_s", 0)}
+                {"findings_count": len(all_findings), "elapsed_s": result.get("elapsed_s", 0)}
             )
 
             # Broadcast final flow update
@@ -710,10 +764,30 @@ class AgentOrchestrator:
                 ))
 
             # === Generate report on successful completion ===
-            if result.get("success", True) and findings:
+            if result.get("success", True):
                 try:
                     report_service.generate_report(agent)
                     print(f"[Orchestrator] Generated report for SDK agent {agent.id}")
+
+                    # Broadcast REPORT_READY so frontend knows report is available
+                    self._broadcast_message(WSMessage(
+                        type=WSMessageType.REPORT_READY,
+                        agent_id=agent.id,
+                        data={
+                            "agent_id": agent.id,
+                            "repo_id": agent.repo_id,
+                            "findings_count": len(all_findings),
+                            "severity_summary": {
+                                "critical": sum(1 for f in all_findings if f.severity.value == "critical"),
+                                "high": sum(1 for f in all_findings if f.severity.value == "high"),
+                                "medium": sum(1 for f in all_findings if f.severity.value == "medium"),
+                                "low": sum(1 for f in all_findings if f.severity.value == "low"),
+                                "info": sum(1 for f in all_findings if f.severity.value == "info"),
+                            },
+                            "message": f"Security audit complete. Found {len(all_findings)} findings.",
+                        }
+                    ))
+                    print(f"[Orchestrator] Broadcast REPORT_READY for SDK agent {agent.id}")
                 except Exception as e:
                     print(f"[Orchestrator] Failed to generate report: {e}")
 

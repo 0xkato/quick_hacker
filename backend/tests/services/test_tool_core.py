@@ -66,3 +66,49 @@ class TestToolCorePathValidation:
         """Directory path traversal should be rejected."""
         with pytest.raises(ValueError, match="escapes"):
             tool_core._validate_dir("../../../tmp")
+
+
+class TestToolCoreReadFile:
+    """Tests for ToolCore.read_file()."""
+
+    @pytest.mark.asyncio
+    async def test_read_file_returns_content(self, tool_core, temp_repo):
+        """Should return file content."""
+        content = await tool_core.read_file("src/main.py")
+        assert "def main(): pass" in content
+
+    @pytest.mark.asyncio
+    async def test_read_file_with_line_range(self, tool_core, temp_repo):
+        """Should return only specified lines."""
+        # Create multi-line file
+        (temp_repo / "multiline.txt").write_text("line1\nline2\nline3\nline4\nline5")
+
+        content = await tool_core.read_file("multiline.txt", start_line=2, end_line=4)
+        assert "line2" in content
+        assert "line4" in content
+        assert "line1" not in content
+        assert "line5" not in content
+
+    @pytest.mark.asyncio
+    async def test_read_file_clamps_out_of_range(self, tool_core, temp_repo):
+        """Should clamp line numbers to valid range."""
+        (temp_repo / "short.txt").write_text("line1\nline2")
+
+        # end_line beyond file length should be clamped
+        content = await tool_core.read_file("short.txt", start_line=1, end_line=100)
+        assert "line1" in content
+        assert "line2" in content
+
+    @pytest.mark.asyncio
+    async def test_read_file_raises_not_found(self, tool_core):
+        """Should raise FileNotFoundError for missing files."""
+        with pytest.raises(FileNotFoundError):
+            await tool_core.read_file("nonexistent.py")
+
+    @pytest.mark.asyncio
+    async def test_read_file_empty_when_start_exceeds_end(self, tool_core, temp_repo):
+        """Should return empty when start >= end after clamping."""
+        (temp_repo / "tiny.txt").write_text("line1")
+
+        content = await tool_core.read_file("tiny.txt", start_line=10, end_line=20)
+        assert content == ""

@@ -5,6 +5,7 @@ behavior between Claude SDK (MCP) and legacy ReAct providers.
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Callable
 
@@ -127,3 +128,55 @@ class ToolCore:
             raise NotADirectoryError(f"Not a directory: {path}")
 
         return resolved
+
+    async def read_file(
+        self,
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
+        """Read file contents with optional line range.
+
+        Args:
+            path: Relative path from repo root
+            start_line: Starting line (1-indexed, inclusive)
+            end_line: Ending line (1-indexed, inclusive)
+
+        Returns:
+            File content as string, with line numbers if range specified
+
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            ValueError: If path is invalid
+        """
+        file_path = self._validate_path(path)
+
+        # Read file in thread to avoid blocking
+        content = await asyncio.to_thread(file_path.read_text, errors="ignore")
+        lines = content.split("\n")
+
+        # No line range specified - return full content
+        if start_line is None and end_line is None:
+            return content
+
+        # Apply line slicing with clamping
+        total_lines = len(lines)
+
+        # Convert to 0-indexed and clamp
+        start_idx = 0
+        if start_line is not None:
+            start_idx = max(0, min(start_line - 1, total_lines))
+
+        end_idx = total_lines
+        if end_line is not None:
+            end_idx = max(0, min(end_line, total_lines))
+
+        # Guard against start >= end
+        if start_idx >= end_idx:
+            return ""
+
+        sliced = lines[start_idx:end_idx]
+
+        # Add line numbers
+        numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(sliced)]
+        return "\n".join(numbered)

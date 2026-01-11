@@ -237,7 +237,16 @@ class ReActSecurityAgent:
             self._analyzer_config = analyzer
             self._is_dual_mode = True
 
-        if self._is_dual_mode:
+        # Check if using Claude SDK mode (provider creation handled separately)
+        self._use_claude_sdk = getattr(request, 'use_claude_sdk', False)
+
+        if self._use_claude_sdk:
+            # SDK mode: provider creation is handled by ClaudeSDKProvider in orchestrator
+            # We still need a placeholder provider reference
+            self.provider = None
+            self._scanner_provider = None
+            self._analyzer_provider = None
+        elif self._is_dual_mode:
             self._scanner_provider = get_provider(self._scanner_config)
             self._analyzer_provider = get_provider(self._analyzer_config)
             self.provider = self._scanner_provider  # Start with scanner

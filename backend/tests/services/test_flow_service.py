@@ -261,3 +261,30 @@ def test_flow_context_defaults():
 
     assert context.call_depth == 0
     assert context.max_call_depth == 3
+
+
+def test_flow_context_rejects_negative_call_depth():
+    """FlowContext should reject negative call_depth."""
+    from services.flow_service import FlowContext
+    import pytest
+
+    with pytest.raises(ValueError, match="call_depth must be non-negative"):
+        FlowContext(call_depth=-1)
+
+
+def test_flow_context_rejects_zero_max_call_depth():
+    """FlowContext should reject zero max_call_depth."""
+    from services.flow_service import FlowContext
+    import pytest
+
+    with pytest.raises(ValueError, match="max_call_depth must be positive"):
+        FlowContext(max_call_depth=0)
+
+
+def test_flow_context_rejects_negative_max_call_depth():
+    """FlowContext should reject negative max_call_depth."""
+    from services.flow_service import FlowContext
+    import pytest
+
+    with pytest.raises(ValueError, match="max_call_depth must be positive"):
+        FlowContext(max_call_depth=-1)

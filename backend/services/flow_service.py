@@ -14,13 +14,29 @@ from collections import defaultdict
 
 @dataclass
 class FlowContext:
-    """Tracks investigation context for proper tree branching."""
+    """Tracks investigation context for proper tree branching.
+
+    Attributes:
+        current_file: File currently being read/analyzed
+        current_function: Function currently being analyzed
+        current_candidate_node_id: Root of current investigation tree
+        investigation_root_id: For multi-threaded investigations
+        call_depth: Current depth in call chain (must be non-negative)
+        max_call_depth: Maximum depth for call tracing (must be positive)
+    """
     current_file: Optional[str] = None
     current_function: Optional[str] = None
     current_candidate_node_id: Optional[str] = None
     investigation_root_id: Optional[str] = None
     call_depth: int = 0              # NEW: Current depth in call chain
     max_call_depth: int = 3          # NEW: Configurable limit
+
+    def __post_init__(self):
+        """Validate field values."""
+        if self.call_depth < 0:
+            raise ValueError(f"call_depth must be non-negative, got {self.call_depth}")
+        if self.max_call_depth <= 0:
+            raise ValueError(f"max_call_depth must be positive, got {self.max_call_depth}")
 
 
 NodeType = Literal[

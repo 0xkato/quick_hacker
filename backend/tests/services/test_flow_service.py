@@ -153,3 +153,88 @@ def test_get_or_create_file_node_different_paths():
 
     assert result1.id == node1.id
     assert result2.id == node2.id
+
+
+def test_add_node_auto_parent_file_to_candidate():
+    """Test file nodes auto-parent to candidate node."""
+    flow_service.initialize_flow("test-agent")
+
+    # Create candidate node and set as context
+    candidate = flow_service.add_node(
+        "test-agent",
+        "entry_point",
+        "POST /api/upload",
+        {}
+    )
+    flow_service.update_context("test-agent", current_candidate_node_id=candidate.id)
+
+    # Create file node with auto_parent=True
+    file_node = flow_service.add_node(
+        "test-agent",
+        "file",
+        "routes.py",
+        {"file_path": "/app/routes.py"},
+        auto_parent=True
+    )
+
+    # Should have edge from candidate to file
+    flow = flow_service.get_flow("test-agent")
+    edge = next((e for e in flow.edges if e.target == file_node.id), None)
+    assert edge is not None
+    assert edge.source == candidate.id
+
+
+def test_add_node_auto_parent_function_to_file():
+    """Test function nodes auto-parent to current file."""
+    flow_service.initialize_flow("test-agent")
+
+    # Create file node
+    file_node = flow_service.add_node(
+        "test-agent",
+        "file",
+        "routes.py",
+        {"file_path": "/app/routes.py"}
+    )
+    flow_service.update_context("test-agent", current_file="/app/routes.py")
+
+    # Create function node with auto_parent=True
+    func_node = flow_service.add_node(
+        "test-agent",
+        "function",
+        "handle_request()",
+        {"function_name": "handle_request"},
+        auto_parent=True
+    )
+
+    # Should have edge from file to function
+    flow = flow_service.get_flow("test-agent")
+    edge = next((e for e in flow.edges if e.target == func_node.id), None)
+    assert edge is not None
+    assert edge.source == file_node.id
+
+
+def test_add_node_explicit_parent_overrides_auto():
+    """Test explicit parent_id overrides auto-parent logic."""
+    flow_service.initialize_flow("test-agent")
+
+    # Create two nodes
+    node1 = flow_service.add_node("test-agent", "scan", "Scan Start", {})
+    node2 = flow_service.add_node("test-agent", "analysis", "Analysis", {})
+
+    # Set context but provide explicit parent
+    flow_service.update_context("test-agent", current_candidate_node_id=node1.id)
+
+    node3 = flow_service.add_node(
+        "test-agent",
+        "file",
+        "routes.py",
+        {},
+        parent_id=node2.id,  # Explicit parent
+        auto_parent=True
+    )
+
+    # Should use explicit parent, not context
+    flow = flow_service.get_flow("test-agent")
+    edge = next((e for e in flow.edges if e.target == node3.id), None)
+    assert edge is not None
+    assert edge.source == node2.id

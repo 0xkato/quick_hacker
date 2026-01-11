@@ -167,11 +167,27 @@ class FlowService:
         tool_result_summary: Optional[str] = None,
         confidence_score: Optional[float] = None,
         set_current: bool = True,
+        auto_parent: bool = False,
     ) -> FlowNode:
         """Add a node to the flow."""
         flow = self._flows.get(agent_id)
         if not flow:
             flow = self.initialize_flow(agent_id)
+
+        # Determine parent based on context if not explicitly provided
+        if parent_id is None and auto_parent:
+            if node_type == "file":
+                # Files are children of investigation root (candidate)
+                parent_id = flow.context.current_candidate_node_id
+            elif node_type == "function":
+                # Functions are children of current file
+                if flow.context.current_file:
+                    file_node = self.get_or_create_file_node(agent_id, flow.context.current_file)
+                    parent_id = file_node.id if file_node else flow.context.current_candidate_node_id
+            elif node_type == "call":
+                # Calls are children of current function/node
+                parent_id = flow.current_node_id
+            # else: keep parent_id as None, will use flow.current_node_id below
 
         previous_node_id = parent_id or flow.current_node_id
 

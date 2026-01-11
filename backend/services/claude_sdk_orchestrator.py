@@ -353,12 +353,27 @@ class ClaudeSDKOrchestrator:
             raise
 
         if turn_error:
-            raise RuntimeError(turn_error)
+            raise RuntimeError(self._map_turn_error(turn_error))
 
         return {
             "content": "".join(content_parts),
             "tool_calls": tool_calls,
         }
+
+    @staticmethod
+    def _map_turn_error(turn_error: str) -> str:
+        """Rewrite common Claude Code auth failures into actionable guidance."""
+        message = str(turn_error or "").strip()
+        lower = message.lower()
+
+        if "please run /login" in lower or ("invalid api key" in lower and "/login" in lower):
+            return (
+                "Claude Code authentication required. "
+                "Run `claude setup-token` (Docker: `docker compose exec -it backend claude setup-token`) "
+                "or set `ANTHROPIC_API_KEY`."
+            )
+
+        return message
 
     def _emit_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Emit a WebSocket event."""

@@ -224,11 +224,12 @@ class TestClaudeSDKProviderInterrupt:
             MockClient.return_value = mock_client
 
             await provider.start_session(audit_policy="read_only")
-            provider.interrupt()
+            await provider.interrupt()
 
             mock_client.interrupt.assert_called_once()
 
-    def test_interrupt_handles_no_client(self, mock_tool_core, tmp_path):
+    @pytest.mark.asyncio
+    async def test_interrupt_handles_no_client(self, mock_tool_core, tmp_path):
         """interrupt should handle case where client was never created."""
         from providers.claude_sdk_provider import ClaudeSDKProvider
 
@@ -242,7 +243,7 @@ class TestClaudeSDKProviderInterrupt:
         )
 
         # Should not raise when client is None
-        provider.interrupt()
+        await provider.interrupt()
 
 
 class TestClaudeSDKProviderWSEventConversion:
@@ -499,11 +500,12 @@ class TestClaudeSDKProviderRunTurn:
             mock_client = AsyncMock()
             mock_client.connect = AsyncMock()
 
-            # Make query return an async iterator
-            async def mock_query(prompt):
+            mock_client.query = AsyncMock()
+
+            async def mock_receive_response():
                 yield mock_msg
 
-            mock_client.query = mock_query
+            mock_client.receive_response = MagicMock(return_value=mock_receive_response())
             MockClient.return_value = mock_client
 
             await provider.start_session(audit_policy="read_only")

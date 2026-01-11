@@ -342,6 +342,8 @@ and providing actionable security insights."""
             })
 
         elif msg_type == "ResultMessage":
+            session_id = getattr(msg, "session_id", None)
+            duration_ms = getattr(msg, "duration_ms", None)
             cost = getattr(msg, "total_cost_usd", 0.0)
             result = getattr(msg, "result", None)
             usage = getattr(msg, "usage", None)
@@ -358,6 +360,8 @@ and providing actionable security insights."""
                 "total_cost_usd": cost,
                 "result": result,
                 "usage": usage,
+                "session_id": session_id,
+                "duration_ms": duration_ms,
             })
 
         elif msg_type == "AssistantMessage":
@@ -366,8 +370,13 @@ and providing actionable security insights."""
             for block in content_blocks:
                 # SDK blocks are class instances, check __class__.__name__ not .type attribute
                 block_type = block.__class__.__name__
+                fallback_type: str | None = getattr(block, "type", None)
+                if isinstance(fallback_type, str):
+                    fallback_type = fallback_type.lower()
+                else:
+                    fallback_type = None
 
-                if block_type == "TextBlock":
+                if block_type == "TextBlock" or fallback_type == "text":
                     # TextBlock has .text attribute
                     text = getattr(block, "text", "")
                     if text:
@@ -378,7 +387,7 @@ and providing actionable security insights."""
                             "text": text,
                         })
 
-                elif block_type == "ThinkingBlock":
+                elif block_type == "ThinkingBlock" or fallback_type == "thinking":
                     # ThinkingBlock has .thinking attribute
                     thinking = getattr(block, "thinking", "")
                     if thinking:
@@ -387,7 +396,7 @@ and providing actionable security insights."""
                             "thinking": thinking,
                         })
 
-                elif block_type == "ToolUseBlock":
+                elif block_type == "ToolUseBlock" or fallback_type == "tool_use":
                     # ToolUseBlock has .id, .name, .input attributes
                     events.append({
                         "type": "tool_call",
@@ -396,7 +405,7 @@ and providing actionable security insights."""
                         "args": getattr(block, "input", {}),
                     })
 
-                elif block_type == "ToolResultBlock":
+                elif block_type == "ToolResultBlock" or fallback_type == "tool_result":
                     # ToolResultBlock has .tool_use_id, .content, .is_error attributes
                     events.append({
                         "type": "tool_result",

@@ -138,11 +138,11 @@ class TestSDKMode:
 
     @pytest.mark.skipif(not SDK_AVAILABLE, reason="Claude SDK not installed")
     def test_sdk_allowed_tools_are_tool_names(self, mock_tool_core):
-        """SDK mode should have tool names in allowed_tools."""
+        """SDK mode should expose Claude Code-compatible tool names in allowed_tools."""
         server_config, _ = create_quickhack_mcp_server(mock_tool_core)
 
-        # SDK mode uses just tool names (not mcp__quickhack__ prefix)
-        expected_names = {t["name"] for t in MCP_TOOLS}
+        # Claude Code expects MCP tools in `mcp__<server>__<tool>` format.
+        expected_names = {f"mcp__quickhack__{t['name']}" for t in MCP_TOOLS}
         actual_names = set(server_config["allowed_tools"])
         assert actual_names == expected_names
 

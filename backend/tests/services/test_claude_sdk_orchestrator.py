@@ -494,3 +494,46 @@ class TestClaudeSDKOrchestratorValidation:
         result = orchestrator._claude_says_done("")
 
         assert isinstance(result, bool)
+
+
+class TestClaudeSDKOrchestratorAuthErrors:
+    """Tests for translating authentication failures into actionable errors."""
+
+    @pytest.mark.asyncio
+    async def test_execute_turn_maps_claude_login_required_error(self):
+        on_ws_event = Mock()
+        tool_core = Mock()
+
+        provider = AsyncMock()
+        provider.start_session = AsyncMock(return_value="session-1")
+
+        async def fake_run_turn(prompt: str, on_event=None):
+            if on_event:
+                on_event(
+                    {
+                        "type": "turn_complete",
+                        "is_error": True,
+                        "result": "Invalid API key · Please run /login",
+                    }
+                )
+
+        provider.run_turn = AsyncMock(side_effect=fake_run_turn)
+
+        orchestrator = ClaudeSDKOrchestrator(
+            scan_tier="quick",
+            on_ws_event=on_ws_event,
+            provider=provider,
+            tool_core=tool_core,
+        )
+        orchestrator._turn_count = 1  # simulate first turn (session start)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await orchestrator._execute_turn(
+                prompt="test prompt",
+                policy="policy",
+                limits=orchestrator.make_fresh_limits(),
+            )
+
+        error_text = str(excinfo.value)
+        assert "setup-token" in error_text
+        assert "ANTHROPIC_API_KEY" in error_text

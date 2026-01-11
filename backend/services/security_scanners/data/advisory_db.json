@@ -1,0 +1,111 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2024-01-15",
+  "npm": {
+    "lodash": [
+      {
+        "range": "<4.17.19",
+        "severity": "high",
+        "advisory_id": "GHSA-p6mc-m468-83gw",
+        "cve": "CVE-2020-8203",
+        "title": "Prototype Pollution in lodash"
+      },
+      {
+        "range": "<4.17.21",
+        "severity": "high",
+        "advisory_id": "GHSA-35jh-r3h4-6jhm",
+        "cve": "CVE-2021-23337",
+        "title": "Command Injection in lodash"
+      }
+    ],
+    "minimist": [
+      {
+        "range": "<0.2.1",
+        "severity": "medium",
+        "advisory_id": "GHSA-xvch-5gv4-984h",
+        "cve": "CVE-2020-7598",
+        "title": "Prototype Pollution in minimist"
+      },
+      {
+        "range": "<1.2.6",
+        "severity": "critical",
+        "advisory_id": "GHSA-7fh5-64p2-3v2j",
+        "cve": "CVE-2021-44906",
+        "title": "Prototype Pollution in minimist"
+      }
+    ],
+    "node-fetch": [
+      {
+        "range": "<2.6.1",
+        "severity": "medium",
+        "advisory_id": "GHSA-w7rc-rwvf-8q5r",
+        "cve": "CVE-2020-15168",
+        "title": "Denial of Service in node-fetch"
+      },
+      {
+        "range": ">=2.0.0,<2.6.7",
+        "severity": "high",
+        "advisory_id": "GHSA-r683-j2x4-v87g",
+        "cve": "CVE-2022-0235",
+        "title": "Exposure of Sensitive Information in node-fetch"
+      }
+    ]
+  },
+  "pypi": {
+    "requests": [
+      {
+        "range": "<2.20.0",
+        "severity": "high",
+        "advisory_id": "GHSA-x84v-xcm2-53pg",
+        "cve": "CVE-2018-18074",
+        "title": "Exposure of Sensitive Information in requests"
+      },
+      {
+        "range": ">=2.3.0,<2.31.0",
+        "severity": "medium",
+        "advisory_id": "GHSA-j8r2-6x86-q33q",
+        "cve": "CVE-2023-32681",
+        "title": "Unintended leak of Proxy-Authorization header in requests"
+      }
+    ],
+    "urllib3": [
+      {
+        "range": "<1.24.2",
+        "severity": "high",
+        "advisory_id": "GHSA-mh33-7rrq-662w",
+        "cve": "CVE-2019-11324",
+        "title": "CRLF Injection in urllib3"
+      },
+      {
+        "range": "<1.25.9",
+        "severity": "medium",
+        "advisory_id": "GHSA-wqvq-5m8c-6g24",
+        "cve": "CVE-2020-26137",
+        "title": "CRLF Injection in urllib3"
+      },
+      {
+        "range": ">=1.26.0,<1.26.5",
+        "severity": "medium",
+        "advisory_id": "GHSA-q2q7-5pp4-w6pg",
+        "cve": "CVE-2021-33503",
+        "title": "ReDoS in urllib3"
+      }
+    ],
+    "pyyaml": [
+      {
+        "range": "<5.4",
+        "severity": "critical",
+        "advisory_id": "GHSA-8q59-q68h-6hv4",
+        "cve": "CVE-2020-14343",
+        "title": "Arbitrary Code Execution in PyYAML"
+      },
+      {
+        "range": "<5.2",
+        "severity": "critical",
+        "advisory_id": "GHSA-rprw-h62v-c2w7",
+        "cve": "CVE-2020-1747",
+        "title": "Arbitrary Code Execution in PyYAML via load()"
+      }
+    ]
+  }
+}

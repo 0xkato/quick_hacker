@@ -23,6 +23,16 @@ from .secrets import (
     SECRET_PATTERNS,
     scan_for_secrets,
 )
+from .dependencies import (
+    audit_dependencies,
+    _parse_npm_lockfile,
+    _parse_yarn_lockfile,
+    _parse_pnpm_lockfile,
+    _parse_requirements_txt,
+    _parse_pipfile_lock,
+    _check_version_in_range,
+    _audit_dependencies_sync,
+)
 
 __all__ = [
     # Base types
@@ -40,4 +50,13 @@ __all__ = [
     "shannon_entropy",
     "SECRET_PATTERNS",
     "scan_for_secrets",
+    # Dependency scanner
+    "audit_dependencies",
+    "_parse_npm_lockfile",
+    "_parse_yarn_lockfile",
+    "_parse_pnpm_lockfile",
+    "_parse_requirements_txt",
+    "_parse_pipfile_lock",
+    "_check_version_in_range",
+    "_audit_dependencies_sync",
 ]

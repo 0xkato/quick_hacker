@@ -317,7 +317,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
               <label htmlFor="use-claude-sdk" className="flex-1 cursor-pointer">
                 <span className="text-vsc-sm font-medium text-vsc-text">Use Claude Agent SDK</span>
                 <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
-                  Native tool loop with better performance. Recommended for most use cases.
+                  Native tool loop with better performance. Uses ANTHROPIC_API_KEY env var.
                 </p>
               </label>
             </div>
@@ -351,8 +351,8 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
             </p>
           </div>
 
-          {/* API Key - Only show if not configured in settings */}
-          {provider !== 'ollama' && !hasApiKeyConfigured && (
+          {/* API Key - Only show if not configured in settings and not using Claude SDK */}
+          {provider !== 'ollama' && !hasApiKeyConfigured && !(provider === 'anthropic' && useClaudeSDK) && (
             <div>
               <label className="block text-vsc-xs text-vsc-text-muted mb-2 uppercase tracking-wider">
                 API Key <span className="text-vsc-text-muted normal-case">(required - not found in settings)</span>

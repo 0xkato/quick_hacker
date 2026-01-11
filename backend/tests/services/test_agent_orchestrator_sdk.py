@@ -39,7 +39,7 @@ class TestAgentOrchestratorProviderRouting:
 
     @pytest.fixture
     def mock_react_agent(self):
-        """Create a mock agent for ReAct (anthropic provider)."""
+        """Create a mock agent for ReAct (anthropic provider without SDK flag)."""
         agent = Mock()
         agent.id = "react-agent-id"
         agent.repo_id = "test-repo"
@@ -48,8 +48,29 @@ class TestAgentOrchestratorProviderRouting:
         agent.request.provider_config = Mock()
         agent.request.provider_config.provider = "anthropic"
         agent.request.scan_tier = "quick"
+        agent.request.use_claude_sdk = False  # Explicitly set to False for ReAct routing
         agent.findings = []
         agent.to_schema = Mock(return_value=Mock(id="react-agent-id"))
+        agent.run = AsyncMock(return_value=[])
+        return agent
+
+    @pytest.fixture
+    def mock_anthropic_sdk_agent(self):
+        """Create a mock agent for Anthropic provider with SDK flag enabled."""
+        agent = Mock()
+        agent.id = "anthropic-sdk-agent-id"
+        agent.repo_id = "test-repo"
+        agent.repo_path = "/tmp/test-repo"
+        agent.status = AgentStatus.PENDING
+        agent.request = Mock()
+        agent.request.provider_config = Mock()
+        agent.request.provider_config.provider = "anthropic"
+        agent.request.provider_config.model = "claude-sonnet-4-20250514"
+        agent.request.provider_config.api_key = "test-key"
+        agent.request.scan_tier = "quick"
+        agent.request.use_claude_sdk = True  # SDK flag enabled
+        agent.findings = []
+        agent.to_schema = Mock(return_value=Mock(id="anthropic-sdk-agent-id"))
         agent.run = AsyncMock(return_value=[])
         return agent
 
@@ -74,7 +95,7 @@ class TestAgentOrchestratorProviderRouting:
 
     @pytest.mark.asyncio
     async def test_routes_anthropic_to_react(self, mock_react_agent):
-        """Should use ReAct loop for anthropic provider."""
+        """Should use ReAct loop for anthropic provider when use_claude_sdk=False."""
         from services.agent_orchestrator import AgentOrchestrator
 
         orchestrator = AgentOrchestrator()
@@ -87,6 +108,25 @@ class TestAgentOrchestratorProviderRouting:
 
         # Verify the agent's run method was called (ReAct path)
         mock_react_agent.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_routes_anthropic_sdk_when_flag_enabled(self, mock_anthropic_sdk_agent):
+        """Should use SDK for anthropic provider when use_claude_sdk=True."""
+        from services.agent_orchestrator import AgentOrchestrator
+
+        orchestrator = AgentOrchestrator()
+
+        # Add mock agent to orchestrator
+        orchestrator._agents[mock_anthropic_sdk_agent.id] = mock_anthropic_sdk_agent
+
+        # Mock the _run_sdk_agent method to verify it gets called
+        orchestrator._run_sdk_agent = AsyncMock(return_value=[])
+
+        # Run the agent - should route to SDK
+        await orchestrator._run_agent(mock_anthropic_sdk_agent)
+
+        # Verify _run_sdk_agent was called for anthropic provider with SDK flag
+        orchestrator._run_sdk_agent.assert_called_once_with(mock_anthropic_sdk_agent)
 
     @pytest.mark.asyncio
     async def test_sdk_agent_cancel_calls_interrupt(self, mock_agent):

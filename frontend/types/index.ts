@@ -127,6 +127,7 @@ export interface AgentCreateRequest {
   custom_prompt?: string;
   target_files?: string[];
   focus_areas?: string[];
+  use_claude_sdk?: boolean;  // Use Claude Agent SDK for native tool loop (Anthropic only)
 }
 
 export interface Agent {

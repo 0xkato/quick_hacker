@@ -116,6 +116,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [customPrompt, setCustomPrompt] = useState('');
+  const [useClaudeSDK, setUseClaudeSDK] = useState(true);  // Default to SDK for Anthropic
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
@@ -189,6 +190,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
         },
         scan_tier: scanTier,
         custom_prompt: scanTier === 'custom' ? (customPrompt || undefined) : undefined,
+        use_claude_sdk: provider === 'anthropic' ? useClaudeSDK : undefined,
       };
 
       const agent = await agentsApi.create(request);
@@ -301,6 +303,25 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
               </p>
             )}
           </div>
+
+          {/* Claude SDK Toggle - Only for Anthropic */}
+          {provider === 'anthropic' && (
+            <div className="flex items-center gap-3 p-3 rounded border border-vsc-border-subtle bg-vsc-input">
+              <input
+                type="checkbox"
+                id="use-claude-sdk"
+                checked={useClaudeSDK}
+                onChange={(e) => setUseClaudeSDK(e.target.checked)}
+                className="rounded"
+              />
+              <label htmlFor="use-claude-sdk" className="flex-1 cursor-pointer">
+                <span className="text-vsc-sm font-medium text-vsc-text">Use Claude Agent SDK</span>
+                <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
+                  Native tool loop with better performance. Recommended for most use cases.
+                </p>
+              </label>
+            </div>
+          )}
 
           {/* Model - Text input with suggestions */}
           <div>

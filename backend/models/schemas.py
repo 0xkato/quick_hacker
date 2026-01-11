@@ -150,6 +150,10 @@ class AgentCreateRequest(BaseModel):
     focus_areas: Optional[list[str]] = Field(
         None, description="Specific vulnerability types to focus on"
     )
+    use_claude_sdk: bool = Field(
+        False,
+        description="Use Claude Agent SDK for native tool loop (Anthropic only)"
+    )
 
 
 class Agent(BaseModel):

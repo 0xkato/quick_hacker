@@ -204,16 +204,26 @@ class AgentOrchestrator:
         try:
             # Check if this agent should use Claude SDK provider
             config = getattr(agent.request, 'provider_config', None)
+            use_sdk = False
+
             if config and hasattr(config, 'provider'):
                 provider_name = (
                     config.provider.value
                     if hasattr(config.provider, 'value')
                     else str(config.provider)
                 )
+
+                # Use SDK if:
+                # 1. Provider is explicitly set to "claude_sdk", OR
+                # 2. Provider is "anthropic" and use_claude_sdk flag is True
                 if provider_name.lower() == "claude_sdk":
-                    findings = await self._run_sdk_agent(agent)
-                else:
-                    findings = await agent.run()
+                    use_sdk = True
+                elif provider_name.lower() == "anthropic":
+                    use_claude_sdk = getattr(agent.request, 'use_claude_sdk', False)
+                    use_sdk = use_claude_sdk
+
+            if use_sdk:
+                findings = await self._run_sdk_agent(agent)
             else:
                 findings = await agent.run()
             print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")

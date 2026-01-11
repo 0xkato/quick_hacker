@@ -27,6 +27,9 @@ import {
   Brain,
   Scan,
   Network,
+  ArrowRight,
+  ExternalLink,
+  Shield,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
@@ -99,8 +102,12 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
     entry_point: <Network className="w-4 h-4" />,
     dangerous_sink: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
     investigation: <Brain className="w-4 h-4" />,
-    function: <Code className="w-4 h-4" />,
-    external: <FileText className="w-4 h-4" />,
+    // NEW architectural nodes
+    file: <FileText className="w-4 h-4 text-blue-400" />,
+    function: <Code className="w-4 h-4 text-purple-400" />,
+    call: <ArrowRight className="w-4 h-4 text-green-400" />,
+    external: <ExternalLink className="w-4 h-4 text-gray-400" />,
+    auth_boundary: <Shield className="w-4 h-4 text-yellow-400" />,
     cycle: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
   };
 
@@ -396,19 +403,23 @@ export function FlowVisualization({
           <div className="space-y-1.5 text-vsc-text">
             <div className="flex items-center gap-2">
               <Network className="w-3 h-3 text-vsc-text-muted" />
-              <span>Entry Point</span>
+              <span>Entry Point / Sink</span>
             </div>
             <div className="flex items-center gap-2">
-              <Code className="w-3 h-3 text-vsc-text-muted" />
-              <span>Function</span>
+              <FileText className="w-3 h-3 text-blue-400" />
+              <span>File Explored</span>
             </div>
             <div className="flex items-center gap-2">
-              <FileText className="w-3 h-3 text-vsc-text-muted" />
-              <span>External Call</span>
+              <Code className="w-3 h-3 text-purple-400" />
+              <span>Function Analyzed</span>
             </div>
             <div className="flex items-center gap-2">
-              <AlertTriangle className="w-3 h-3 text-sev-medium" />
-              <span>Cycle</span>
+              <ArrowRight className="w-3 h-3 text-green-400" />
+              <span>Function Call</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-3 h-3 text-sev-high" />
+              <span>Finding</span>
             </div>
           </div>
         ) : (

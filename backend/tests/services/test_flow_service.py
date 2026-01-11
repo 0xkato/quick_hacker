@@ -1,5 +1,17 @@
 """Tests for flow service context tracking."""
+import pytest
+
 from services.flow_service import FlowService, FlowContext, InvestigationFlow, flow_service
+
+
+@pytest.fixture(autouse=True)
+def cleanup_flow_service():
+    """Clear flow service state before and after each test."""
+    flow_service._flows.clear()
+    flow_service._subscribers.clear()
+    yield
+    flow_service._flows.clear()
+    flow_service._subscribers.clear()
 
 
 def test_flow_context_initialization():

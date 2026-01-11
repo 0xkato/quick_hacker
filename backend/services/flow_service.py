@@ -22,6 +22,7 @@ class FlowContext:
 
 
 NodeType = Literal[
+    # Existing
     "user_input",
     "tool_call",
     "tool_result",
@@ -33,6 +34,12 @@ NodeType = Literal[
     "entry_point",
     "dangerous_sink",
     "investigation",
+    # NEW architectural nodes
+    "file",
+    "function",
+    "call",
+    "external",
+    "auth_boundary",
 ]
 
 NodeStatus = Literal["pending", "running", "completed", "failed"]

@@ -210,41 +210,27 @@ and providing actionable security insights."""
         events: list[dict[str, Any]] = []
 
         try:
-            # SDK pattern: query() sends the prompt, receive_response() gets messages
+            # SDK pattern:
+            # 1. query() sends the prompt (async, returns None)
+            # 2. receive_response() returns AsyncIterator that yields messages until ResultMessage
             print(f"[ClaudeSDKProvider] Sending query: {prompt[:100]}...")
             await self.client.query(prompt)
 
-            # Receive messages until we get a result/completion
-            print("[ClaudeSDKProvider] Waiting for response via receive_response()...")
-            response = await self.client.receive_response()
-            print(f"[ClaudeSDKProvider] receive_response() returned: {type(response)}")
+            # Iterate over the async iterator (NOT await it)
+            print("[ClaudeSDKProvider] Receiving response stream...")
+            message_count = 0
+            async for message in self.client.receive_response():
+                message_count += 1
+                msg_type = type(message).__name__
+                print(f"[ClaudeSDKProvider] Message {message_count}: {msg_type}")
 
-            if response is not None:
-                # Process the response
-                if hasattr(response, '__aiter__'):
-                    async for message in response:
-                        print(f"[ClaudeSDKProvider] Got message: {type(message)}")
-                        ws_events = self._to_ws_events(message)
-                        for event in ws_events:
-                            events.append(event)
-                            if on_event:
-                                on_event(event)
-                elif hasattr(response, '__iter__') and not isinstance(response, (str, bytes, dict)):
-                    for message in response:
-                        print(f"[ClaudeSDKProvider] Got message: {type(message)}")
-                        ws_events = self._to_ws_events(message)
-                        for event in ws_events:
-                            events.append(event)
-                            if on_event:
-                                on_event(event)
-                else:
-                    # Single response object
-                    print(f"[ClaudeSDKProvider] Processing single response: {type(response)}")
-                    ws_events = self._to_ws_events(response)
-                    for event in ws_events:
-                        events.append(event)
-                        if on_event:
-                            on_event(event)
+                ws_events = self._to_ws_events(message)
+                for event in ws_events:
+                    events.append(event)
+                    if on_event:
+                        on_event(event)
+
+            print(f"[ClaudeSDKProvider] Stream complete, {message_count} messages, {len(events)} events")
 
         except Exception as e:
             print(f"[ClaudeSDKProvider] Error in run_turn: {e}")
@@ -252,7 +238,6 @@ and providing actionable security insights."""
             traceback.print_exc()
             raise
 
-        print(f"[ClaudeSDKProvider] Turn complete, {len(events)} events")
         return events
 
     def interrupt(self) -> None:

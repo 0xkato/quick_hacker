@@ -135,6 +135,8 @@ class FlowService:
         current_function: Optional[str] = None,
         current_candidate_node_id: Optional[str] = None,
         investigation_root_id: Optional[str] = None,
+        call_depth: Optional[int] = None,
+        max_call_depth: Optional[int] = None,
     ) -> None:
         """Update investigation context for proper tree branching."""
         flow = self._flows.get(agent_id)
@@ -149,6 +151,10 @@ class FlowService:
             flow.context.current_candidate_node_id = current_candidate_node_id
         if investigation_root_id is not None:
             flow.context.investigation_root_id = investigation_root_id
+        if call_depth is not None:
+            flow.context.call_depth = call_depth
+        if max_call_depth is not None:
+            flow.context.max_call_depth = max_call_depth
 
     def get_or_create_file_node(
         self,

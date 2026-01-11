@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from models.sink_signals import RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
 from services.security_scanners import (
     ScanFinding,
     ScanResult,
@@ -19,6 +20,7 @@ from services.security_scanners import (
     generate_report,
 )
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
+from services.sink_signal_service import compute_signal_fingerprint, sink_signal_service
 
 
 class ToolCore:
@@ -455,3 +457,163 @@ class ToolCore:
             "error": result.error,
             "findings": [f.to_dict() for f in result.findings],
         }
+
+    async def list_sink_signals(
+        self,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """List sink signals for the project.
+
+        Args:
+            status: Optional status filter
+            limit: Maximum signals to return
+
+        Returns:
+            Dict with signals list and count
+        """
+        limit = max(1, min(limit, 200))
+
+        parsed_status = None
+        if status is not None:
+            try:
+                parsed_status = SinkSignalStatus(status)
+            except ValueError:
+                raise ValueError(f"Invalid status: {status}")
+
+        signals = await sink_signal_service.list_signals(
+            project_id=self.project_id,
+            status=parsed_status,
+            limit=limit,
+        )
+
+        return {
+            "count": len(signals),
+            "signals": [s.model_dump(mode="json") for s in signals],
+        }
+
+    async def upsert_sink_signal(
+        self,
+        kind: str,
+        label: str,
+        file_path: str,
+        fingerprint: str | None = None,
+        line_number: int | None = None,
+        status: str | None = None,
+        llm_risk_tier: str | None = None,
+        llm_score: int | None = None,
+        llm_reasoning: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a sink signal.
+
+        Args:
+            kind: Signal kind (entry_point, sink, other)
+            label: Human-readable label
+            file_path: File path relative to repo
+            fingerprint: Optional explicit fingerprint
+            line_number: Optional line number
+            status: Optional status
+            llm_risk_tier: Optional risk tier (S-E)
+            llm_score: Optional 0-100 score
+            llm_reasoning: Optional reasoning text
+            metadata: Optional extra metadata
+
+        Returns:
+            Dict with created/updated signal
+        """
+        try:
+            kind_enum = SinkSignalKind(kind)
+        except ValueError:
+            raise ValueError(f"Invalid kind: {kind}")
+
+        status_enum = SinkSignalStatus.UNREVIEWED
+        if status is not None:
+            try:
+                status_enum = SinkSignalStatus(status)
+            except ValueError:
+                raise ValueError(f"Invalid status: {status}")
+
+        tier_enum = None
+        if llm_risk_tier is not None:
+            try:
+                tier_enum = RiskTier(llm_risk_tier.strip().upper())
+            except ValueError:
+                raise ValueError(f"Invalid risk tier: {llm_risk_tier}")
+
+        if llm_score is not None:
+            if llm_score < 0 or llm_score > 100:
+                raise ValueError("llm_score must be 0-100")
+
+        signal_id = fingerprint or compute_signal_fingerprint(
+            kind=kind_enum.value,
+            file_path=file_path,
+            line_number=line_number,
+            label=label,
+        )
+
+        signal = SinkSignal(
+            fingerprint=signal_id,
+            kind=kind_enum,
+            label=label,
+            file_path=file_path,
+            line_number=line_number,
+            status=status_enum,
+            source="llm",
+            llm_risk_tier=tier_enum,
+            llm_score=llm_score,
+            llm_reasoning=llm_reasoning.strip() if llm_reasoning else None,
+            metadata=metadata or {},
+        )
+
+        updated = await sink_signal_service.upsert_signals(
+            project_id=self.project_id,
+            signals=[signal],
+        )
+
+        result_signal = updated[0] if updated else signal
+        return {"signal": result_signal.model_dump(mode="json")}
+
+    async def report_finding(
+        self,
+        severity: str,
+        title: str,
+        vulnerability_type: str,
+        file_path: str,
+        line_start: int,
+        vulnerable_code: str,
+        description: str,
+        confidence: float,
+        cwe_id: str | None = None,
+        line_end: int | None = None,
+        source_trace: list[str] | None = None,
+        attack_scenario: str | None = None,
+        proof_of_concept: str | None = None,
+        recommended_fix: str | None = None,
+    ) -> dict[str, Any]:
+        """Report a security finding.
+
+        This returns the finding data; the actual persistence is handled
+        by the orchestrator after validation.
+
+        Returns:
+            Dict with reported finding data
+        """
+        finding = {
+            "severity": severity,
+            "title": title,
+            "vulnerability_type": vulnerability_type,
+            "file_path": file_path,
+            "line_start": line_start,
+            "line_end": line_end,
+            "vulnerable_code": vulnerable_code,
+            "description": description,
+            "confidence": confidence,
+            "cwe_id": cwe_id,
+            "source_trace": source_trace,
+            "attack_scenario": attack_scenario,
+            "proof_of_concept": proof_of_concept,
+            "recommended_fix": recommended_fix,
+        }
+
+        return {"reported": True, "finding": finding}

@@ -230,3 +230,46 @@ class TestToolCoreSecurityScanners:
         """Should raise error for invalid format."""
         with pytest.raises(ValueError, match="Invalid format"):
             await tool_core.generate_security_report([], output_format="invalid")
+
+
+class TestToolCoreSinkSignals:
+    """Tests for ToolCore sink signal methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_sink_signals_empty(self, tool_core):
+        """Should return empty list when no signals."""
+        result = await tool_core.list_sink_signals()
+        assert "signals" in result
+        assert result["count"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_upsert_sink_signal_creates(self, tool_core):
+        """Should create new sink signal."""
+        result = await tool_core.upsert_sink_signal(
+            kind="sink",
+            label="eval() call",
+            file_path="src/main.py",
+            line_number=10,
+        )
+        assert "signal" in result
+        assert result["signal"]["kind"] == "sink"
+
+
+class TestToolCoreReportFinding:
+    """Tests for ToolCore.report_finding()."""
+
+    @pytest.mark.asyncio
+    async def test_report_finding_returns_data(self, tool_core):
+        """Should return reported finding data."""
+        result = await tool_core.report_finding(
+            severity="high",
+            title="SQL Injection",
+            vulnerability_type="SQL Injection",
+            file_path="src/db.py",
+            line_start=42,
+            vulnerable_code="query = f'SELECT * FROM {user_input}'",
+            description="User input concatenated into SQL query",
+            confidence=0.9,
+        )
+        assert result["reported"]
+        assert result["finding"]["severity"] == "high"

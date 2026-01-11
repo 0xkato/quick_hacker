@@ -213,7 +213,7 @@ def _generate_sarif(findings: list[ScanFinding]) -> str:
             {
                 "tool": {
                     "driver": {
-                        "name": "quick_hack-security-scanner",
+                        "name": "security-scanners",
                         "version": "1.0.0",
                         "informationUri": "https://github.com/quick_hack/security-scanner",
                     },

@@ -1,298 +1,221 @@
-# Quick Hack
+# quick_hack
 
-AI-powered security vulnerability research platform with Ultrathink hierarchical verification cascade.
+Browser-based security auditing IDE powered by LLM agents.
+
+`quick_hack` focuses on long-running, **time-budgeted** investigations that keep going past “I’m done” by steering the model toward uncovered hotspots and deeper file coverage.
+
+## Key Concepts
+
+### Projects
+
+A **Project** is a single cloned repository plus its persistent state (threat model, sink signals, snapshots).
+
+- Projects are isolated: signals/findings from one codebase do not bleed into another.
+- The UI uses `project_id` as the primary identifier for file browsing + audits.
+
+### Agents + Scan Tiers (Time Budgets)
+
+Agents run audits against a project. For non-custom scans, the UI creates a `deep_audit` agent and supplies a `scan_tier` (time budget).
+
+| Scan tier | Budget | What it’s for |
+|----------:|-------:|---------------|
+| `quick` | 5 min | Fast initial orientation + obvious hotspots |
+| `medium` | 15 min | Better coverage and first-pass deep dives |
+| `advanced` | 45 min | Sustained tracing + multiple leads |
+| `pro` | 90 min | Broad coverage + higher-confidence verification |
+| `ultra` | 4 hours | Large repos, repeated deep passes |
+| `evil` | 24 hours | “All day” auditing / soak mode |
+| `custom` | n/a | Send a custom prompt (no preset time tier) |
+
+Notes:
+- The backend enforces a time floor before accepting “audit complete” signals from the LLM for time-tiered scans.
+- A single file may be reviewed multiple times as new context emerges.
+
+### Sink Signals vs Findings
+
+This system distinguishes **leads** from **reported vulnerabilities**:
+
+- **Sink signals** are investigation leads (entry points, sinks, hotspots). They are *not* findings.
+  - Persist per project at `data/projects/<project_id>/sink_signals.json`.
+  - Can be queued/promoted/dismissed over time as the audit progresses.
+- **Findings** are what the agent reports as potential vulnerabilities (severity, file/line, evidence, suggested fix).
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Frontend (Next.js)                             │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐  │
-│  │  Editor  │ │ Findings │ │  Agents  │ │   Chat   │ │  Ultrathink      │  │
-│  │ (Monaco) │ │  Panel   │ │  Panel   │ │  Panel   │ │  Visualization   │  │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │ WebSocket + REST
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             Backend (FastAPI)                               │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                           Security Agents                             │  │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────────┐  │  │
-│  │  │ Quick Audit │ │  Deep Scan  │ │   Custom    │ │  Ultrathink    │  │  │
-│  │  └─────────────┘ └─────────────┘ └─────────────┘ └────────────────┘  │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                         LLM Providers                                 │  │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                     │  │
-│  │  │  Anthropic  │ │   OpenAI    │ │   Ollama    │                     │  │
-│  │  │ (Claude)    │ │  (GPT-4)    │ │  (Local)    │                     │  │
-│  │  └─────────────┘ └─────────────┘ └─────────────┘                     │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           Frontend (Next.js / React)                         │
+│                                                                              │
+│  - Project selector + repo explorer (Monaco)                                 │
+│  - Agent panel (scan tiers + custom prompts)                                 │
+│  - Findings panel + report viewer                                             │
+│  - Flow diagram (live investigation graph)                                   │
+│  - Call tree diagram + code graph                                             │
+│  - Settings (per-user provider keys) + Auth UI                               │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │ REST `/api/*` + WebSocket `/ws`
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                               Backend (FastAPI)                              │
+│                                                                              │
+│  Routers:                                                                     │
+│  - `/api/auth/*` (JWT login/register + per-user provider keys)                │
+│  - `/api/projects/*` (projects, clone/refresh, sink signals)                  │
+│  - `/api/agents/*` (create/start/pause/resume, findings, reports, state)      │
+│  - `/api/agents/{id}/flow` (investigation flow graph)                         │
+│  - `/api/calltree/*` + `/api/agents/{id}/graph/*` (static + dynamic graphs)   │
+│  - `/ws` (live updates + observability stream)                                │
+│                                                                              │
+│  Services:                                                                    │
+│  - Agent orchestrator + ReAct-based deep audit agent                          │
+│  - Attack-surface scan/triage → sink signals                                  │
+│  - Observability + reports + session snapshots                                │
+│  - Sandbox (optional): Docker-based execution via docker.sock                 │
+└───────────────┬───────────────────────────┬───────────────────────────┬──────┘
+                │                           │                           │
+                ▼                           ▼                           ▼
+         Postgres (users, keys)      Redis (optional cache)     LLM providers
+                                                           (Anthropic / OpenAI / Ollama)
 ```
-
-## Ultrathink: Hierarchical Verification Cascade
-
-Ultrathink maximizes AI cognitive depth for security research. Instead of ~500ms inference, it provides **60+ seconds of reasoning** through a 5-gate adversarial cascade:
-
-```
-Finding → Triage → Deep Analysis → Devil's Advocate → Proof Generator → Final Gate → Report
-            │           │                │                 │              │
-          FAST      THOROUGH        ADVERSARIAL        CONCRETE       REPUTATION
-          (5s)       (180s)           (120s)            (90s)           (60s)
-```
-
-**Gates:**
-1. **Triage** - Quick filter for obvious non-issues
-2. **Deep Analysis** - Source-to-sink verification with full trace
-3. **Devil's Advocate** - Actively argues AGAINST the finding
-4. **Proof Generator** - Must produce concrete exploit or admit inability
-5. **Final Gate** - "Would you stake your reputation on this?"
-
-**Thinking Modes:**
-- **Native** (Claude) - Uses built-in extended thinking blocks
-- **Simulated** (GPT-4) - Chain-of-thought prompting
-- **Structured** (Open Source) - Highly structured reasoning prompts
 
 ## Quick Start
 
-### Prerequisites
+### Option A: Docker Compose (recommended)
 
+This starts the full stack (backend + frontend + Postgres + Redis + Ollama).
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- Frontend: `http://localhost:3000`
+- Backend: `http://localhost:8000`
+
+### Option B: Local Development (no Docker)
+
+Prereqs:
 - Python 3.10+
 - Node.js 18+
-- API key for at least one provider (Anthropic, OpenAI, or Ollama running locally)
+- Postgres (required for auth)
 
-### 1. Clone and Setup
-
-```bash
-git clone https://github.com/0xkato/quick-hack.git
-cd quick-hack
-
-# Copy environment template
-cp .env.example .env
-```
-
-### 2. Configure API Keys
-
-Edit `.env` and add your API keys:
-
-```bash
-# Required: At least one of these
-ANTHROPIC_API_KEY=sk-ant-...  # For Claude (recommended for Ultrathink)
-OPENAI_API_KEY=sk-...         # For GPT-4
-
-# Optional: Local models
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
-### 3. Start Backend
-
+Backend:
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Run the server
-python main.py
+uvicorn main:app --reload --port 8000
 ```
 
-Backend runs at `http://localhost:8000`
-
-### 4. Start Frontend
-
+Frontend:
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`
+## Authentication
 
-### 5. Authentication
+- HTTP API: `Authorization: Bearer <access_token>`
+- WebSocket: `ws://localhost:8000/ws?token=<access_token>`
+- Tokens are stored by the frontend in `localStorage`:
+  - `quick_hack_access_token`
+  - `quick_hack_refresh_token`
 
-The app uses JWT-based authentication with per-user API key storage.
+## API Examples
 
-#### Register and Login
-
-1. Open `http://localhost:3000` and click **Register**
-2. Create an account with email and password
-3. Login to receive a JWT token (stored automatically in cookies)
-
-#### Configure API Keys
-
-After logging in, configure your LLM provider API keys:
-
-1. Go to **Settings** (gear icon in the header)
-2. Add your API keys:
-   - **Anthropic** - For Claude models (recommended for Ultrathink)
-   - **OpenAI** - For GPT-4 models
-   - **Ollama** - URL for local models (default: `http://localhost:11434`)
-3. Keys are encrypted and stored per-user in the database
-
-> **Note:** API keys in Settings override any keys in `.env`. The `.env` file is only used as a fallback.
-
-#### API Authentication
-
-For programmatic access, include the JWT token in requests:
+### Login (JWT)
 
 ```bash
-# Login to get token
 curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com", "password": "yourpassword"}'
-
-# Use token in subsequent requests
-curl http://localhost:8000/api/projects \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+  -d '{"username":"you@example.com","password":"yourpassword"}'
 ```
 
-#### Migration from Legacy Token Auth
-
-If you were using the old `X-Session-Token` header authentication:
-
-1. The `/api/auth/token` endpoint is deprecated
-2. Create an account and login to get a JWT token
-3. Replace `X-Session-Token: TOKEN` with `Authorization: Bearer JWT_TOKEN`
-4. Move API keys from `.env` to the Settings page for better security
-
-## Docker Compose (Alternative)
+### Quick-clone a repo into a new Project
 
 ```bash
-docker-compose up -d
+curl -X POST http://localhost:8000/api/projects/quick-clone \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"url":"https://github.com/user/repo.git"}'
 ```
 
-This starts:
-- Backend on port 8000
-- Frontend on port 3000
-- Redis for caching
-- Ollama for local models (optional)
-
-## Usage
-
-### Web Interface
-
-1. Open `http://localhost:3000`
-2. Clone a repository or select an existing project
-3. Choose an agent type:
-   - **Quick Audit** - Fast surface-level scan
-   - **Deep Scan** - Thorough analysis with data flow tracing
-   - **Ultrathink** - Maximum verification with hierarchical cascade
-
-### API Examples
+### Start a time-tiered deep audit
 
 ```bash
-# Clone a repo
-curl -X POST http://localhost:8000/api/projects/clone \
+curl -X POST http://localhost:8000/api/agents \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  -d '{"url": "https://github.com/user/repo"}'
-
-# Start Ultrathink agent
-curl -X POST http://localhost:8000/api/agents/create \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "repo_id": "repo-id",
-    "agent_type": "ultrathink",
-    "provider_config": {
-      "provider": "anthropic",
-      "model": "claude-opus-4-5-20251101"
-    }
+    "repo_id": "'"$PROJECT_ID"'",
+    "agent_type": "deep_audit",
+    "scan_tier": "medium",
+    "provider_config": { "provider": "anthropic", "model": "claude-sonnet-4-20250514" }
   }'
 ```
 
-### WebSocket Events
-
-Connect to `ws://localhost:8000/ws?token=YOUR_JWT_TOKEN` for real-time updates:
-
-```javascript
-// Ultrathink cascade events
-ultrathink_cascade_start   // Cascade begins
-ultrathink_gate_start      // Gate evaluation starts
-ultrathink_thinking_update // Real-time thinking stream
-ultrathink_gate_complete   // Gate pass/fail with reasoning
-ultrathink_cascade_complete // Final verdict
+Then:
+```bash
+curl -X POST http://localhost:8000/api/agents/$AGENT_ID/start \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-## Project Structure
+### List sink signals for a project
+
+```bash
+curl http://localhost:8000/api/projects/$PROJECT_ID/sink-signals \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+## Repo Layout
 
 ```
-quick-hack/
+quick_hack/
 ├── backend/
-│   ├── main.py              # FastAPI application
-│   ├── config.py            # Configuration
-│   ├── agents/              # Security agents
-│   │   ├── base_agent.py
-│   │   ├── quick_audit_agent.py
-│   │   ├── deep_scan_agent.py
-│   │   └── ultrathink_agent.py
-│   ├── ultrathink/          # Hierarchical cascade
-│   │   ├── config.py        # Gate configurations
-│   │   ├── thinking.py      # Extended thinking engine
-│   │   ├── gates.py         # 5 verification gates
-│   │   ├── cascade.py       # Orchestrator
-│   │   └── events.py        # WebSocket emitter
-│   ├── providers/           # LLM integrations
-│   │   ├── anthropic_provider.py
-│   │   ├── openai_provider.py
-│   │   └── ollama_provider.py
-│   ├── routers/             # API endpoints
-│   └── models/              # Pydantic schemas
-│
+│   ├── main.py                 # FastAPI app + router wiring
+│   ├── agents/                 # Agents + tools (ReAct deep audit lives here)
+│   ├── routers/                # /api/* HTTP endpoints + /ws
+│   ├── services/               # Orchestrator, sink signals, flow, reports, etc.
+│   ├── database/               # SQLAlchemy models + connection
+│   ├── prompts/                # Prompt templates / policies
+│   └── tests/                  # Pytest suite
 ├── frontend/
-│   ├── app/                 # Next.js app router
-│   ├── components/
-│   │   ├── Editor/          # Monaco code editor
-│   │   ├── FindingsPanel/   # Vulnerability list
-│   │   ├── AgentPanel/      # Agent controls
-│   │   ├── ChatPanel/       # LLM chat interface
-│   │   └── UltrathinkPanel/ # Cascade visualization
-│   ├── hooks/               # React hooks (WebSocket)
-│   └── lib/                 # API client
-│
-└── docs/
-    └── ultrathink.md        # Detailed cascade docs
+│   ├── app/                    # Next.js App Router
+│   ├── components/             # Panels, diagrams, modals
+│   ├── hooks/                  # WebSocket + UI hooks
+│   ├── contexts/               # AuthContext (JWT + tokens)
+│   └── lib/                    # API client
+├── data/                       # Runtime state (settings, projects, sink signals)
+├── repos/                      # Runtime clones (legacy git service)
+└── docker-compose.yml
 ```
 
 ## Running Tests
 
 ```bash
 cd backend
-pip install pytest pytest-asyncio
-
-# All tests
-python -m pytest tests/ -v
-
-# Ultrathink tests only
-python -m pytest tests/ultrathink/ -v
-
-# Integration tests
-python -m pytest tests/integration/ -v
+pip install -r requirements-dev.txt
+pytest -q
 ```
 
-## Configuration Reference
+## Configuration (.env)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | - | Anthropic API key for Claude |
-| `OPENAI_API_KEY` | - | OpenAI API key for GPT-4 |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `DEBUG` | `false` | Enable debug mode |
-| `MAX_CONCURRENT_AGENTS` | `5` | Max parallel agents |
-| `SANDBOX_ENABLED` | `true` | Docker sandbox for execution |
-| `SETTINGS_SECRET` | - | Encryption key for stored settings |
+See `.env.example` for the full list. Common knobs:
 
-## Recommended Models for Ultrathink
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_API_URL` | Backend base URL for the frontend |
+| `NEXT_PUBLIC_WS_URL` | WebSocket URL (usually `ws://localhost:8000/ws`) |
+| `DATABASE_URL` | Postgres connection string |
+| `REDIS_URL` | Redis connection string |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Provider keys (fallback; UI settings override) |
+| `SETTINGS_SECRET` | Used to obfuscate stored settings |
+| `JWT_SECRET_KEY` | JWT signing secret (change in production) |
+| `SANDBOX_ENABLED` | Enables Docker-based sandbox execution |
 
-| Provider | Model | Native Thinking | Notes |
-|----------|-------|-----------------|-------|
-| Anthropic | `claude-opus-4-5-20251101` | Yes | Best for Ultrathink |
-| Anthropic | `claude-sonnet-4-20250514` | Yes | Good balance |
-| OpenAI | `gpt-4o` | Simulated | Strong reasoning |
-| Ollama | `llama3.3:70b` | Structured | Local, no API key |
+## Security Notes
 
-## License
-
-MIT
+- Do not expose this stack to untrusted networks without hardening (auth, CORS, secrets, sandboxing).
+- The backend can mount `docker.sock` for sandboxed execution; treat this as production-sensitive.

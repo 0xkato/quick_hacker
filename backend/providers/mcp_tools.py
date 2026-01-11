@@ -458,9 +458,9 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         tools=sdk_tools,
     )
 
-    # Build allowed_tools list (just the tool names for SDK)
+    # Build allowed_tools list (MCP format: mcp__<server>__<tool>)
     server_config = {
-        "allowed_tools": [t.name for t in sdk_tools],
+        "allowed_tools": [f"mcp__quickhack__{t.name}" for t in sdk_tools],
     }
 
     return server_config, mcp_server

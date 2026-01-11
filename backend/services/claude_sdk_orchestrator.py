@@ -6,6 +6,7 @@ Implements a two-phase approach: scanner phase for discovery, analyzer phase for
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, List, Dict
@@ -97,6 +98,8 @@ class ClaudeSDKOrchestrator:
         self._findings: List[Dict[str, Any]] = []
         self._session_id: Optional[str] = None
         self._turn_count: int = 0
+        self._consecutive_no_tool_turns: int = 0
+        self._last_turn_time: float = 0.0
 
     def remaining_s(self) -> float:
         """Get remaining time budget in seconds."""
@@ -149,9 +152,29 @@ class ClaudeSDKOrchestrator:
         print(f"[SDK Orchestrator] Starting audit, budget={self.budget_s}s, floor={self.time_floor_s}s")
         self._session_id = resume_session_id
         current_prompt = initial_prompt
+        error_message: Optional[str] = None
 
         while not self._cancelled and self.remaining_s() > 0:
             self._turn_count += 1
+            turn_start = time.monotonic()
+
+            # Detect rapid spinning (turns completing in < 1 second without tool calls)
+            if self._last_turn_time > 0:
+                turn_interval = turn_start - self._last_turn_time
+                if turn_interval < 1.0 and self._consecutive_no_tool_turns > 0:
+                    print(f"[SDK Orchestrator] WARNING: Rapid turn ({turn_interval:.2f}s), no tools for {self._consecutive_no_tool_turns} turns")
+
+                    # If we've had 10+ rapid turns without tool usage, something is wrong
+                    if self._consecutive_no_tool_turns >= 10:
+                        error_message = "SDK not using tools - check tool configuration"
+                        print(f"[SDK Orchestrator] ERROR: {error_message}")
+                        self._emit_event("error", {
+                            "message": error_message,
+                            "consecutive_no_tool_turns": self._consecutive_no_tool_turns,
+                        })
+                        break
+
+            self._last_turn_time = turn_start
             print(f"[SDK Orchestrator] Turn {self._turn_count}, remaining={self.remaining_s():.1f}s")
 
             # Create fresh limits for this turn
@@ -166,12 +189,22 @@ class ClaudeSDKOrchestrator:
             # Execute turn with provider
             try:
                 response = await self._execute_turn(current_prompt, policy, limits)
-                print(f"[SDK Orchestrator] Turn response: content_len={len(response.get('content', ''))}, tool_calls={len(response.get('tool_calls', []))}")
+                tool_call_count = len(response.get('tool_calls', []))
+                content_len = len(response.get('content', ''))
+                print(f"[SDK Orchestrator] Turn response: content_len={content_len}, tool_calls={tool_call_count}")
+
+                # Track consecutive turns without tool calls
+                if tool_call_count == 0:
+                    self._consecutive_no_tool_turns += 1
+                else:
+                    self._consecutive_no_tool_turns = 0
+
             except Exception as e:
                 print(f"[SDK Orchestrator] Turn failed with error: {e}")
                 import traceback
                 traceback.print_exc()
-                self._emit_event("error", {"message": str(e)})
+                error_message = str(e)
+                self._emit_event("error", {"message": error_message})
                 break
 
             # Check if Claude indicates completion
@@ -193,7 +226,8 @@ class ClaudeSDKOrchestrator:
                 current_prompt = self._build_continue_prompt()
 
         return {
-            "success": not self._cancelled,
+            "success": (not self._cancelled) and (error_message is None),
+            "error_message": error_message,
             "findings": self._findings,
             "phase": self.phase,
             "elapsed_s": self.elapsed_s(),
@@ -244,9 +278,11 @@ class ClaudeSDKOrchestrator:
         # Collect response content and tool calls from events
         content_parts: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
+        turn_error: Optional[str] = None
 
         def on_event(event: Dict[str, Any]) -> None:
             """Process SDK events and collect response data."""
+            nonlocal turn_error
             event_type = event.get("type", "")
 
             # Emit all events to WebSocket
@@ -266,11 +302,48 @@ class ClaudeSDKOrchestrator:
                     "args": event.get("args", {}),
                 })
 
+            elif event_type == "turn_complete":
+                if event.get("is_error"):
+                    turn_error = str(event.get("result") or "Claude SDK turn failed")
+
             # Extract findings from tool results
             elif event_type == "tool_result":
-                result = event.get("result", "")
-                if isinstance(result, dict) and result.get("type") == "finding":
-                    self._findings.append(result.get("data", {}))
+                if event.get("is_error"):
+                    return
+
+                raw_result = event.get("result")
+                parsed: Any = None
+
+                if isinstance(raw_result, dict):
+                    parsed = raw_result
+                else:
+                    text: str | None = None
+                    if isinstance(raw_result, str):
+                        text = raw_result
+                    elif isinstance(raw_result, list):
+                        parts: list[str] = []
+                        for item in raw_result:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("type") != "text":
+                                continue
+                            block_text = item.get("text")
+                            if isinstance(block_text, str):
+                                parts.append(block_text)
+                        if parts:
+                            text = "\n".join(parts)
+
+                    if text:
+                        candidate = text.lstrip()
+                        if candidate.startswith("{") or candidate.startswith("["):
+                            try:
+                                parsed = json.loads(text)
+                            except json.JSONDecodeError:
+                                parsed = None
+
+                # Recognize our ToolCore.report_finding output.
+                if isinstance(parsed, dict) and isinstance(parsed.get("finding"), dict):
+                    self._findings.append(parsed["finding"])
 
         try:
             # Run turn with event callback
@@ -278,6 +351,9 @@ class ClaudeSDKOrchestrator:
         except Exception as e:
             self._emit_event("error", {"message": f"Turn failed: {e}"})
             raise
+
+        if turn_error:
+            raise RuntimeError(turn_error)
 
         return {
             "content": "".join(content_parts),

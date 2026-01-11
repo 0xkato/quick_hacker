@@ -236,6 +236,14 @@ docker compose up --build
 - Frontend: `http://localhost:3000`
 - Backend: `http://localhost:8000`
 
+### Claude Code / ACP (Claude Agent SDK)
+
+The backend can run audits through Claude Code via `claude-agent-sdk` (which uses Agent Client Protocol internally).
+
+- Docker: the backend image installs both `claude-agent-sdk` (Python) and `@anthropic-ai/claude-code` (Node).
+- Local dev: install Python deps in `backend/` and `npm i -g @anthropic-ai/claude-code`.
+- Enable per agent with `use_claude_sdk: true` (provider stays `anthropic`).
+
 ### Option B: Local Development (no Docker)
 
 Prereqs:
@@ -296,9 +304,14 @@ curl -X POST http://localhost:8000/api/agents \
     "repo_id": "'"$PROJECT_ID"'",
     "agent_type": "deep_audit",
     "scan_tier": "medium",
+    "use_claude_sdk": true,
     "provider_config": { "provider": "anthropic", "model": "claude-sonnet-4-20250514" }
   }'
 ```
+
+Notes:
+- `use_claude_sdk: true` runs the audit via Claude Code (Claude Agent SDK) using the `quickhack` in-process MCP server (`mcp__quickhack__*` tools).
+- If you omit `use_claude_sdk` (or set it to `false`), the backend uses the legacy ReAct loop.
 
 Then:
 ```bash
@@ -320,8 +333,9 @@ quick_hack/
 ├── backend/
 │   ├── main.py                 # FastAPI app + router wiring
 │   ├── agents/
-│   │   ├── tools.py            # ToolExecutor + AGENT_TOOLS definitions
-│   │   └── deep_audit.py       # ReAct-based audit agent
+│   │   ├── react_agent.py      # ReAct-based audit agent (legacy loop)
+│   │   ├── tools.py            # ToolExecutor + tool definitions
+│   │   └── base_agent.py       # Shared agent base + finding helpers
 │   ├── routers/                # /api/* HTTP endpoints + /ws
 │   ├── services/
 │   │   ├── security_scanners/  # Security analysis tools
@@ -331,9 +345,14 @@ quick_hack/
 │   │   │   ├── grep.py         # Semantic code search
 │   │   │   ├── report.py       # Report generation (MD/JSON/SARIF)
 │   │   │   └── data/           # Bundled vulnerability database
-│   │   ├── orchestrator.py     # Agent lifecycle management
-│   │   ├── sink_signals.py     # Lead/hotspot tracking
-│   │   └── flow.py             # Investigation graph service
+│   │   ├── agent_orchestrator.py      # Agent lifecycle management
+│   │   ├── claude_sdk_orchestrator.py # Time-tier governor (Claude SDK mode)
+│   │   ├── tool_core.py               # MCP tool implementations (Claude SDK mode)
+│   │   ├── sink_signal_service.py     # Lead/hotspot tracking (project-local)
+│   │   └── flow_service.py            # Investigation graph service
+│   ├── providers/
+│   │   ├── claude_sdk_provider.py     # Claude Code / Agent SDK provider
+│   │   └── mcp_tools.py               # In-process MCP server (`quickhack`)
 │   ├── database/               # SQLAlchemy models + connection
 │   ├── prompts/                # Prompt templates / policies
 │   └── tests/

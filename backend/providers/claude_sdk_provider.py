@@ -120,7 +120,10 @@ class ClaudeSDKProvider:
         # Create MCP server and tools from ToolCore
         print("[ClaudeSDKProvider] Creating MCP server...")
         self._mcp_config, self._mcp_server = create_quickhack_mcp_server(self.tool_core)
-        print(f"[ClaudeSDKProvider] MCP server created, tools: {self._mcp_config.get('allowed_tools', [])}")
+        allowed_tools = self._mcp_config.get('allowed_tools', [])
+        print(f"[ClaudeSDKProvider] MCP server created, {len(allowed_tools)} tools:")
+        for tool_name in allowed_tools:
+            print(f"  - {tool_name}")
 
         # Build allowed_tools list
         allowed_tools = self._mcp_config.get("allowed_tools", [])
@@ -129,25 +132,53 @@ class ClaudeSDKProvider:
         system_prompt = self._build_system_prompt(audit_policy)
 
         # Create ClaudeAgentOptions with SDK-compatible parameters
+        model = self.config.get("model", "claude-sonnet-4-20250514")
+        max_turns = self.config.get("max_turns")
+        max_budget = self.config.get("max_budget_usd")
+        permission_mode = self.config.get("permission_mode", "bypassPermissions")
+        api_key = self.config.get("api_key")
+
+        print(f"[ClaudeSDKProvider] Creating ClaudeAgentOptions:")
+        print(f"  model={model}")
+        print(f"  cwd={self.repo_path}")
+        print(f"  max_turns={max_turns}")
+        print(f"  max_budget_usd={max_budget}")
+        print(f"  permission_mode={permission_mode}")
+        print(f"  api_key={'SET' if api_key else 'NOT SET'}")
+        print(f"  mcp_servers keys: {list({'quickhack': self._mcp_server}.keys())}")
+        print(f"  mcp_server type: {type(self._mcp_server)}")
+        print(f"  system_prompt length: {len(system_prompt)}")
+
+        env: dict[str, str] = {}
+        # Claude Code reads the API key from environment variables, so pass it directly
+        # to the CLI subprocess environment (avoid mutating the backend process env).
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+
         options = ClaudeAgentOptions(
-            model=self.config.get("model", "claude-sonnet-4-20250514"),
+            model=model,
             system_prompt=system_prompt,
             mcp_servers={"quickhack": self._mcp_server},
             allowed_tools=allowed_tools,
             cwd=self.repo_path,
-            max_turns=self.config.get("max_turns"),
-            max_budget_usd=self.config.get("max_budget_usd"),
-            permission_mode=self.config.get("permission_mode", "bypassPermissions"),
+            max_turns=max_turns,
+            max_budget_usd=max_budget,
+            permission_mode=permission_mode,
+            env=env,
         )
 
         # Create ClaudeSDKClient
+        print(f"[ClaudeSDKProvider] Creating ClaudeSDKClient...")
         self.client = ClaudeSDKClient(options)
+        print(f"[ClaudeSDKProvider] ClaudeSDKClient created: {type(self.client)}")
 
         # Set session ID
         self.session_id = resume_session_id or str(uuid.uuid4())
 
         # Connect client
+        print(f"[ClaudeSDKProvider] Connecting client...")
         await self.client.connect()
+        print(f"[ClaudeSDKProvider] Client connected successfully")
 
         logger.info(
             f"ClaudeSDKProvider session started: {self.session_id}, "
@@ -210,14 +241,19 @@ and providing actionable security insights."""
         events: list[dict[str, Any]] = []
 
         try:
+            import time as time_module
             # SDK pattern:
             # 1. query() sends the prompt (async, returns None)
             # 2. receive_response() returns AsyncIterator that yields messages until ResultMessage
             print(f"[ClaudeSDKProvider] Sending query: {prompt[:100]}...")
+            query_start = time_module.monotonic()
             await self.client.query(prompt)
+            query_time = time_module.monotonic() - query_start
+            print(f"[ClaudeSDKProvider] query() completed in {query_time:.3f}s")
 
             # Iterate over the async iterator (NOT await it)
             print("[ClaudeSDKProvider] Receiving response stream...")
+            receive_start = time_module.monotonic()
             message_count = 0
             async for message in self.client.receive_response():
                 message_count += 1
@@ -230,7 +266,9 @@ and providing actionable security insights."""
                     if on_event:
                         on_event(event)
 
-            print(f"[ClaudeSDKProvider] Stream complete, {message_count} messages, {len(events)} events")
+            receive_time = time_module.monotonic() - receive_start
+            total_time = time_module.monotonic() - query_start
+            print(f"[ClaudeSDKProvider] Stream complete: {message_count} msgs, {len(events)} events, receive={receive_time:.3f}s, total={total_time:.3f}s")
 
         except Exception as e:
             print(f"[ClaudeSDKProvider] Error in run_turn: {e}")
@@ -285,18 +323,41 @@ and providing actionable security insights."""
         msg_type = msg.__class__.__name__
 
         if msg_type == "SystemMessage":
+            subtype = getattr(msg, "subtype", "unknown")
+            data = getattr(msg, "data", {})
+            tools = data.get("tools", [])
+            tool_count = len(tools) if isinstance(tools, list) else None
+            print(
+                "[ClaudeSDKProvider] SystemMessage:"
+                f" subtype={subtype}"
+                f" session_id={data.get('session_id')}"
+                f" model={data.get('model')}"
+                f" tools={tool_count}"
+                f" apiKeySource={data.get('apiKeySource')}"
+            )
             events.append({
                 "type": "system",
-                "subtype": getattr(msg, "subtype", "unknown"),
-                "data": getattr(msg, "data", {}),
+                "subtype": subtype,
+                "data": data,
             })
 
         elif msg_type == "ResultMessage":
+            cost = getattr(msg, "total_cost_usd", 0.0)
+            result = getattr(msg, "result", None)
+            usage = getattr(msg, "usage", None)
+            is_error = getattr(msg, "is_error", False)
+            print(
+                "[ClaudeSDKProvider] ResultMessage:"
+                f" is_error={is_error}"
+                f" cost={cost}"
+                f" result={result}"
+            )
             events.append({
                 "type": "turn_complete",
-                "total_cost_usd": getattr(msg, "total_cost_usd", 0.0),
-                "result": getattr(msg, "result", None),
-                "usage": getattr(msg, "usage", None),
+                "is_error": is_error,
+                "total_cost_usd": cost,
+                "result": result,
+                "usage": usage,
             })
 
         elif msg_type == "AssistantMessage":
@@ -310,6 +371,8 @@ and providing actionable security insights."""
                     # TextBlock has .text attribute
                     text = getattr(block, "text", "")
                     if text:
+                        # Debug: Log what Claude is actually saying
+                        print(f"[ClaudeSDKProvider] TextBlock content: {text[:200]}{'...' if len(text) > 200 else ''}")
                         events.append({
                             "type": "agent_text",
                             "text": text,

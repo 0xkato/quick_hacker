@@ -122,19 +122,12 @@ class AgentOrchestrator:
                 request.scan_tier = resolved.scan_tier
                 request.time_budget_seconds = resolved.time_budget_seconds
 
-        # Check if using Claude SDK (uses env var auth, no API key needed)
+        # Check if using Claude SDK
         use_claude_sdk = getattr(request, 'use_claude_sdk', False)
-        provider_is_anthropic = (
-            request.provider_config and
-            hasattr(request.provider_config, 'provider') and
-            (request.provider_config.provider.value if hasattr(request.provider_config.provider, 'value')
-             else str(request.provider_config.provider)).lower() == "anthropic"
-        )
-        skip_api_key_for_sdk = use_claude_sdk and provider_is_anthropic
 
-        # Resolve API keys for all configs
+        # Resolve API keys for all configs (including SDK - provider will set env var)
         configs_to_resolve = []
-        if request.provider_config and not skip_api_key_for_sdk:
+        if request.provider_config:
             configs_to_resolve.append(("provider_config", request.provider_config))
         if request.scanner_config:
             configs_to_resolve.append(("scanner_config", request.scanner_config))
@@ -174,8 +167,8 @@ class AgentOrchestrator:
                     setattr(request, config_name, resolved_config)
                     print(f"[Orchestrator] Resolved API key for {config_name}")
 
-        if skip_api_key_for_sdk:
-            print("[Orchestrator] Using Claude SDK - API key handled via ANTHROPIC_API_KEY env var")
+        if use_claude_sdk:
+            print("[Orchestrator] Using Claude SDK mode")
 
         # Create agent instance
         agent_class = AGENT_CLASSES.get(request.agent_type)
@@ -378,17 +371,14 @@ class AgentOrchestrator:
             findings: list[Finding] = []
             for finding_data in result.get("findings", []):
                 try:
+                    finding_payload = dict(finding_data) if isinstance(finding_data, dict) else {}
+                    finding_payload.setdefault("metadata", {})
                     finding = Finding(
                         id=f"{agent.id}-{len(findings)}",
                         agent_id=agent.id,
-                        title=finding_data.get("title", "Untitled Finding"),
-                        description=finding_data.get("description", ""),
-                        severity=finding_data.get("severity", "medium"),
-                        file_path=finding_data.get("file_path", ""),
-                        line_start=finding_data.get("line_start"),
-                        line_end=finding_data.get("line_end"),
-                        vulnerable_code=finding_data.get("vulnerable_code", ""),
-                        recommendation=finding_data.get("recommended_fix", ""),
+                        repo_id=agent.repo_id,
+                        created_at=datetime.utcnow(),
+                        **finding_payload,
                     )
                     findings.append(finding)
                 except Exception as e:
@@ -396,6 +386,11 @@ class AgentOrchestrator:
 
             # Update agent findings
             agent.findings = findings
+
+            # If the SDK run failed, propagate an error so the agent is marked FAILED.
+            if not result.get("success", True):
+                raise RuntimeError(result.get("error_message") or "Claude SDK audit failed")
+
             agent.status = AgentStatus.COMPLETED
 
             return findings

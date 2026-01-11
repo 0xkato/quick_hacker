@@ -527,7 +527,9 @@ function isNodeRunning(nodes: FlowNode[], nodeId: string): boolean {
   return node?.status === 'running';
 }
 
-// Helper: Calculate node positions in a hierarchical layout
+/**
+ * Calculate positions for multiple investigation trees with no overlap.
+ */
 function calculateLayout(
   nodes: FlowNode[],
   edges: FlowEdge[]
@@ -536,7 +538,7 @@ function calculateLayout(
 
   if (nodes.length === 0) return positions;
 
-  // Build adjacency list
+  // Build adjacency lists
   const children = new Map<string, string[]>();
   const parents = new Map<string, string[]>();
 
@@ -548,48 +550,107 @@ function calculateLayout(
     parents.get(edge.target)!.push(edge.source);
   }
 
-  // Find root nodes (no parents)
-  const roots = nodes.filter((n) => !parents.has(n.id) || parents.get(n.id)!.length === 0);
+  // Find root nodes (each starts an investigation tree)
+  const roots = nodes.filter(n =>
+    !parents.has(n.id) || parents.get(n.id)!.length === 0
+  );
 
-  // BFS to assign levels
-  const levels = new Map<string, number>();
-  const queue = roots.map((r) => ({ id: r.id, level: 0 }));
-  const visited = new Set<string>();
+  // Layout constants
+  const TREE_HORIZONTAL_SPACING = 400;
+  const NODE_WIDTH = 220;
+  const NODE_HEIGHT = 100;
 
-  while (queue.length > 0) {
-    const { id, level } = queue.shift()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
+  let currentXOffset = 0;
 
-    levels.set(id, Math.max(levels.get(id) || 0, level));
+  // Layout each tree separately
+  for (const root of roots) {
+    const subtreeWidth = calculateSubtreeWidth(root.id, children, NODE_WIDTH);
 
-    const childIds = children.get(id) || [];
-    for (const childId of childIds) {
-      queue.push({ id: childId, level: level + 1 });
-    }
+    layoutSubtree(
+      root.id,
+      children,
+      positions,
+      currentXOffset,
+      0,
+      NODE_WIDTH,
+      NODE_HEIGHT
+    );
+
+    currentXOffset += subtreeWidth + TREE_HORIZONTAL_SPACING;
   }
 
-  // Group nodes by level
-  const byLevel = new Map<number, string[]>();
-  Array.from(levels.entries()).forEach(([id, level]) => {
-    if (!byLevel.has(level)) byLevel.set(level, []);
-    byLevel.get(level)!.push(id);
-  });
-
-  // Position nodes
-  const levelWidth = 220;
-  const nodeHeight = 80;
-
-  Array.from(byLevel.entries()).forEach(([level, nodeIds]) => {
-    const levelY = (nodeIds.length - 1) * nodeHeight * -0.5;
-
-    nodeIds.forEach((id: string, index: number) => {
-      positions.set(id, {
-        x: level * levelWidth,
-        y: levelY + index * nodeHeight,
-      });
-    });
-  });
-
   return positions;
+}
+
+/**
+ * Calculate width needed for a subtree.
+ */
+function calculateSubtreeWidth(
+  nodeId: string,
+  children: Map<string, string[]>,
+  nodeWidth: number
+): number {
+  const childIds = children.get(nodeId) || [];
+
+  if (childIds.length === 0) {
+    return nodeWidth;
+  }
+
+  // Subtree width is sum of all children's subtree widths
+  const childrenWidth = childIds.reduce((sum, childId) => {
+    return sum + calculateSubtreeWidth(childId, children, nodeWidth);
+  }, 0);
+
+  return Math.max(nodeWidth, childrenWidth);
+}
+
+/**
+ * Recursively layout a subtree.
+ */
+function layoutSubtree(
+  nodeId: string,
+  children: Map<string, string[]>,
+  positions: Map<string, { x: number; y: number }>,
+  x: number,
+  depth: number,
+  nodeWidth: number,
+  nodeHeight: number
+): number {
+  const childIds = children.get(nodeId) || [];
+
+  if (childIds.length === 0) {
+    // Leaf node
+    positions.set(nodeId, { x, y: depth * nodeHeight });
+    return nodeWidth;
+  }
+
+  // Layout children left-to-right
+  let currentChildX = x;
+  const childCenters: number[] = [];
+
+  for (const childId of childIds) {
+    const childWidth = layoutSubtree(
+      childId,
+      children,
+      positions,
+      currentChildX,
+      depth + 1,
+      nodeWidth,
+      nodeHeight
+    );
+
+    // Store center position of this child
+    childCenters.push(currentChildX + childWidth / 2);
+    currentChildX += childWidth;
+  }
+
+  // Position parent centered over children
+  const leftmost = childCenters[0];
+  const rightmost = childCenters[childCenters.length - 1];
+  const centerX = (leftmost + rightmost) / 2;
+
+  positions.set(nodeId, { x: centerX, y: depth * nodeHeight });
+
+  // Return total width used by this subtree
+  return currentChildX - x;
 }

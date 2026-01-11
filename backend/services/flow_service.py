@@ -152,8 +152,12 @@ class FlowService:
         if investigation_root_id is not None:
             flow.context.investigation_root_id = investigation_root_id
         if call_depth is not None:
+            if call_depth < 0:
+                raise ValueError(f"call_depth must be non-negative, got {call_depth}")
             flow.context.call_depth = call_depth
         if max_call_depth is not None:
+            if max_call_depth <= 0:
+                raise ValueError(f"max_call_depth must be positive, got {max_call_depth}")
             flow.context.max_call_depth = max_call_depth
 
     def get_or_create_file_node(

@@ -309,3 +309,39 @@ def test_update_context_with_call_depth():
 
     # Both should be preserved
     assert flow.context.call_depth == 2
+
+
+def test_update_context_rejects_negative_call_depth():
+    """update_context should reject negative call_depth."""
+    from services.flow_service import flow_service
+    import pytest
+
+    agent_id = "test-agent"
+    flow_service.initialize_flow(agent_id)
+
+    with pytest.raises(ValueError, match="call_depth must be non-negative"):
+        flow_service.update_context(agent_id, call_depth=-1)
+
+
+def test_update_context_rejects_zero_max_call_depth():
+    """update_context should reject zero max_call_depth."""
+    from services.flow_service import flow_service
+    import pytest
+
+    agent_id = "test-agent"
+    flow_service.initialize_flow(agent_id)
+
+    with pytest.raises(ValueError, match="max_call_depth must be positive"):
+        flow_service.update_context(agent_id, max_call_depth=0)
+
+
+def test_update_context_rejects_negative_max_call_depth():
+    """update_context should reject negative max_call_depth."""
+    from services.flow_service import flow_service
+    import pytest
+
+    agent_id = "test-agent"
+    flow_service.initialize_flow(agent_id)
+
+    with pytest.raises(ValueError, match="max_call_depth must be positive"):
+        flow_service.update_context(agent_id, max_call_depth=-1)

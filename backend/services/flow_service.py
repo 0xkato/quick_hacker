@@ -132,6 +132,27 @@ class FlowService:
         if investigation_root_id is not None:
             flow.context.investigation_root_id = investigation_root_id
 
+    def get_or_create_file_node(
+        self,
+        agent_id: str,
+        file_path: str,
+    ) -> Optional[FlowNode]:
+        """Get existing file node or return None (let caller create it).
+
+        Returns:
+            FlowNode if file already has a node, None otherwise
+        """
+        flow = self._flows.get(agent_id)
+        if not flow:
+            return None
+
+        # Check if we already have a node for this file
+        for node in flow.nodes:
+            if node.type == "file" and node.data.get("file_path") == file_path:
+                return node
+
+        return None
+
     def add_node(
         self,
         agent_id: str,

@@ -101,3 +101,55 @@ def test_update_context_preserves_other_fields():
     flow = flow_service.get_flow("test-agent")
     assert flow.context.current_file == "/app/routes.py"
     assert flow.context.current_function == "handle_request"
+
+
+def test_get_or_create_file_node_creates_new():
+    """Test get_or_create_file_node creates node if not exists."""
+    flow_service.initialize_flow("test-agent")
+    result = flow_service.get_or_create_file_node("test-agent", "/app/routes.py")
+    assert result is None  # Returns None on first call (caller should create)
+
+
+def test_get_or_create_file_node_returns_existing():
+    """Test get_or_create_file_node returns existing node."""
+    flow_service.initialize_flow("test-agent")
+
+    # Create file node
+    node = flow_service.add_node(
+        "test-agent",
+        "file",
+        "routes.py",
+        {"file_path": "/app/routes.py"}
+    )
+
+    # Should return the existing node
+    result = flow_service.get_or_create_file_node("test-agent", "/app/routes.py")
+    assert result is not None
+    assert result.id == node.id
+    assert result.type == "file"
+
+
+def test_get_or_create_file_node_different_paths():
+    """Test different paths return different nodes."""
+    flow_service.initialize_flow("test-agent")
+
+    # Create two file nodes
+    node1 = flow_service.add_node(
+        "test-agent",
+        "file",
+        "routes.py",
+        {"file_path": "/app/routes.py"}
+    )
+    node2 = flow_service.add_node(
+        "test-agent",
+        "file",
+        "models.py",
+        {"file_path": "/app/models.py"}
+    )
+
+    # Should return correct node for each path
+    result1 = flow_service.get_or_create_file_node("test-agent", "/app/routes.py")
+    result2 = flow_service.get_or_create_file_node("test-agent", "/app/models.py")
+
+    assert result1.id == node1.id
+    assert result2.id == node2.id

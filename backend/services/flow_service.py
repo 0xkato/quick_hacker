@@ -12,6 +12,15 @@ from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 
 
+@dataclass
+class FlowContext:
+    """Tracks investigation context for proper tree branching."""
+    current_file: Optional[str] = None
+    current_function: Optional[str] = None
+    current_candidate_node_id: Optional[str] = None
+    investigation_root_id: Optional[str] = None
+
+
 NodeType = Literal[
     "user_input",
     "tool_call",
@@ -64,6 +73,7 @@ class InvestigationFlow:
     nodes: list[FlowNode] = field(default_factory=list)
     edges: list[FlowEdge] = field(default_factory=list)
     current_node_id: Optional[str] = None
+    context: FlowContext = field(default_factory=FlowContext)
 
     def to_dict(self) -> dict:
         return {
@@ -71,6 +81,7 @@ class InvestigationFlow:
             "nodes": [n.to_dict() for n in self.nodes],
             "edges": [e.to_dict() for e in self.edges],
             "current_node_id": self.current_node_id,
+            "context": asdict(self.context),
         }
 
 

@@ -509,7 +509,7 @@ class AgentOrchestrator:
         # For SDK agents, call interrupt on the provider
         if hasattr(agent, '_sdk_provider') and agent._sdk_provider is not None:
             try:
-                agent._sdk_provider.interrupt()
+                await agent._sdk_provider.interrupt()
                 print(f"[Orchestrator] Interrupted SDK provider for agent {agent_id}")
             except Exception as e:
                 print(f"[Orchestrator] Failed to interrupt SDK provider: {e}")

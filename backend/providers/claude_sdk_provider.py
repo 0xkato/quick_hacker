@@ -240,13 +240,16 @@ and providing actionable security insights."""
 
         return events
 
-    def interrupt(self) -> None:
+    async def interrupt(self) -> None:
         """Interrupt the current agent operation.
 
         Safe to call even if client is not initialized.
         """
         if self.client is not None:
-            self.client.interrupt()
+            # interrupt() may be sync or async depending on SDK version
+            result = self.client.interrupt()
+            if hasattr(result, '__await__'):
+                await result
             logger.info(f"ClaudeSDKProvider session {self.session_id} interrupted")
 
     async def close(self) -> None:
@@ -273,7 +276,7 @@ and providing actionable security insights."""
 
         Message type conversions:
             - SystemMessage -> {type: "system", subtype, data}
-            - ResultMessage -> {type: "turn_complete", session_id, duration_ms, total_cost_usd}
+            - ResultMessage -> {type: "turn_complete", total_cost_usd, result}
             - AssistantMessage with TextBlock -> {type: "agent_text", text}
             - AssistantMessage with ToolUseBlock -> {type: "tool_call", id, name, args}
             - AssistantMessage with ToolResultBlock -> {type: "tool_result", tool_use_id, result}
@@ -291,24 +294,38 @@ and providing actionable security insights."""
         elif msg_type == "ResultMessage":
             events.append({
                 "type": "turn_complete",
-                "session_id": getattr(msg, "session_id", None),
-                "duration_ms": getattr(msg, "duration_ms", 0),
                 "total_cost_usd": getattr(msg, "total_cost_usd", 0.0),
+                "result": getattr(msg, "result", None),
+                "usage": getattr(msg, "usage", None),
             })
 
         elif msg_type == "AssistantMessage":
-            # AssistantMessage can have multiple content blocks
+            # AssistantMessage.content is list of TextBlock|ThinkingBlock|ToolUseBlock|ToolResultBlock
             content_blocks = getattr(msg, "content", [])
             for block in content_blocks:
-                block_type = getattr(block, "type", None)
+                # SDK blocks are class instances, check __class__.__name__ not .type attribute
+                block_type = block.__class__.__name__
 
-                if block_type == "text":
-                    events.append({
-                        "type": "agent_text",
-                        "text": getattr(block, "text", ""),
-                    })
+                if block_type == "TextBlock":
+                    # TextBlock has .text attribute
+                    text = getattr(block, "text", "")
+                    if text:
+                        events.append({
+                            "type": "agent_text",
+                            "text": text,
+                        })
 
-                elif block_type == "tool_use":
+                elif block_type == "ThinkingBlock":
+                    # ThinkingBlock has .thinking attribute
+                    thinking = getattr(block, "thinking", "")
+                    if thinking:
+                        events.append({
+                            "type": "agent_thinking",
+                            "thinking": thinking,
+                        })
+
+                elif block_type == "ToolUseBlock":
+                    # ToolUseBlock has .id, .name, .input attributes
                     events.append({
                         "type": "tool_call",
                         "id": getattr(block, "id", ""),
@@ -316,12 +333,17 @@ and providing actionable security insights."""
                         "args": getattr(block, "input", {}),
                     })
 
-                elif block_type == "tool_result":
+                elif block_type == "ToolResultBlock":
+                    # ToolResultBlock has .tool_use_id, .content, .is_error attributes
                     events.append({
                         "type": "tool_result",
                         "tool_use_id": getattr(block, "tool_use_id", ""),
                         "result": getattr(block, "content", ""),
+                        "is_error": getattr(block, "is_error", False),
                     })
+
+                else:
+                    logger.debug(f"Unknown block type in AssistantMessage: {block_type}")
 
         else:
             # Unknown message type - log and skip

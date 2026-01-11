@@ -112,3 +112,9 @@ class TestToolCoreReadFile:
 
         content = await tool_core.read_file("tiny.txt", start_line=10, end_line=20)
         assert content == ""
+
+    @pytest.mark.asyncio
+    async def test_read_file_rejects_path_traversal(self, tool_core):
+        """Should reject path traversal attempts."""
+        with pytest.raises(ValueError, match="escapes"):
+            await tool_core.read_file("../../../etc/passwd")

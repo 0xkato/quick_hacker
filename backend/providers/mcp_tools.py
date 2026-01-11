@@ -1,24 +1,37 @@
 # backend/providers/mcp_tools.py
 """MCP tool server for exposing ToolCore methods to Claude SDK.
 
-This module defines MCP tool definitions and creates the server configuration
-for integrating quick_hack's security research tools with Claude Agent SDK.
+This module creates SDK MCP tools using the @tool decorator from claude_agent_sdk.
+It wraps quick_hack's security research tools for use with Claude Agent SDK.
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any, Callable, Coroutine
+import logging
+from typing import Any
 
 from services.tool_core import ToolCore
 
+logger = logging.getLogger(__name__)
 
 # Maximum output size before truncation (50KB)
 MAX_OUTPUT_SIZE = 50_000
 
+# Try to import Claude SDK, but provide fallback for testing
+SDK_AVAILABLE = False
+tool = None
+create_sdk_mcp_server = None
 
-# MCP Tool Definitions
-# Each tool has: name, description, input_schema (JSON Schema)
+try:
+    from claude_agent_sdk import tool as _tool, create_sdk_mcp_server as _create_sdk_mcp_server
+    tool = _tool
+    create_sdk_mcp_server = _create_sdk_mcp_server
+    SDK_AVAILABLE = True
+except ImportError:
+    logger.warning("Claude Agent SDK not installed. MCP tools will use fallback mode.")
+
+
+# Legacy MCP_TOOLS list for backwards compatibility and testing
 MCP_TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_file",
@@ -26,18 +39,9 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path from repository root"
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "Starting line number (1-indexed, inclusive)"
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "Ending line number (1-indexed, inclusive)"
-                }
+                "path": {"type": "string", "description": "Relative path from repository root"},
+                "start_line": {"type": "integer", "description": "Starting line number (1-indexed, inclusive)"},
+                "end_line": {"type": "integer", "description": "Ending line number (1-indexed, inclusive)"}
             },
             "required": ["path"]
         }
@@ -48,18 +52,9 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regex pattern to search for"
-                },
-                "file_pattern": {
-                    "type": "string",
-                    "description": "Optional glob pattern to filter files (e.g., '*.py')"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return (default: 50)"
-                }
+                "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                "file_pattern": {"type": "string", "description": "Optional glob pattern to filter files"},
+                "max_results": {"type": "integer", "description": "Maximum number of results to return"}
             },
             "required": ["pattern"]
         }
@@ -70,22 +65,10 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path from repository root (use '.' for root)"
-                },
-                "recursive": {
-                    "type": "boolean",
-                    "description": "If true, list all files recursively"
-                },
-                "pattern": {
-                    "type": "string",
-                    "description": "Optional glob pattern to filter items"
-                },
-                "max_items": {
-                    "type": "integer",
-                    "description": "Maximum items to return (default: 500)"
-                }
+                "path": {"type": "string", "description": "Relative path from repository root"},
+                "recursive": {"type": "boolean", "description": "If true, list all files recursively"},
+                "pattern": {"type": "string", "description": "Optional glob pattern to filter items"},
+                "max_items": {"type": "integer", "description": "Maximum items to return"}
             },
             "required": []
         }
@@ -96,14 +79,8 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "status": {
-                    "type": "string",
-                    "description": "Filter by status (e.g., 'unreviewed', 'confirmed', 'false_positive')"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum signals to return (default: 50, max: 200)"
-                }
+                "status": {"type": "string", "description": "Filter by status"},
+                "limit": {"type": "integer", "description": "Maximum signals to return"}
             },
             "required": []
         }
@@ -114,144 +91,62 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "kind": {
-                    "type": "string",
-                    "description": "Signal kind: 'entry_point', 'sink', or 'other'"
-                },
-                "label": {
-                    "type": "string",
-                    "description": "Human-readable label describing the signal"
-                },
-                "file_path": {
-                    "type": "string",
-                    "description": "File path relative to repository root"
-                },
-                "fingerprint": {
-                    "type": "string",
-                    "description": "Optional explicit fingerprint (auto-generated if not provided)"
-                },
-                "line_number": {
-                    "type": "integer",
-                    "description": "Line number in the file"
-                },
-                "status": {
-                    "type": "string",
-                    "description": "Signal status (e.g., 'unreviewed', 'confirmed')"
-                },
-                "llm_risk_tier": {
-                    "type": "string",
-                    "description": "Risk tier assessment (S, A, B, C, D, E)"
-                },
-                "llm_score": {
-                    "type": "integer",
-                    "description": "Risk score (0-100)"
-                },
-                "llm_reasoning": {
-                    "type": "string",
-                    "description": "Explanation of risk assessment"
-                },
-                "metadata": {
-                    "type": "object",
-                    "description": "Additional metadata"
-                }
+                "kind": {"type": "string", "description": "Signal kind: 'entry_point', 'sink', or 'other'"},
+                "label": {"type": "string", "description": "Human-readable label describing the signal"},
+                "file_path": {"type": "string", "description": "File path relative to repository root"},
+                "fingerprint": {"type": "string", "description": "Optional explicit fingerprint"},
+                "line_number": {"type": "integer", "description": "Line number in the file"},
+                "status": {"type": "string", "description": "Signal status"},
+                "llm_risk_tier": {"type": "string", "description": "Risk tier assessment (S, A, B, C, D, E)"},
+                "llm_score": {"type": "integer", "description": "Risk score (0-100)"},
+                "llm_reasoning": {"type": "string", "description": "Explanation of risk assessment"},
+                "metadata": {"type": "object", "description": "Additional metadata"}
             },
             "required": ["kind", "label", "file_path"]
         }
     },
     {
         "name": "report_finding",
-        "description": "Report a security vulnerability finding with full details including severity, code location, and remediation.",
+        "description": "Report a security vulnerability finding with full details.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "severity": {
-                    "type": "string",
-                    "description": "Severity level: 'critical', 'high', 'medium', 'low', or 'info'"
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Brief title for the finding"
-                },
-                "vulnerability_type": {
-                    "type": "string",
-                    "description": "Type of vulnerability (e.g., 'SQL Injection', 'XSS')"
-                },
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the vulnerable file"
-                },
-                "line_start": {
-                    "type": "integer",
-                    "description": "Starting line number (1-indexed)"
-                },
-                "vulnerable_code": {
-                    "type": "string",
-                    "description": "The vulnerable code snippet"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Detailed description of the vulnerability"
-                },
-                "confidence": {
-                    "type": "number",
-                    "description": "Confidence score (0.0 to 1.0)"
-                },
-                "cwe_id": {
-                    "type": "string",
-                    "description": "CWE identifier (e.g., 'CWE-89')"
-                },
-                "line_end": {
-                    "type": "integer",
-                    "description": "Ending line number"
-                },
-                "source_trace": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Data flow trace from source to sink"
-                },
-                "attack_scenario": {
-                    "type": "string",
-                    "description": "Description of how the vulnerability could be exploited"
-                },
-                "proof_of_concept": {
-                    "type": "string",
-                    "description": "Example exploit code or payload"
-                },
-                "recommended_fix": {
-                    "type": "string",
-                    "description": "Recommended remediation"
-                }
+                "severity": {"type": "string", "description": "Severity level"},
+                "title": {"type": "string", "description": "Brief title for the finding"},
+                "vulnerability_type": {"type": "string", "description": "Type of vulnerability"},
+                "file_path": {"type": "string", "description": "Path to the vulnerable file"},
+                "line_start": {"type": "integer", "description": "Starting line number"},
+                "vulnerable_code": {"type": "string", "description": "The vulnerable code snippet"},
+                "description": {"type": "string", "description": "Detailed description"},
+                "confidence": {"type": "number", "description": "Confidence score (0.0 to 1.0)"},
+                "cwe_id": {"type": "string", "description": "CWE identifier"},
+                "line_end": {"type": "integer", "description": "Ending line number"},
+                "source_trace": {"type": "array", "items": {"type": "string"}, "description": "Data flow trace"},
+                "attack_scenario": {"type": "string", "description": "Exploitation description"},
+                "proof_of_concept": {"type": "string", "description": "Example exploit"},
+                "recommended_fix": {"type": "string", "description": "Recommended remediation"}
             },
-            "required": [
-                "severity", "title", "vulnerability_type", "file_path",
-                "line_start", "vulnerable_code", "description", "confidence"
-            ]
+            "required": ["severity", "title", "vulnerability_type", "file_path", "line_start", "vulnerable_code", "description", "confidence"]
         }
     },
     {
         "name": "scan_repo_for_secrets",
-        "description": "Scan the repository for hardcoded secrets, API keys, and credentials using entropy analysis and pattern matching.",
+        "description": "Scan the repository for hardcoded secrets, API keys, and credentials.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "entropy_threshold": {
-                    "type": "number",
-                    "description": "Minimum Shannon entropy for detection (default: 4.5)"
-                }
+                "entropy_threshold": {"type": "number", "description": "Minimum Shannon entropy for detection"}
             },
             "required": []
         }
     },
     {
         "name": "dependency_audit",
-        "description": "Audit project dependencies for known vulnerabilities using lockfiles.",
+        "description": "Audit project dependencies for known vulnerabilities.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "lockfile_path": {
-                    "type": "string",
-                    "description": "Optional specific lockfile to audit"
-                }
+                "lockfile_path": {"type": "string", "description": "Optional specific lockfile to audit"}
             },
             "required": []
         }
@@ -262,18 +157,9 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regex pattern to search for"
-                },
-                "context_lines": {
-                    "type": "integer",
-                    "description": "Number of context lines around matches (default: 3)"
-                },
-                "file_glob": {
-                    "type": "string",
-                    "description": "Glob pattern to filter files (default: '**/*')"
-                }
+                "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                "context_lines": {"type": "integer", "description": "Number of context lines"},
+                "file_glob": {"type": "string", "description": "Glob pattern to filter files"}
             },
             "required": ["pattern"]
         }
@@ -284,17 +170,8 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "findings": {
-                    "type": "array",
-                    "description": "List of ScanFinding objects to include in report",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "output_format": {
-                    "type": "string",
-                    "description": "Output format: 'markdown', 'json', or 'sarif' (default: 'markdown')"
-                }
+                "findings": {"type": "array", "description": "List of ScanFinding objects", "items": {"type": "object"}},
+                "output_format": {"type": "string", "description": "Output format: 'markdown', 'json', or 'sarif'"}
             },
             "required": ["findings"]
         }
@@ -302,294 +179,288 @@ MCP_TOOLS: list[dict[str, Any]] = [
 ]
 
 
-@dataclass
-class MCPTool:
-    """Represents an MCP tool with its handler function.
-
-    Attributes:
-        name: Tool name (matches MCP_TOOLS definition)
-        description: Human-readable description
-        input_schema: JSON Schema for tool parameters
-        handler: Async function that implements the tool
-    """
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-    handler: Callable[..., Coroutine[Any, Any, Any]]
-
-
 def _truncate_output(output: str) -> str:
-    """Truncate output if it exceeds MAX_OUTPUT_SIZE.
-
-    Args:
-        output: The output string to potentially truncate
-
-    Returns:
-        Original string if under limit, or truncated with notice
-    """
+    """Truncate output if it exceeds MAX_OUTPUT_SIZE."""
     if len(output) <= MAX_OUTPUT_SIZE:
         return output
-
-    # Reserve space for truncation notice
     notice = "\n\n[OUTPUT TRUNCATED]"
     truncate_at = MAX_OUTPUT_SIZE - len(notice)
     return output[:truncate_at] + notice
 
 
-def create_quickhack_mcp_server(
-    tool_core: ToolCore,
-) -> tuple[dict[str, Any], list[MCPTool]]:
+def _make_response(text: str, is_error: bool = False) -> dict[str, Any]:
+    """Create SDK tool response format."""
+    response = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        response["is_error"] = True
+    return response
+
+
+def _make_error_response(error: Exception) -> dict[str, Any]:
+    """Create error response for SDK tool."""
+    return _make_response(
+        json.dumps({"error": type(error).__name__, "details": str(error)}),
+        is_error=True
+    )
+
+
+def create_quickhack_mcp_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
     """Create MCP server configuration and tools for quick_hack.
 
-    This function creates wrapped handlers for each tool that:
-    1. Call the corresponding ToolCore method
-    2. Truncate output if necessary
-    3. Format results appropriately
+    This function creates SDK MCP tools using the @tool decorator from claude_agent_sdk.
+    If SDK is not available, it returns a fallback configuration for testing.
 
     Args:
         tool_core: The ToolCore instance to wrap
 
     Returns:
-        Tuple of (server_config, list of MCPTool instances)
-        server_config contains:
-            - allowed_tools: List of tool names in mcp__quickhack__<name> format
+        Tuple of (server_config, mcp_server_or_tools)
+        - server_config: dict with allowed_tools list
+        - mcp_server_or_tools: McpSdkServerConfig if SDK available, else list of tool definitions
     """
+    if not SDK_AVAILABLE:
+        # Fallback mode for testing without SDK
+        return _create_fallback_server(tool_core)
 
-    # Create handler wrappers for each tool
-    async def read_file_handler(
-        path: str,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        **kwargs: Any,
-    ) -> str:
+    return _create_sdk_server(tool_core)
+
+
+def _create_fallback_server(tool_core: ToolCore) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Create fallback server configuration for testing without SDK."""
+    server_config = {
+        "allowed_tools": [f"mcp__quickhack__{t['name']}" for t in MCP_TOOLS],
+    }
+    return server_config, MCP_TOOLS
+
+
+def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
+    """Create SDK MCP server with @tool decorated functions."""
+
+    # Define tools using SDK @tool decorator
+    @tool("read_file", "Read file contents from the repository", {
+        "path": str,
+        "start_line": int,
+        "end_line": int,
+    })
+    async def read_file(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.read_file(
-                path=path,
-                start_line=start_line,
-                end_line=end_line,
+                path=args["path"],
+                start_line=args.get("start_line"),
+                end_line=args.get("end_line"),
             )
-            return _truncate_output(result)
+            return _make_response(_truncate_output(result))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def search_code_handler(
-        pattern: str,
-        file_pattern: str | None = None,
-        max_results: int = 50,
-        **kwargs: Any,
-    ) -> str:
+    @tool("search_code", "Search for regex pattern across the codebase", {
+        "pattern": str,
+        "file_pattern": str,
+        "max_results": int,
+    })
+    async def search_code(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.search_code(
-                pattern=pattern,
-                file_pattern=file_pattern,
-                max_results=max_results,
+                pattern=args["pattern"],
+                file_pattern=args.get("file_pattern"),
+                max_results=args.get("max_results", 50),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def list_directory_handler(
-        path: str = ".",
-        recursive: bool = False,
-        pattern: str | None = None,
-        max_items: int = 500,
-        **kwargs: Any,
-    ) -> str:
+    @tool("list_directory", "List directory contents with optional recursive traversal", {
+        "path": str,
+        "recursive": bool,
+        "pattern": str,
+        "max_items": int,
+    })
+    async def list_directory(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.list_directory(
-                path=path,
-                recursive=recursive,
-                pattern=pattern,
-                max_items=max_items,
+                path=args.get("path", "."),
+                recursive=args.get("recursive", False),
+                pattern=args.get("pattern"),
+                max_items=args.get("max_items", 500),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def list_sink_signals_handler(
-        status: str | None = None,
-        limit: int = 50,
-        **kwargs: Any,
-    ) -> str:
+    @tool("list_sink_signals", "List sink signals for the current project", {
+        "status": str,
+        "limit": int,
+    })
+    async def list_sink_signals(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.list_sink_signals(
-                status=status,
-                limit=limit,
+                status=args.get("status"),
+                limit=args.get("limit", 50),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def upsert_sink_signal_handler(
-        kind: str,
-        label: str,
-        file_path: str,
-        fingerprint: str | None = None,
-        line_number: int | None = None,
-        status: str | None = None,
-        llm_risk_tier: str | None = None,
-        llm_score: int | None = None,
-        llm_reasoning: str | None = None,
-        metadata: dict | None = None,
-        **kwargs: Any,
-    ) -> str:
+    @tool("upsert_sink_signal", "Create or update a sink signal", {
+        "kind": str,
+        "label": str,
+        "file_path": str,
+        "fingerprint": str,
+        "line_number": int,
+        "status": str,
+        "llm_risk_tier": str,
+        "llm_score": int,
+        "llm_reasoning": str,
+        "metadata": dict,
+    })
+    async def upsert_sink_signal(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.upsert_sink_signal(
-                kind=kind,
-                label=label,
-                file_path=file_path,
-                fingerprint=fingerprint,
-                line_number=line_number,
-                status=status,
-                llm_risk_tier=llm_risk_tier,
-                llm_score=llm_score,
-                llm_reasoning=llm_reasoning,
-                metadata=metadata,
+                kind=args["kind"],
+                label=args["label"],
+                file_path=args["file_path"],
+                fingerprint=args.get("fingerprint"),
+                line_number=args.get("line_number"),
+                status=args.get("status"),
+                llm_risk_tier=args.get("llm_risk_tier"),
+                llm_score=args.get("llm_score"),
+                llm_reasoning=args.get("llm_reasoning"),
+                metadata=args.get("metadata"),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def report_finding_handler(
-        severity: str,
-        title: str,
-        vulnerability_type: str,
-        file_path: str,
-        line_start: int,
-        vulnerable_code: str,
-        description: str,
-        confidence: float,
-        cwe_id: str | None = None,
-        line_end: int | None = None,
-        source_trace: list[str] | None = None,
-        attack_scenario: str | None = None,
-        proof_of_concept: str | None = None,
-        recommended_fix: str | None = None,
-        **kwargs: Any,
-    ) -> str:
+    @tool("report_finding", "Report a security vulnerability finding", {
+        "severity": str,
+        "title": str,
+        "vulnerability_type": str,
+        "file_path": str,
+        "line_start": int,
+        "vulnerable_code": str,
+        "description": str,
+        "confidence": float,
+        "cwe_id": str,
+        "line_end": int,
+        "source_trace": list,
+        "attack_scenario": str,
+        "proof_of_concept": str,
+        "recommended_fix": str,
+    })
+    async def report_finding(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.report_finding(
-                severity=severity,
-                title=title,
-                vulnerability_type=vulnerability_type,
-                file_path=file_path,
-                line_start=line_start,
-                vulnerable_code=vulnerable_code,
-                description=description,
-                confidence=confidence,
-                cwe_id=cwe_id,
-                line_end=line_end,
-                source_trace=source_trace,
-                attack_scenario=attack_scenario,
-                proof_of_concept=proof_of_concept,
-                recommended_fix=recommended_fix,
+                severity=args["severity"],
+                title=args["title"],
+                vulnerability_type=args["vulnerability_type"],
+                file_path=args["file_path"],
+                line_start=args["line_start"],
+                vulnerable_code=args["vulnerable_code"],
+                description=args["description"],
+                confidence=args["confidence"],
+                cwe_id=args.get("cwe_id"),
+                line_end=args.get("line_end"),
+                source_trace=args.get("source_trace"),
+                attack_scenario=args.get("attack_scenario"),
+                proof_of_concept=args.get("proof_of_concept"),
+                recommended_fix=args.get("recommended_fix"),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def scan_repo_for_secrets_handler(
-        entropy_threshold: float = 4.5,
-        **kwargs: Any,
-    ) -> str:
+    @tool("scan_repo_for_secrets", "Scan repository for hardcoded secrets", {
+        "entropy_threshold": float,
+    })
+    async def scan_repo_for_secrets(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.scan_for_secrets(
-                entropy_threshold=entropy_threshold,
+                entropy_threshold=args.get("entropy_threshold", 4.5),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def dependency_audit_handler(
-        lockfile_path: str | None = None,
-        **kwargs: Any,
-    ) -> str:
+    @tool("dependency_audit", "Audit project dependencies for vulnerabilities", {
+        "lockfile_path": str,
+    })
+    async def dependency_audit(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.dependency_audit(
-                lockfile_path=lockfile_path,
+                lockfile_path=args.get("lockfile_path"),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def grep_semantic_handler(
-        pattern: str,
-        context_lines: int = 3,
-        file_glob: str = "**/*",
-        **kwargs: Any,
-    ) -> str:
+    @tool("grep_semantic", "Search code with context lines", {
+        "pattern": str,
+        "context_lines": int,
+        "file_glob": str,
+    })
+    async def grep_semantic(args: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await tool_core.grep_semantic(
-                pattern=pattern,
-                context_lines=context_lines,
-                file_glob=file_glob,
+                pattern=args["pattern"],
+                context_lines=args.get("context_lines", 3),
+                file_glob=args.get("file_glob", "**/*"),
             )
-            return _truncate_output(json.dumps(result, indent=2))
+            return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    async def generate_security_report_handler(
-        findings: list[dict[str, Any]],
-        output_format: str = "markdown",
-        **kwargs: Any,
-    ) -> str:
+    @tool("generate_security_report", "Generate security report from findings", {
+        "findings": list,
+        "output_format": str,
+    })
+    async def generate_security_report(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            # Convert dict findings to ScanFinding objects if needed
             from services.security_scanners import ScanFinding
 
+            findings = args["findings"]
             scan_findings = []
             for f in findings:
                 if isinstance(f, dict):
                     try:
                         scan_findings.append(ScanFinding(**f))
                     except (TypeError, ValueError) as conv_err:
-                        return json.dumps({
-                            "error": "ScanFindingConversionError",
-                            "details": f"Failed to convert finding: {conv_err}"
-                        })
+                        return _make_error_response(
+                            ValueError(f"Failed to convert finding: {conv_err}")
+                        )
                 else:
                     scan_findings.append(f)
 
             result = await tool_core.generate_security_report(
                 findings=scan_findings,
-                output_format=output_format,
+                output_format=args.get("output_format", "markdown"),
             )
-            return _truncate_output(result)
+            return _make_response(_truncate_output(result))
         except Exception as e:
-            return json.dumps({"error": type(e).__name__, "details": str(e)})
+            return _make_error_response(e)
 
-    # Map tool names to handlers
-    handler_map: dict[str, Callable[..., Coroutine[Any, Any, Any]]] = {
-        "read_file": read_file_handler,
-        "search_code": search_code_handler,
-        "list_directory": list_directory_handler,
-        "list_sink_signals": list_sink_signals_handler,
-        "upsert_sink_signal": upsert_sink_signal_handler,
-        "report_finding": report_finding_handler,
-        "scan_repo_for_secrets": scan_repo_for_secrets_handler,
-        "dependency_audit": dependency_audit_handler,
-        "grep_semantic": grep_semantic_handler,
-        "generate_security_report": generate_security_report_handler,
-    }
+    # Create SDK MCP server with all tools
+    sdk_tools = [
+        read_file,
+        search_code,
+        list_directory,
+        list_sink_signals,
+        upsert_sink_signal,
+        report_finding,
+        scan_repo_for_secrets,
+        dependency_audit,
+        grep_semantic,
+        generate_security_report,
+    ]
 
-    # Create MCPTool instances
-    tools: list[MCPTool] = []
-    for tool_def in MCP_TOOLS:
-        name = tool_def["name"]
-        handler = handler_map.get(name)
-        if handler is None:
-            raise ValueError(f"No handler defined for tool: {name}")
+    mcp_server = create_sdk_mcp_server(
+        name="quickhack",
+        version="1.0.0",
+        tools=sdk_tools,
+    )
 
-        tools.append(MCPTool(
-            name=name,
-            description=tool_def["description"],
-            input_schema=tool_def["input_schema"],
-            handler=handler,
-        ))
-
-    # Create server configuration
+    # Build allowed_tools list (just the tool names for SDK)
     server_config = {
-        "allowed_tools": [f"mcp__quickhack__{t.name}" for t in tools],
+        "allowed_tools": [t.name for t in sdk_tools],
     }
 
-    return server_config, tools
+    return server_config, mcp_server

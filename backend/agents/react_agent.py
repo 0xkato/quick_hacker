@@ -13,6 +13,7 @@ This is NOT dumb file-by-file analysis. It's a continuous investigation loop.
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -1493,6 +1494,31 @@ Continue following the main audit instructions above."""
             if tool_name == "read_file" and "path" in arguments:
                 self.files_examined.add(arguments["path"])
 
+            # FILE READ: Create file and function nodes
+            if tool_name == "read_file":
+                file_path = arguments.get("path", "")
+
+                # Get or create file node
+                file_node = flow_service.get_or_create_file_node(self.id, file_path)
+
+                if not file_node:
+                    # Create new file node
+                    file_node = flow_service.add_node(
+                        self.id,
+                        "file",
+                        f"📄 {os.path.basename(file_path)}",
+                        {
+                            "file_path": file_path,
+                            "full_path": file_path,
+                            "tool": "read_file"
+                        },
+                        auto_parent=True
+                    )
+
+                # Update context
+                flow_service.update_context(self.id, current_file=file_path)
+                flow_service.update_node_status(self.id, file_node.id, "running")
+
             # Execute tool
             result = await self.tool_executor.execute(tool_name, arguments)
 
@@ -1509,6 +1535,35 @@ Continue following the main audit instructions above."""
                     code_graph_service.mark_visited(self.id, file_path, duration_ms)
                 except Exception as e:
                     self._log(f"Failed to mark file visited in code graph: {e}", "warning")
+
+                # Complete file node and extract functions
+                file_node = flow_service.get_or_create_file_node(self.id, file_path)
+                if file_node:
+                    flow_service.update_node_status(self.id, file_node.id, "completed")
+
+                    # Parse result to extract functions
+                    try:
+                        # Get the actual content - result.data is a string from read_file
+                        content = result.data if isinstance(result.data, str) else str(result.data)
+                        functions = self._extract_functions_from_code(content)
+                        for func in functions[:10]:  # Limit to first 10 functions
+                            func_node = flow_service.add_node(
+                                self.id,
+                                "function",
+                                f"⚡ {func['name']}()",
+                                {
+                                    "function_name": func["name"],
+                                    "line_number": func.get("line_number"),
+                                    "signature": func.get("signature"),
+                                },
+                                parent_id=file_node.id,
+                                auto_parent=False,
+                                set_current=False
+                            )
+                    except Exception:
+                        pass  # If parsing fails, just skip function nodes
+
+                    self._broadcast_flow_update()
 
             tool_success = result.success
             tool_error = result.error

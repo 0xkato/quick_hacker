@@ -399,7 +399,16 @@ class ToolCore:
 
         Returns:
             Search result dict with findings
+
+        Raises:
+            ValueError: If pattern is not a valid regex
         """
+        import re
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+
         limits = self._get_scan_limits()
 
         result = await semantic_grep(
@@ -425,7 +434,13 @@ class ToolCore:
 
         Returns:
             Report string in requested format
+
+        Raises:
+            ValueError: If output_format is not valid
         """
+        valid_formats = {"markdown", "json", "sarif"}
+        if output_format.lower() not in valid_formats:
+            raise ValueError(f"Invalid format '{output_format}'. Must be one of: {valid_formats}")
         return generate_report(findings, output_format)
 
     def _format_scan_result(self, result: ScanResult) -> dict[str, Any]:

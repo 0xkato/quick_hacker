@@ -211,3 +211,22 @@ class TestToolCoreSecurityScanners:
 
         result = await tool_core.grep_semantic(r"eval\s*\(")
         assert result["success"]
+
+    @pytest.mark.asyncio
+    async def test_grep_semantic_invalid_regex(self, tool_core):
+        """Should raise error for invalid regex pattern."""
+        with pytest.raises(ValueError, match="Invalid regex pattern"):
+            await tool_core.grep_semantic(r"[invalid")
+
+    @pytest.mark.asyncio
+    async def test_generate_security_report_returns_report(self, tool_core):
+        """Should generate a report from findings."""
+        report = await tool_core.generate_security_report([], output_format="markdown")
+        assert "Security Scan Report" in report
+        assert "Total Findings:** 0" in report
+
+    @pytest.mark.asyncio
+    async def test_generate_security_report_invalid_format(self, tool_core):
+        """Should raise error for invalid format."""
+        with pytest.raises(ValueError, match="Invalid format"):
+            await tool_core.generate_security_report([], output_format="invalid")

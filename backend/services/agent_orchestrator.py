@@ -121,9 +121,19 @@ class AgentOrchestrator:
                 request.scan_tier = resolved.scan_tier
                 request.time_budget_seconds = resolved.time_budget_seconds
 
+        # Check if using Claude SDK (uses env var auth, no API key needed)
+        use_claude_sdk = getattr(request, 'use_claude_sdk', False)
+        provider_is_anthropic = (
+            request.provider_config and
+            hasattr(request.provider_config, 'provider') and
+            (request.provider_config.provider.value if hasattr(request.provider_config.provider, 'value')
+             else str(request.provider_config.provider)).lower() == "anthropic"
+        )
+        skip_api_key_for_sdk = use_claude_sdk and provider_is_anthropic
+
         # Resolve API keys for all configs
         configs_to_resolve = []
-        if request.provider_config:
+        if request.provider_config and not skip_api_key_for_sdk:
             configs_to_resolve.append(("provider_config", request.provider_config))
         if request.scanner_config:
             configs_to_resolve.append(("scanner_config", request.scanner_config))
@@ -162,6 +172,9 @@ class AgentOrchestrator:
                     )
                     setattr(request, config_name, resolved_config)
                     print(f"[Orchestrator] Resolved API key for {config_name}")
+
+        if skip_api_key_for_sdk:
+            print("[Orchestrator] Using Claude SDK - API key handled via ANTHROPIC_API_KEY env var")
 
         # Create agent instance
         agent_class = AGENT_CLASSES.get(request.agent_type)

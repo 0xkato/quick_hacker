@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from services.coverage_tracker import CoverageTracker, PathStatus
 from models.sink_signals import RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
 from services.sink_signal_service import compute_signal_fingerprint, sink_signal_service
+from services.tool_core import ToolCore
 from services.security_scanners import (
     ScanFinding,
     ScanLimits,
@@ -584,6 +585,13 @@ class ToolExecutor:
         self._security_scan_findings: dict[str, ScanFinding] = {}
         self._findings_cap = 500
 
+        # Shared ToolCore for delegated implementations
+        self._tool_core = ToolCore(
+            repo_path=str(self.repo_path),
+            project_id=project_id or "",
+            get_scan_limits=self._make_scan_limits,
+        )
+
     def _safe_path(self, path: str) -> Path:
         """Ensure path doesn't escape repository."""
         full_path = (self.repo_path / path).resolve()
@@ -676,34 +684,22 @@ class ToolExecutor:
         start_line: Optional[int] = None,
         end_line: Optional[int] = None
     ) -> ToolResult:
-        """Read file contents."""
+        """Read file contents. Delegates to ToolCore."""
         try:
-            file_path = self._safe_path(path)
-            if not file_path.exists():
-                return ToolResult(False, None, f"File not found: {path}")
+            content = await self._tool_core.read_file(path, start_line, end_line)
 
-            if not file_path.is_file():
-                return ToolResult(False, None, f"Not a file: {path}")
-
-            # Check file size
-            if file_path.stat().st_size > 1_000_000:  # 1MB limit
-                return ToolResult(False, None, "File too large (>1MB)")
-
-            content = file_path.read_text(errors='ignore')
-            lines = content.split('\n')
-
-            if start_line or end_line:
-                start_idx = (start_line - 1) if start_line else 0
-                end_idx = end_line if end_line else len(lines)
-                lines = lines[start_idx:end_idx]
-                # Add line numbers
-                numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(lines)]
+            # ToolCore returns content without line numbers when no range is specified
+            # Add line numbers for consistency with legacy behavior
+            if start_line is None and end_line is None:
+                lines = content.split('\n')
+                numbered = [f"{i + 1}: {line}" for i, line in enumerate(lines)]
                 return ToolResult(True, '\n'.join(numbered))
 
-            # Add line numbers
-            numbered = [f"{i + 1}: {line}" for i, line in enumerate(lines)]
-            return ToolResult(True, '\n'.join(numbered))
-
+            return ToolResult(True, content)
+        except FileNotFoundError:
+            return ToolResult(False, None, f"File not found: {path}")
+        except ValueError as e:
+            return ToolResult(False, None, str(e))
         except Exception as e:
             return ToolResult(False, None, str(e))
 
@@ -713,60 +709,15 @@ class ToolExecutor:
         file_pattern: Optional[str] = None,
         max_results: int = 50
     ) -> ToolResult:
-        """Search for pattern in codebase."""
+        """Search for pattern in codebase. Delegates to ToolCore."""
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
-        except re.error as e:
+            result = await self._tool_core.search_code(pattern, file_pattern, max_results)
+            return ToolResult(True, result)
+        except ValueError as e:
+            # ToolCore raises ValueError for invalid regex
             return ToolResult(False, None, f"Invalid regex: {e}")
-
-        results = []
-        files_searched = 0
-
-        for root, dirs, files in os.walk(self.repo_path):
-            # Skip hidden and common non-source dirs
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in [
-                'node_modules', '__pycache__', 'venv', '.git', 'dist', 'build'
-            ]]
-
-            for filename in files:
-                if file_pattern and not Path(filename).match(file_pattern.replace('**/', '')):
-                    continue
-
-                file_path = Path(root) / filename
-                rel_path = file_path.relative_to(self.repo_path)
-
-                # Skip binary files
-                if file_path.suffix in ['.png', '.jpg', '.gif', '.ico', '.woff', '.ttf', '.eot', '.pdf', '.zip', '.tar', '.gz']:
-                    continue
-
-                try:
-                    content = file_path.read_text(errors='ignore')
-                    files_searched += 1
-
-                    for i, line in enumerate(content.split('\n'), 1):
-                        if regex.search(line):
-                            results.append({
-                                'file': str(rel_path),
-                                'line': i,
-                                'content': line.strip()[:200]
-                            })
-                            if len(results) >= max_results:
-                                break
-
-                    if len(results) >= max_results:
-                        break
-                except:
-                    continue
-
-            if len(results) >= max_results:
-                break
-
-        return ToolResult(True, {
-            'matches': results,
-            'count': len(results),
-            'files_searched': files_searched,
-            'truncated': len(results) >= max_results
-        })
+        except Exception as e:
+            return ToolResult(False, None, str(e))
 
     async def _tool_list_directory(
         self,
@@ -774,46 +725,16 @@ class ToolExecutor:
         recursive: bool = False,
         pattern: Optional[str] = None
     ) -> ToolResult:
-        """List directory contents."""
+        """List directory contents. Delegates to ToolCore."""
         try:
-            dir_path = self._safe_path(path)
-            if not dir_path.exists():
-                return ToolResult(False, None, f"Directory not found: {path}")
-
-            if not dir_path.is_dir():
-                return ToolResult(False, None, f"Not a directory: {path}")
-
-            items = []
-
-            if recursive:
-                for root, dirs, files in os.walk(dir_path):
-                    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in [
-                        'node_modules', '__pycache__', 'venv', '.git'
-                    ]]
-                    for f in files:
-                        if pattern and not Path(f).match(pattern):
-                            continue
-                        rel = (Path(root) / f).relative_to(self.repo_path)
-                        items.append(str(rel))
-                    if len(items) > 500:
-                        break
-            else:
-                for item in sorted(dir_path.iterdir()):
-                    if item.name.startswith('.'):
-                        continue
-                    if pattern and not item.match(pattern):
-                        continue
-                    rel = item.relative_to(self.repo_path)
-                    suffix = '/' if item.is_dir() else ''
-                    items.append(f"{rel}{suffix}")
-
-            return ToolResult(True, {
-                'path': path,
-                'items': items[:500],
-                'count': len(items),
-                'truncated': len(items) > 500
-            })
-
+            result = await self._tool_core.list_directory(path, recursive, pattern)
+            return ToolResult(True, result)
+        except NotADirectoryError:
+            return ToolResult(False, None, f"Not a directory: {path}")
+        except FileNotFoundError:
+            return ToolResult(False, None, f"Directory not found: {path}")
+        except ValueError as e:
+            return ToolResult(False, None, str(e))
         except Exception as e:
             return ToolResult(False, None, str(e))
 

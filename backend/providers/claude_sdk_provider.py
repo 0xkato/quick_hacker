@@ -209,49 +209,42 @@ and providing actionable security insights."""
 
         events: list[dict[str, Any]] = []
 
-        # Debug: Check what methods the client has
-        print(f"[ClaudeSDKProvider] Client type: {type(self.client)}")
-        print(f"[ClaudeSDKProvider] Client methods: {[m for m in dir(self.client) if not m.startswith('_')]}")
-
-        # Send query and process response stream
-        # Try different approaches based on SDK API
         try:
-            # Approach 1: query() might be a sync method returning async iterator
-            query_result = self.client.query(prompt)
-            print(f"[ClaudeSDKProvider] query() returned: {type(query_result)}")
+            # SDK pattern: query() sends the prompt, receive_response() gets messages
+            print(f"[ClaudeSDKProvider] Sending query: {prompt[:100]}...")
+            await self.client.query(prompt)
 
-            # Check if it's a coroutine that needs awaiting
-            import inspect
-            if inspect.iscoroutine(query_result):
-                print("[ClaudeSDKProvider] query() returned coroutine, awaiting...")
-                query_result = await query_result
-                print(f"[ClaudeSDKProvider] After await: {type(query_result)}")
+            # Receive messages until we get a result/completion
+            print("[ClaudeSDKProvider] Waiting for response via receive_response()...")
+            response = await self.client.receive_response()
+            print(f"[ClaudeSDKProvider] receive_response() returned: {type(response)}")
 
-            # Check if result is iterable
-            if query_result is None:
-                print("[ClaudeSDKProvider] query() returned None - SDK may use different pattern")
-                # Maybe the SDK sends messages to a callback instead?
-                # Return empty for now
-                return events
-
-            if hasattr(query_result, '__aiter__'):
-                async for message in query_result:
-                    print(f"[ClaudeSDKProvider] Got message: {type(message)}")
-                    ws_events = self._to_ws_events(message)
+            if response is not None:
+                # Process the response
+                if hasattr(response, '__aiter__'):
+                    async for message in response:
+                        print(f"[ClaudeSDKProvider] Got message: {type(message)}")
+                        ws_events = self._to_ws_events(message)
+                        for event in ws_events:
+                            events.append(event)
+                            if on_event:
+                                on_event(event)
+                elif hasattr(response, '__iter__') and not isinstance(response, (str, bytes, dict)):
+                    for message in response:
+                        print(f"[ClaudeSDKProvider] Got message: {type(message)}")
+                        ws_events = self._to_ws_events(message)
+                        for event in ws_events:
+                            events.append(event)
+                            if on_event:
+                                on_event(event)
+                else:
+                    # Single response object
+                    print(f"[ClaudeSDKProvider] Processing single response: {type(response)}")
+                    ws_events = self._to_ws_events(response)
                     for event in ws_events:
                         events.append(event)
                         if on_event:
                             on_event(event)
-            elif hasattr(query_result, '__iter__'):
-                for message in query_result:
-                    print(f"[ClaudeSDKProvider] Got message: {type(message)}")
-                    ws_events = self._to_ws_events(message)
-                    for event in ws_events:
-                        events.append(event)
-                        if on_event:
-                            on_event(event)
-            else:
-                print(f"[ClaudeSDKProvider] Unexpected query result: {query_result}")
 
         except Exception as e:
             print(f"[ClaudeSDKProvider] Error in run_turn: {e}")
@@ -259,6 +252,7 @@ and providing actionable security insights."""
             traceback.print_exc()
             raise
 
+        print(f"[ClaudeSDKProvider] Turn complete, {len(events)} events")
         return events
 
     def interrupt(self) -> None:

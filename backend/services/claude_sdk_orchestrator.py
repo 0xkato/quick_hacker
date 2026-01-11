@@ -146,11 +146,13 @@ class ClaudeSDKOrchestrator:
         Returns:
             Dict containing audit results, findings, and metadata
         """
+        print(f"[SDK Orchestrator] Starting audit, budget={self.budget_s}s, floor={self.time_floor_s}s")
         self._session_id = resume_session_id
         current_prompt = initial_prompt
 
         while not self._cancelled and self.remaining_s() > 0:
             self._turn_count += 1
+            print(f"[SDK Orchestrator] Turn {self._turn_count}, remaining={self.remaining_s():.1f}s")
 
             # Create fresh limits for this turn
             limits = self.make_fresh_limits()
@@ -161,10 +163,14 @@ class ClaudeSDKOrchestrator:
             else:
                 policy = self._get_analyzer_policy()
 
-            # Execute turn with provider (placeholder for actual SDK integration)
+            # Execute turn with provider
             try:
                 response = await self._execute_turn(current_prompt, policy, limits)
+                print(f"[SDK Orchestrator] Turn response: content_len={len(response.get('content', ''))}, tool_calls={len(response.get('tool_calls', []))}")
             except Exception as e:
+                print(f"[SDK Orchestrator] Turn failed with error: {e}")
+                import traceback
+                traceback.print_exc()
                 self._emit_event("error", {"message": str(e)})
                 break
 
@@ -214,18 +220,24 @@ class ClaudeSDKOrchestrator:
             Dict with 'content' (text response) and 'tool_calls' (list of calls)
         """
         if self.provider is None:
+            print("[SDK Orchestrator] ERROR: No provider configured!")
             self._emit_event("error", {"message": "No provider configured"})
             return {"content": "", "tool_calls": []}
 
         # Start session on first turn
         if self._turn_count == 1:
+            print(f"[SDK Orchestrator] Starting session (first turn)...")
             try:
                 self._session_id = await self.provider.start_session(
                     audit_policy=policy,
                     resume_session_id=self._session_id,
                 )
+                print(f"[SDK Orchestrator] Session started: {self._session_id}")
                 self._emit_event("session_started", {"session_id": self._session_id})
             except Exception as e:
+                print(f"[SDK Orchestrator] Failed to start session: {e}")
+                import traceback
+                traceback.print_exc()
                 self._emit_event("error", {"message": f"Failed to start session: {e}"})
                 raise
 

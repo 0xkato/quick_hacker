@@ -41,7 +41,9 @@ try:
     ToolUseBlock = _ToolUseBlock
     ToolResultBlock = _ToolResultBlock
     SDK_AVAILABLE = True
-except ImportError:
+    print("[ClaudeSDKProvider] Claude Agent SDK loaded successfully")
+except ImportError as e:
+    print(f"[ClaudeSDKProvider] Claude Agent SDK import failed: {e}")
     logger.warning("Claude Agent SDK not installed. ClaudeSDKProvider will not be functional.")
 
 
@@ -109,13 +111,16 @@ class ClaudeSDKProvider:
         Raises:
             RuntimeError: If Claude SDK is not available
         """
+        print(f"[ClaudeSDKProvider] start_session called, SDK_AVAILABLE={SDK_AVAILABLE}")
         if not SDK_AVAILABLE:
             raise RuntimeError(
                 "Claude SDK not installed. Install with: pip install claude-agent-sdk"
             )
 
         # Create MCP server and tools from ToolCore
+        print("[ClaudeSDKProvider] Creating MCP server...")
         self._mcp_config, self._mcp_server = create_quickhack_mcp_server(self.tool_core)
+        print(f"[ClaudeSDKProvider] MCP server created, tools: {self._mcp_config.get('allowed_tools', [])}")
 
         # Build allowed_tools list
         allowed_tools = self._mcp_config.get("allowed_tools", [])

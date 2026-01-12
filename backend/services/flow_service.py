@@ -138,7 +138,20 @@ class FlowService:
         call_depth: Optional[int] = None,
         max_call_depth: Optional[int] = None,
     ) -> None:
-        """Update investigation context for proper tree branching."""
+        """Update investigation context for proper tree branching.
+
+        Args:
+            agent_id: Agent identifier
+            current_file: File currently being read/analyzed
+            current_function: Function currently being analyzed
+            current_candidate_node_id: Root of current investigation tree
+            investigation_root_id: For multi-threaded investigations
+            call_depth: Current depth in call chain (0 = root function)
+            max_call_depth: Maximum depth for call tracing (prevents infinite recursion)
+
+        Raises:
+            ValueError: If call_depth < 0 or max_call_depth <= 0
+        """
         flow = self._flows.get(agent_id)
         if not flow:
             return
@@ -166,6 +179,13 @@ class FlowService:
         file_path: str,
     ) -> Optional[FlowNode]:
         """Get existing file node or return None (let caller create it).
+
+        This prevents duplicate file nodes in the tree. Each file should
+        only appear once, with functions as children.
+
+        Args:
+            agent_id: Agent identifier
+            file_path: Path to the file being investigated
 
         Returns:
             FlowNode if file already has a node, None otherwise

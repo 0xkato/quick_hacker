@@ -1,3 +1,6 @@
+/**
+ * Parsed search query with type filters, label patterns, and function patterns.
+ */
 export interface SearchQuery {
   types: string[];           // Node types to show
   labelPattern?: string;     // Text to match in labels
@@ -5,6 +8,22 @@ export interface SearchQuery {
   caseSensitive: boolean;
 }
 
+/**
+ * Parse search query string into structured filters.
+ *
+ * Supports:
+ * - Type filters: type:file, type:function, type:call
+ * - Function patterns: function:handle* (converts * to regex)
+ * - Label patterns: api.py (fuzzy match)
+ *
+ * Examples:
+ * - "type:file" -> only file nodes
+ * - "function:handle*" -> functions starting with "handle"
+ * - "type:file routes" -> files containing "routes"
+ *
+ * @param query - Raw search query string
+ * @returns Parsed search query with filters
+ */
 export function parseSearchQuery(query: string): SearchQuery {
   if (!query.trim()) {
     return {
@@ -40,6 +59,15 @@ export function parseSearchQuery(query: string): SearchQuery {
   };
 }
 
+/**
+ * Check if a node matches the search query.
+ *
+ * Uses AND logic: node must match all specified filters.
+ *
+ * @param node - Flow node to check
+ * @param query - Parsed search query
+ * @returns true if node matches all filters
+ */
 export function matchesQuery(
   node: any,
   query: SearchQuery

@@ -208,6 +208,22 @@ const nodeTypes = {
   flowNode: FlowNodeComponent,
 };
 
+/**
+ * Interactive flow tree visualization with search, collapse, and filtering.
+ *
+ * Features:
+ * - Collapsible subtrees (click chevron on nodes)
+ * - Search with type filters (type:file, function:*, etc.)
+ * - Keyboard shortcuts (Cmd+F, Cmd+G, Escape)
+ * - Real-time updates via WebSocket/polling
+ *
+ * @param agentId - Agent identifier for this flow
+ * @param flow - Investigation flow data from backend
+ * @param onQueueInvestigation - Callback when user queues a node for investigation
+ * @param variant - Display mode: 'investigation' or 'calltree'
+ * @param emptySelectionText - Text shown when no agent is selected
+ * @param emptyFlowText - Text shown when flow has no nodes
+ */
 export function FlowVisualization({
   agentId,
   flow,

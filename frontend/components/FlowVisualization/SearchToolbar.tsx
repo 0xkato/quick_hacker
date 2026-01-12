@@ -8,6 +8,20 @@ interface SearchToolbarProps {
   onNavigate: (direction: 'up' | 'down') => void;
 }
 
+/**
+ * Search toolbar with type filters, navigation, and result count.
+ *
+ * Supports:
+ * - Type filters: type:file, type:function, type:call
+ * - Function patterns: function:handle*
+ * - Label patterns: api.py
+ * - Navigation: Previous/next match buttons
+ *
+ * @param onSearch - Callback when search query changes
+ * @param resultCount - Total number of matches
+ * @param currentIndex - Index of currently highlighted match
+ * @param onNavigate - Callback for previous/next navigation
+ */
 export function SearchToolbar({
   onSearch,
   resultCount,

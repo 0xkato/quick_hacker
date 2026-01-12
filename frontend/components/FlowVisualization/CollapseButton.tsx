@@ -7,6 +7,19 @@ interface CollapseButtonProps {
   onToggle: (nodeId: string) => void;
 }
 
+/**
+ * Collapse/expand button for tree nodes with children.
+ *
+ * Displays:
+ * - ▶ +count when collapsed (shows number of hidden descendants)
+ * - ▼ when expanded
+ * - Nothing if node has no children
+ *
+ * @param nodeId - Node identifier
+ * @param isCollapsed - Whether subtree is currently collapsed
+ * @param descendantCount - Number of descendants (children, grandchildren, etc.)
+ * @param onToggle - Callback when button is clicked
+ */
 export function CollapseButton({
   nodeId,
   isCollapsed,

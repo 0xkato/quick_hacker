@@ -317,7 +317,10 @@ class ClaudeSDKOrchestrator:
                 parsed: Any = None
 
                 # Debug logging
+                print(f"[SDK Orchestrator] Processing tool result for: {tool_name}")
                 print(f"[SDK Orchestrator] tool_result type: {type(raw_result)}")
+                if isinstance(raw_result, dict):
+                    print(f"[SDK Orchestrator] tool_result keys: {list(raw_result.keys())}")
 
                 # Strategy 1: Check if result is a dict with top-level "finding" key
                 if isinstance(raw_result, dict):

@@ -20,7 +20,20 @@ def tool_core(temp_repo):
     return ToolCore(
         repo_path=str(temp_repo),
         project_id="test-project",
+        agent_id="test-agent"
     )
+
+@pytest.fixture
+def mock_flow_service(monkeypatch):
+    """Mock flow service for testing."""
+    from services.flow_service import FlowService, flow_service
+    mock_service = FlowService()
+
+    # Patch the flow_service module-level instance
+    import services.flow_service
+    monkeypatch.setattr(services.flow_service, "flow_service", mock_service)
+
+    return mock_service
 
 class TestToolCorePathValidation:
     """Tests for ToolCore path validation."""
@@ -552,3 +565,30 @@ class TestReportFindingValidation:
             confidence=0.5,
         )
         assert result["reported"]
+
+
+@pytest.mark.asyncio
+async def test_track_file_analysis(tool_core, mock_flow_service):
+    """Test tracking file analysis creates file node."""
+    # Initialize flow
+    mock_flow_service.initialize_flow(tool_core.agent_id)
+
+    result = await tool_core.track_file_analysis(
+        file_path="api/routes.py",
+        purpose="looking for entry points"
+    )
+
+    assert "node_id" in result
+    assert result["status"] == "tracked"
+
+    # Verify flow service was called correctly
+    flow = mock_flow_service.get_flow(tool_core.agent_id)
+    file_nodes = [n for n in flow.nodes if n.type == "file"]
+    assert len(file_nodes) == 1
+    assert file_nodes[0].label == "api/routes.py"
+    assert file_nodes[0].data["purpose"] == "looking for entry points"
+
+    # Verify context updated
+    assert flow.context.current_file == "api/routes.py"
+    assert flow.context.current_function is None
+    assert flow.context.call_depth == 0

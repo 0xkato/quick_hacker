@@ -54,6 +54,7 @@ class ToolCore:
         self,
         repo_path: str,
         project_id: str,
+        agent_id: str | None = None,
         get_scan_limits: Callable[[], ScanLimits] | None = None,
     ):
         """Initialize ToolCore.
@@ -61,11 +62,13 @@ class ToolCore:
         Args:
             repo_path: Path to the repository root
             project_id: Project identifier for persistence services
+            agent_id: Optional agent identifier for flow tracking
             get_scan_limits: Factory function that returns fresh ScanLimits
                             with current remaining budget
         """
         self.repo_path = Path(repo_path).resolve()
         self.project_id = project_id
+        self.agent_id = agent_id
         self._get_scan_limits = get_scan_limits or (lambda: ScanLimits())
 
         # Create workspace policy
@@ -663,3 +666,44 @@ class ToolCore:
         }
 
         return {"reported": True, "finding": finding}
+
+    async def track_file_analysis(
+        self,
+        file_path: str,
+        purpose: str = "analyzing"
+    ) -> dict[str, Any]:
+        """Track file analysis in flow tree.
+
+        Args:
+            file_path: Path relative to repo root
+            purpose: Why analyzing this file
+
+        Returns:
+            dict with node_id and status
+        """
+        from services.flow_service import flow_service
+
+        if not self.agent_id:
+            return {"node_id": None, "status": "no_agent"}
+
+        # Update context to track current file
+        flow_service.update_context(
+            self.agent_id,
+            current_file=file_path,
+            current_function=None,  # Reset when switching files
+            call_depth=0            # Reset depth
+        )
+
+        # Create file node
+        node = flow_service.add_node(
+            self.agent_id,
+            node_type="file",
+            label=file_path,
+            data={
+                "file_path": file_path,
+                "purpose": purpose
+            },
+            auto_parent=True  # Parents to investigation root
+        )
+
+        return {"node_id": node.id, "status": "tracked"}

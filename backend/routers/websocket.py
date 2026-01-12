@@ -11,6 +11,8 @@ from starlette.websockets import WebSocketState
 from models.schemas import WSMessage
 from services.agent_orchestrator import orchestrator
 from services.observability_service import observability_service
+from services.persistence_service import persistence_service
+from services.report_service import report_service
 from middleware.auth import verify_ws_token
 
 
@@ -116,6 +118,10 @@ orchestrator.add_message_callback(broadcast_agent_message)
 
 # Register the callback with the observability service
 observability_service.set_broadcast_callback(broadcast_agent_message)
+
+# Register callbacks for other services that emit WSMessage events
+persistence_service.set_broadcast_callback(broadcast_agent_message)
+report_service.set_broadcast_callback(broadcast_agent_message)
 
 
 @router.websocket("")

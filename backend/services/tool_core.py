@@ -21,6 +21,8 @@ from services.security_scanners import (
 )
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
 from services.sink_signal_service import compute_signal_fingerprint, sink_signal_service
+from services.tool_cache import ToolCache
+from services.git_head_tracker import GitHeadTracker
 
 
 class ToolCore:
@@ -56,6 +58,7 @@ class ToolCore:
         project_id: str,
         agent_id: str | None = None,
         get_scan_limits: Callable[[], ScanLimits] | None = None,
+        cache: ToolCache | None = None,
     ):
         """Initialize ToolCore.
 
@@ -65,11 +68,19 @@ class ToolCore:
             agent_id: Optional agent identifier for flow tracking
             get_scan_limits: Factory function that returns fresh ScanLimits
                             with current remaining budget
+            cache: Optional ToolCache instance for caching tool outputs
         """
         self.repo_path = Path(repo_path).resolve()
         self.project_id = project_id
         self.agent_id = agent_id
         self._get_scan_limits = get_scan_limits or (lambda: ScanLimits())
+        self.cache = cache
+
+        # Initialize git HEAD tracker if cache is enabled
+        if self.cache is not None:
+            self.git_head_tracker = GitHeadTracker(str(self.repo_path))
+        else:
+            self.git_head_tracker = None
 
         # Create workspace policy
         self.workspace_policy = WorkspacePolicy(
@@ -154,6 +165,8 @@ class ToolCore:
     ) -> str:
         """Read file contents with optional line range.
 
+        This method is automatically cached if cache is enabled.
+
         Args:
             path: Relative path from repo root
             start_line: Starting line (1-indexed, inclusive)
@@ -166,6 +179,22 @@ class ToolCore:
             FileNotFoundError: If file doesn't exist
             ValueError: If path is invalid
         """
+        # If cache is enabled, check cache first
+        cache_key = None
+        git_head = None
+        if self.cache is not None:
+            git_head = self.git_head_tracker.get_current_head()
+            if git_head is not None:
+                cache_key = self.cache.generate_key(
+                    tool_name="read_file",
+                    args={"path": path, "start_line": start_line, "end_line": end_line},
+                    git_head=git_head
+                )
+                cached_result = self.cache.get(cache_key)
+                if cached_result is not None:
+                    return cached_result
+
+        # Cache miss or caching disabled - execute tool
         file_path = self._validate_path(path)
 
         # Read file in thread to avoid blocking
@@ -174,29 +203,34 @@ class ToolCore:
 
         # No line range specified - return full content
         if start_line is None and end_line is None:
-            return content
+            result = content
+        else:
+            # Apply line slicing with clamping
+            total_lines = len(lines)
 
-        # Apply line slicing with clamping
-        total_lines = len(lines)
+            # Convert to 0-indexed and clamp
+            start_idx = 0
+            if start_line is not None:
+                start_idx = max(0, min(start_line - 1, total_lines))
 
-        # Convert to 0-indexed and clamp
-        start_idx = 0
-        if start_line is not None:
-            start_idx = max(0, min(start_line - 1, total_lines))
+            end_idx = total_lines
+            if end_line is not None:
+                end_idx = max(0, min(end_line, total_lines))
 
-        end_idx = total_lines
-        if end_line is not None:
-            end_idx = max(0, min(end_line, total_lines))
+            # Guard against start >= end
+            if start_idx >= end_idx:
+                result = ""
+            else:
+                sliced = lines[start_idx:end_idx]
+                # Add line numbers
+                numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(sliced)]
+                result = "\n".join(numbered)
 
-        # Guard against start >= end
-        if start_idx >= end_idx:
-            return ""
+        # Store in cache if enabled
+        if self.cache is not None and cache_key is not None:
+            self.cache.set(cache_key, result)
 
-        sliced = lines[start_idx:end_idx]
-
-        # Add line numbers
-        numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(sliced)]
-        return "\n".join(numbered)
+        return result
 
     async def list_directory(
         self,

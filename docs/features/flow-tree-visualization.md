@@ -73,6 +73,114 @@ Search box supports type prefixes and wildcards:
 - **Non-matches**: 30% opacity (dimmed)
 - **Ancestors**: Always visible (maintains path from root)
 
+## Flow Tracking Tools
+
+Agents use these MCP tools to build the investigation tree during security audits. These tools create semantic nodes instead of generic tool_call nodes.
+
+### track_file_analysis
+
+Record a file being analyzed during investigation:
+
+```python
+track_file_analysis(
+    file_path="api/routes.py",
+    purpose="looking for entry points"
+)
+```
+
+**Creates:** File node (📁) in the tree under the current investigation root.
+
+**Use case:** Called when an agent begins analyzing a file to understand its structure or find vulnerabilities.
+
+### track_function_discovered
+
+Record an interesting function found during analysis:
+
+```python
+track_function_discovered(
+    function_name="handleUpload",
+    file_path="api/routes.py",
+    line_number=45,
+    signature="async def handleUpload(request, file)",
+    reason="handles file uploads without validation"
+)
+```
+
+**Creates:** Function node (🔧) under the file node.
+
+**Use case:** Called when an agent identifies a function that's relevant to the investigation (e.g., processes user input, calls dangerous sinks, or is part of an attack path).
+
+### track_call_chain
+
+Record a function call sequence to trace execution flow:
+
+```python
+track_call_chain(
+    from_function="handleUpload",
+    calls=[
+        {"target": "validateFile", "file": "validators.py", "line": 23},
+        {"target": "saveToStorage", "file": "storage.py", "line": 89}
+    ]
+)
+```
+
+**Creates:** Call nodes (→) showing the execution flow from one function to others.
+
+**Respects:** `max_call_depth` setting (default: 3) to prevent infinite expansion.
+
+**Use case:** Called when an agent traces how data flows through multiple functions, especially when tracking user input to dangerous sinks.
+
+### track_sink_identified
+
+Mark a dangerous sink that could be exploited:
+
+```python
+track_sink_identified(
+    sink_type="sql",
+    file_path="db/queries.py",
+    line_number=89,
+    code_snippet="cursor.execute(f'SELECT * FROM users WHERE id={user_id}')",
+    severity="high"
+)
+```
+
+**Creates:** Dangerous sink node (⚠️) marked with severity level.
+
+**Sink types:** `sql`, `command`, `path_traversal`, `code_eval`, `deserialization`, `xxe`, `ldap`, `nosql`
+
+**Use case:** Called when an agent identifies a dangerous operation that could be exploited if attacker-controlled data reaches it.
+
+### track_entry_point
+
+Mark an entry point where external data enters the system:
+
+```python
+track_entry_point(
+    entry_type="api_route",
+    file_path="api/routes.py",
+    line_number=45,
+    route="/api/upload",
+    method="POST",
+    params=["file", "metadata"]
+)
+```
+
+**Creates:** Entry point node (🚪) showing where attackers can inject data.
+
+**Entry types:** `api_route`, `webhook`, `cli_arg`, `env_var`, `file_upload`, `websocket`
+
+**Use case:** Called when an agent identifies how external/untrusted data enters the application.
+
+## Agent Instrumentation
+
+Scanner and analyzer agents are instructed via their system prompts to use these tools during investigation. This creates semantic flow trees that show:
+
+- **Investigation structure**: Files → Functions → Calls
+- **Security findings**: Entry points → Data flow → Dangerous sinks
+- **Attack paths**: Complete chains from entry point to exploitable sink
+
+The flow tree replaces generic "LLM Interaction" nodes with meaningful investigation semantics, making it easier to understand what the agent discovered and how.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |

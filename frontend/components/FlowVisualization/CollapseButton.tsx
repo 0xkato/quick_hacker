@@ -25,6 +25,9 @@ export function CollapseButton({
       }}
       className="absolute top-1 right-1 p-1 hover:bg-vsc-hover rounded transition-colors"
       title={isCollapsed ? `Expand ${descendantCount} nodes` : 'Collapse subtree'}
+      aria-label={isCollapsed ? `Expand ${descendantCount} nodes` : 'Collapse subtree'}
+      aria-expanded={!isCollapsed}
+      type="button"
     >
       {isCollapsed ? (
         <div className="flex items-center gap-1">

@@ -19,7 +19,7 @@ from agents.deep_audit.nodes import (
     check_budget,
     finalize,
 )
-from models.schemas import AgentCreateRequest, AgentStatus, Finding, WSMessage
+from models.schemas import Agent, AgentCreateRequest, AgentStatus, AgentType, Finding, WSMessage, ProviderConfig, ProviderType
 
 
 class DeepAuditSupervisor(BaseAgent):
@@ -32,6 +32,8 @@ class DeepAuditSupervisor(BaseAgent):
     - Auditor subagent verifies signals and promotes findings
     """
 
+    agent_type: AgentType = AgentType.DEEP_AUDIT
+
     def __init__(
         self,
         request: AgentCreateRequest,
@@ -39,19 +41,16 @@ class DeepAuditSupervisor(BaseAgent):
         on_message: Optional[Callable[[WSMessage], None]] = None,
     ):
         """Initialize supervisor."""
-        self.id = str(uuid.uuid4())
-        self.repo_id = request.repo_id
-        self.repo_path = Path(repo_path)
+        # Call parent init to set all standard attributes
+        super().__init__(request, repo_path, on_message)
+
+        # Store request for graph initialization
         self.request = request
-        self.on_message = on_message or (lambda msg: None)
 
-        self.status = AgentStatus.PENDING
-        self.created_at = datetime.utcnow()
-        self.started_at: Optional[datetime] = None
-        self.completed_at: Optional[datetime] = None
-        self.error_message: Optional[str] = None
+        # Convert repo_path to Path for convenience
+        self.repo_path = Path(repo_path)
 
-        self.findings: list[Finding] = []
+        # Override files_analyzed to be a list instead of int
         self.files_analyzed: list[str] = []
 
         # Build LangGraph
@@ -147,3 +146,31 @@ class DeepAuditSupervisor(BaseAgent):
     def cancel(self):
         """Cancel the audit."""
         self.status = AgentStatus.CANCELLED
+
+    def to_schema(self) -> Agent:
+        """Convert to Agent schema."""
+        # Provide default provider_config if not specified
+        default_provider_config = ProviderConfig(
+            provider=ProviderType.ANTHROPIC,
+            model="claude-3-5-sonnet-20241022",
+        )
+
+        return Agent(
+            id=self.id,
+            repo_id=self.repo_id,
+            name=self.name,
+            agent_type=self.agent_type,
+            status=self.status,
+            provider_config=self.provider_config or default_provider_config,
+            scan_tier=self.scan_tier,
+            time_budget_seconds=self.time_budget_seconds,
+            custom_prompt=self.custom_prompt,
+            target_files=self.target_files,
+            focus_areas=self.focus_areas,
+            created_at=self.created_at,
+            started_at=self.started_at,
+            completed_at=self.completed_at,
+            files_analyzed=len(self.files_analyzed),  # Convert list to count
+            findings_count=len(self.findings),
+            error_message=self.error_message,
+        )

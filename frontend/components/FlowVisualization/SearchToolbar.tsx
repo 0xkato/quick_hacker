@@ -17,8 +17,12 @@ export function SearchToolbar({
   const [query, setQuery] = useState('');
 
   return (
-    <div className="flex items-center gap-2 p-2 border-b border-vsc-border bg-vsc-sidebar">
-      <Search className="w-4 h-4 text-vsc-text-muted" />
+    <div
+      className="flex items-center gap-2 p-2 border-b border-vsc-border bg-vsc-sidebar"
+      role="search"
+      aria-label="Flow tree search"
+    >
+      <Search className="w-4 h-4 text-vsc-text-muted" aria-hidden="true" />
       <input
         type="text"
         value={query}
@@ -28,6 +32,8 @@ export function SearchToolbar({
         }}
         placeholder="Search: type:file, function:handle*, api.py"
         className="flex-1 bg-vsc-input border border-vsc-border rounded px-2 py-1 text-sm text-vsc-text placeholder-vsc-text-muted focus:outline-none focus:ring-1 focus:ring-vsc-accent"
+        aria-label="Search flow tree"
+        id="flow-search-input"
       />
       {query && (
         <>
@@ -38,8 +44,10 @@ export function SearchToolbar({
             }}
             className="p-1 hover:bg-vsc-hover rounded"
             title="Clear search"
+            aria-label="Clear search"
+            type="button"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
           {resultCount > 0 && (
             <>
@@ -51,17 +59,21 @@ export function SearchToolbar({
                   onClick={() => onNavigate('up')}
                   className="p-1 hover:bg-vsc-hover rounded"
                   title="Previous match"
+                  aria-label="Previous match"
+                  type="button"
                   disabled={resultCount === 0}
                 >
-                  <ChevronUp className="w-4 h-4" />
+                  <ChevronUp className="w-4 h-4" aria-hidden="true" />
                 </button>
                 <button
                   onClick={() => onNavigate('down')}
                   className="p-1 hover:bg-vsc-hover rounded"
                   title="Next match"
+                  aria-label="Next match"
+                  type="button"
                   disabled={resultCount === 0}
                 >
-                  <ChevronDown className="w-4 h-4" />
+                  <ChevronDown className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             </>

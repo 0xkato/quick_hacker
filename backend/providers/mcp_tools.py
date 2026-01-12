@@ -254,6 +254,20 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["entry_type", "file_path", "line_number"]
         }
+    },
+    {
+        "name": "get_validity_checklist",
+        "description": "Get validity checklist for a specific vulnerability class to systematically validate findings and avoid false positives. Supports 8 vulnerability classes (sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure) plus 'disprove' for the general disprove-first self-critique checklist.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "vulnerability_class": {
+                    "type": "string",
+                    "description": "The vulnerability class to get checklist for. Valid values: sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure, or 'disprove' for the disprove-first self-critique checklist."
+                }
+            },
+            "required": ["vulnerability_class"]
+        }
     }
 ]
 
@@ -603,6 +617,32 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         except Exception as e:
             return _make_error_response(e)
 
+    @tool(
+        "get_validity_checklist",
+        "Get validity checklist for a specific vulnerability class to systematically validate findings and avoid false positives. Supports 8 vulnerability classes (sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure) plus 'disprove' for the general disprove-first self-critique checklist.",
+        {
+            "vulnerability_class": "The vulnerability class to get checklist for. Valid values: sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure, or 'disprove' for the disprove-first self-critique checklist."
+        }
+    )
+    async def get_validity_checklist(args: dict[str, Any]) -> dict[str, Any]:
+        """Get validity checklist for a vulnerability class."""
+        try:
+            # Note: tool_core method is sync, not async
+            result = tool_core.get_validity_checklist(
+                vulnerability_class=args["vulnerability_class"]
+            )
+
+            # If successful, format the response
+            if result.get("success"):
+                response_text = f"# Validity Checklist: {result['class']}\n\n{result['content']}"
+                return _make_response(_truncate_output(response_text))
+            else:
+                # Return error from tool_core
+                return _make_error_response(Exception(result.get("error", "Unknown error")))
+
+        except Exception as e:
+            return _make_error_response(e)
+
     # Create SDK MCP server with all tools
     sdk_tools = [
         read_file,
@@ -620,6 +660,7 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         track_call_chain,
         track_sink_identified,
         track_entry_point,
+        get_validity_checklist,
     ]
 
     mcp_server = create_sdk_mcp_server(

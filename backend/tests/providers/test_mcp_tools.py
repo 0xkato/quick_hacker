@@ -48,6 +48,7 @@ class TestMCPToolDefinitions:
             "dependency_audit",
             "grep_semantic",
             "generate_security_report",
+            "get_validity_checklist",
         }
         actual_tools = {tool["name"] for tool in MCP_TOOLS}
         assert expected_tools <= actual_tools, f"Missing tools: {expected_tools - actual_tools}"

@@ -574,6 +574,77 @@ class StrictClassifier:
 
         return (False, "Feature intent UNKNOWN: no strong signals found")
 
+    def _auth_bypass_explicitly_proven(self, finding: Finding, evidence: EvidenceResult) -> Tuple[bool, str]:
+        """
+        Determine if auth bypass is explicitly proven in code.
+
+        CRITICAL: Only searches CODE evidence (handler, routes, auth gates).
+        Never uses finding.description (prevents scanner manipulation).
+
+        Explicit markers:
+        - Parameters: bypass_auth=True, require_auth=False, public=True, skip_auth=True
+        - Function calls: bypass_oauth_check(), skip_permission_check(), bypass_auth()
+        - Decorators: @public_endpoint, @no_auth_required, @unauthenticated, @allow_anonymous
+        - Comments: # no auth required, # public endpoint, # bypass authentication
+
+        Returns:
+            (proven, reason) - reason explains what explicit marker was found
+        """
+        # Collect code-only evidence (NEVER use finding.description)
+        code_snippets = []
+
+        # 1. Handler snippet
+        if evidence.snippet:
+            code_snippets.append(evidence.snippet)
+
+        # 2. Route snippets (from matches)
+        route_matches = [m for m in evidence.matches if m.match_type == "route_registration"]
+        for match in route_matches:
+            code_snippets.append(match.snippet)
+
+        # 3. Auth gate snippets
+        auth_matches = [m for m in evidence.matches if m.match_type == "auth_gate"]
+        for match in auth_matches:
+            code_snippets.append(match.snippet)
+
+        combined = " ".join(code_snippets).lower()
+
+        # Check explicit markers
+
+        # 1. Auth-specific parameters
+        auth_params = ['bypass_auth=true', 'require_auth=false',
+                       'public=true', 'skip_auth=true']
+        for param in auth_params:
+            if param in combined:
+                return (True, f"Auth bypass PROVEN: parameter '{param}' in code")
+
+        # 2. Function calls
+        bypass_calls = ['bypass_oauth_check(', 'skip_permission_check(',
+                        'bypass_auth(', 'skip_auth_check(']
+        for call in bypass_calls:
+            if call in combined:
+                return (True, f"Auth bypass PROVEN: function call '{call}' in code")
+
+        # 3. Decorators
+        decorators = ['@public_endpoint', '@no_auth_required',
+                      '@unauthenticated', '@allow_anonymous']
+        for dec in decorators:
+            if dec in combined:
+                return (True, f"Auth bypass PROVEN: decorator '{dec}' in code")
+
+        # 4. Comments (in code only)
+        comment_patterns = ['# no auth required', '# public endpoint',
+                            '# bypass authentication', '# skip auth']
+        for pattern in comment_patterns:
+            if pattern in combined:
+                return (True, f"Auth bypass PROVEN: comment '{pattern}' in code")
+
+        # NOT considered explicit:
+        # - "No auth gates found" (absence != bypass)
+        # - Path contains /public/ (convention, not proof)
+
+        return (False, "Auth bypass not PROVEN: no explicit bypass markers in code")
+
     def _apply_rules(
         self,
         checklist: ProofChecklist,

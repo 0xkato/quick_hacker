@@ -1059,5 +1059,185 @@ class TestStrictExecEvalFiltering:
         assert "doc_match" in reason.lower()
 
 
+    def test_auth_bypass_proven_with_decorator(self, classifier):
+        """Detect explicit @public_endpoint decorator."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
+
+        finding = Finding(
+            id="test-auth-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Public code execution",
+            description="Public",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet='@app.post("/execute")\n@public_endpoint\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info=SymbolInfo(
+                name="run_code",
+                qualified_name="run_code",
+                type="function",
+                line_start=41,
+                line_end=44,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[
+                EvidenceMatch(
+                    file="/app/api.py",
+                    line=41,
+                    snippet='@public_endpoint',
+                    match_type="route_registration"
+                )
+            ]
+        )
+
+        proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
+
+        assert proven is True
+        assert "@public_endpoint" in reason.lower()
+
+    def test_auth_bypass_proven_with_parameter(self, classifier):
+        """Detect explicit bypass_auth=True parameter."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
+
+        finding = Finding(
+            id="test-auth-002",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Bypassed execution",
+            description="Bypass",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet='@app.post("/execute", bypass_auth=True)\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info=SymbolInfo(
+                name="run_code",
+                qualified_name="run_code",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[
+                EvidenceMatch(
+                    file="/app/api.py",
+                    line=41,
+                    snippet='@app.post("/execute", bypass_auth=True)',
+                    match_type="route_registration"
+                )
+            ]
+        )
+
+        proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
+
+        assert proven is True
+        assert "bypass_auth=True" in reason or "bypass_auth=true" in reason.lower()
+
+    def test_auth_bypass_not_proven_without_markers(self, classifier):
+        """Do not prove bypass without explicit markers."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
+
+        finding = Finding(
+            id="test-auth-003",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code execution",
+            description="No auth markers",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info=SymbolInfo(
+                name="run_code",
+                qualified_name="run_code",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[
+                EvidenceMatch(
+                    file="/app/api.py",
+                    line=41,
+                    snippet='@app.post("/execute")',
+                    match_type="route_registration"
+                )
+            ]
+        )
+
+        proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
+
+        assert proven is False
+        assert "not PROVEN" in reason
+
+    def test_auth_bypass_ignores_description(self, classifier):
+        """Do not use finding.description as proof."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
+
+        finding = Finding(
+            id="test-auth-004",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code execution",
+            description="This endpoint has bypass_auth=True",  # Scanner manipulation attempt
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info=SymbolInfo(
+                name="run_code",
+                qualified_name="run_code",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[
+                EvidenceMatch(
+                    file="/app/api.py",
+                    line=41,
+                    snippet='@app.post("/execute")',
+                    match_type="route_registration"
+                )
+            ]
+        )
+
+        proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
+
+        assert proven is False  # Description should be ignored
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

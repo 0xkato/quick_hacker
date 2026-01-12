@@ -749,6 +749,7 @@ class AgentOrchestrator:
         tool_core = ToolCore(
             repo_path=agent.repo_path,
             project_id=agent.repo_id,
+            agent_id=agent_id,
             get_scan_limits=sdk_orchestrator.make_fresh_limits,
         )
 

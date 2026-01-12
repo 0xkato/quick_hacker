@@ -9,6 +9,8 @@ import {
   FileCode,
   ExternalLink,
   Shield,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
@@ -317,6 +319,7 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
 export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
+  const [showFiltered, setShowFiltered] = useState(false);
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {
@@ -330,20 +333,34 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
     });
   };
 
+  // Filter by reportability (if triage system is enabled)
+  const reportableFindings = showFiltered
+    ? findings
+    : findings.filter((f) => {
+        // If no disposition, show it (legacy behavior)
+        if (!f.disposition) return true;
+        // Show only reportable dispositions
+        return REPORTABLE_DISPOSITIONS.has(f.disposition);
+      });
+
+  // Filter by severity
   const filteredFindings =
     filterSeverity === 'all'
-      ? findings
-      : findings.filter((f) => f.severity === filterSeverity);
+      ? reportableFindings
+      : reportableFindings.filter((f) => f.severity === filterSeverity);
 
-  // Count by severity
+  // Count by severity (from reportable findings)
   const counts: Record<Severity | 'all', number> = {
-    all: findings.length,
-    critical: findings.filter((f) => f.severity === 'critical').length,
-    high: findings.filter((f) => f.severity === 'high').length,
-    medium: findings.filter((f) => f.severity === 'medium').length,
-    low: findings.filter((f) => f.severity === 'low').length,
-    info: findings.filter((f) => f.severity === 'info').length,
+    all: reportableFindings.length,
+    critical: reportableFindings.filter((f) => f.severity === 'critical').length,
+    high: reportableFindings.filter((f) => f.severity === 'high').length,
+    medium: reportableFindings.filter((f) => f.severity === 'medium').length,
+    low: reportableFindings.filter((f) => f.severity === 'low').length,
+    info: reportableFindings.filter((f) => f.severity === 'info').length,
   };
+
+  // Count filtered findings
+  const filteredCount = findings.length - reportableFindings.length;
 
   return (
     <div className="h-full flex flex-col">
@@ -352,7 +369,28 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
         <div className="flex items-center justify-between mb-2">
           <span className="text-vsc-xs text-vsc-text-muted">
             {filteredFindings.length} of {findings.length}
+            {filteredCount > 0 && !showFiltered && (
+              <span className="ml-1 text-vsc-text-muted">
+                ({filteredCount} filtered)
+              </span>
+            )}
           </span>
+          {/* Show Filtered toggle */}
+          {filteredCount > 0 && (
+            <button
+              onClick={() => setShowFiltered(!showFiltered)}
+              className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover"
+              style={{
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--vsc-border)',
+                color: showFiltered ? 'var(--vsc-accent)' : 'var(--vsc-text-muted)',
+              }}
+              title={showFiltered ? 'Hide filtered findings' : 'Show filtered findings'}
+            >
+              {showFiltered ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+              <span>{showFiltered ? 'Hide Filtered' : 'Show Filtered'}</span>
+            </button>
+          )}
         </div>
 
         {/* Severity filter */}

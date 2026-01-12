@@ -1,11 +1,11 @@
-"""Database models for user authentication and API keys."""
+"""Database models for user authentication, API keys, and triage system."""
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 
-from sqlalchemy import String, DateTime, Boolean, ForeignKey, Text, Index
+from sqlalchemy import String, DateTime, Boolean, ForeignKey, Text, Index, Integer, Float, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from .connection import Base
 
@@ -100,3 +100,99 @@ class UserAPIKey(Base):
 
     def __repr__(self) -> str:
         return f"<UserAPIKey(id={self.id}, provider={self.provider})>"
+
+
+class Finding(Base):
+    """Security finding with triage metadata."""
+    __tablename__ = "findings"
+
+    # Core finding fields
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    repo_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    line_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    line_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    code_snippet: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    vulnerable_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    vulnerability_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    cwe_id: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    attack_scenario: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    proof_of_concept: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    recommended_fix: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    source_trace: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict, nullable=False)
+
+    # Classification gate fields (legacy)
+    classification: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    config_dependent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    config_flag: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    default_secure: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    contradiction_present: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    fix_type: Mapped[str] = mapped_column(String(20), default="code", nullable=False)
+    classification_reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Triage fields (new)
+    batch_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    disposition: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    classification_confidence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    exploit_confidence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    proof_checklist: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    reasoning: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    triage_policy_version: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    triaged_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Relationships
+    evidence_blobs: Mapped[list["EvidenceBlob"]] = relationship(
+        "EvidenceBlob",
+        back_populates="finding",
+        cascade="all, delete-orphan"
+    )
+
+    # Composite indexes
+    __table_args__ = (
+        Index("idx_findings_agent_disposition", "agent_id", "disposition"),
+        Index("idx_findings_agent_triaged_at", "agent_id", "triaged_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Finding(id={self.id}, title={self.title[:50]}, disposition={self.disposition})>"
+
+
+class EvidenceBlob(Base):
+    """Evidence snippet gathered during triage."""
+    __tablename__ = "evidence_blobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("findings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    evidence_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    file_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    line_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    snippet: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    match_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+
+    # Relationship
+    finding: Mapped["Finding"] = relationship("Finding", back_populates="evidence_blobs")
+
+    def __repr__(self) -> str:
+        return f"<EvidenceBlob(id={self.id}, type={self.evidence_type}, match_type={self.match_type})>"

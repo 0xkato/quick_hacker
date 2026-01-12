@@ -73,6 +73,45 @@ class FindingClassification(str, Enum):
 FixType = Literal["code", "config", "docs", "warning"]
 
 
+class Disposition(str, Enum):
+    """Triage disposition for findings."""
+    VALID_SECURITY_ISSUE = "valid_security_issue"
+    BUG = "bug"
+    HARDENING = "hardening"
+    MISCONFIGURATION = "misconfiguration"
+    BY_DESIGN = "by_design"
+    SPECULATIVE = "speculative"
+
+
+class ChecklistStatus(str, Enum):
+    """Tri-state status for proof checklist items."""
+    PROVEN = "proven"
+    DISPROVEN = "disproven"
+    UNKNOWN = "unknown"
+
+
+class VulnerabilityCategory(str, Enum):
+    """Normalized vulnerability categories."""
+    COMMAND_INJECTION = "command_injection"
+    CODE_INJECTION = "code_injection"
+    SQL_INJECTION = "sql_injection"
+    SSRF = "ssrf"
+    CSWSH = "cswsh"
+    DESERIALIZATION = "deserialization"
+    HARDCODED_SECRET = "hardcoded_secret"
+    PATH_TRAVERSAL = "path_traversal"
+    XSS = "xss"
+    CSRF = "csrf"
+    XXE = "xxe"
+    OPEN_REDIRECT = "open_redirect"
+    AUTHENTICATION_BYPASS = "authentication_bypass"
+    AUTHORIZATION_BYPASS = "authorization_bypass"
+    INFORMATION_DISCLOSURE = "information_disclosure"
+    DOS = "dos"
+    RACE_CONDITION = "race_condition"
+    GENERIC = "generic"
+
+
 # === Repository ===
 
 class RepoCloneRequest(BaseModel):
@@ -182,6 +221,56 @@ class AgentUpdate(BaseModel):
     target_files: Optional[list[str]] = None
 
 
+# === Triage Models ===
+
+class ChecklistItem(BaseModel):
+    """A single item in the proof checklist with tri-state status."""
+    value: bool
+    status: ChecklistStatus
+    reason: str
+
+
+class ProofChecklist(BaseModel):
+    """Tri-state proof checklist for vulnerability validation."""
+    source_controlled_input: ChecklistItem
+    sink_present: ChecklistItem
+    dataflow_evidenced: ChecklistItem
+    reachable: ChecklistItem
+    boundary_crossed: ChecklistItem
+    not_only_misconfig: ChecklistItem
+    security_control_bypassed: Optional[ChecklistItem] = None
+
+
+class EvidenceBlob(BaseModel):
+    """Evidence snippet gathered during triage."""
+    id: str
+    finding_id: str
+    evidence_type: str
+    file_path: Optional[str] = None
+    line_number: Optional[int] = None
+    snippet: Optional[str] = None
+    match_type: Optional[str] = None
+    created_at: datetime
+
+
+class TriageMetrics(BaseModel):
+    """Metrics from a triage batch."""
+    raw_count: int
+    triaged_count: int
+    reportable_count: int
+    by_disposition: dict[str, int]
+    timeout_count: int
+    timeout_rate: float
+
+
+class TriageResult(BaseModel):
+    """Result from triage service."""
+    triaged_findings: list["Finding"]
+    reportable_findings: list["Finding"]
+    metrics: TriageMetrics
+    batch_id: str
+
+
 # === Findings ===
 
 class Finding(BaseModel):
@@ -213,6 +302,16 @@ class Finding(BaseModel):
     contradiction_present: bool = False
     fix_type: FixType = "code"
     classification_reasoning: str = ""
+    # Triage fields
+    batch_id: Optional[str] = None
+    disposition: Optional[Disposition] = None
+    classification_confidence: Optional[int] = Field(None, ge=0, le=100)
+    exploit_confidence: Optional[int] = Field(None, ge=0, le=100)
+    proof_checklist: Optional[ProofChecklist] = None
+    reasoning: Optional[list[str]] = None
+    triage_policy_version: Optional[str] = None
+    triaged_at: Optional[datetime] = None
+    category: Optional[VulnerabilityCategory] = None
 
 
 class FindingCreate(BaseModel):
@@ -394,5 +493,40 @@ class SnapshotInfo(BaseModel):
     pending_files: int
 
 
+# === Triage API Models ===
+
+class TriageRequest(BaseModel):
+    """Request to triage findings."""
+    finding_ids: Optional[list[str]] = Field(
+        None,
+        description="Specific finding IDs to triage (None = all for agent)"
+    )
+    force_retriage: bool = Field(
+        default=False,
+        description="Re-run triage even if already triaged"
+    )
+    budget_override_ms: Optional[int] = Field(
+        None,
+        ge=1000,
+        le=300000,
+        description="Override batch budget in milliseconds"
+    )
+
+
+class TriageResponse(BaseModel):
+    """Response from triage endpoint."""
+    batch_id: str
+    metrics: TriageMetrics
+
+
+class BudgetConfig(BaseModel):
+    """Budget configuration for triage."""
+    batch_ms: int = 15000
+    per_finding_ms: int = 300
+    max_evidence_bytes: int = 10000
+    max_snippet_lines: int = 200
+
+
 # Enable forward references
 FileNode.model_rebuild()
+TriageResult.model_rebuild()

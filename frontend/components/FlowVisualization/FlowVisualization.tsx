@@ -291,6 +291,7 @@ export function FlowVisualization({
 
     if (!query.trim()) {
       setSearchMatches([]);
+      setCurrentMatchIndex(0);  // Reset index when clearing
       return;
     }
 
@@ -452,7 +453,7 @@ export function FlowVisualization({
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault();
         // Focus search input
-        const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
+        const searchInput = document.getElementById('flow-search-input') as HTMLInputElement;
         if (searchInput) {
           searchInput.focus();
           searchInput.select();
@@ -468,10 +469,11 @@ export function FlowVisualization({
       }
 
       // Escape: Clear search
-      if (e.key === 'Escape' && searchQuery) {
+      if (e.key === 'Escape' && (searchQuery || searchMatches.length > 0)) {
         e.preventDefault();
         setSearchQuery('');
         setSearchMatches([]);
+        setCurrentMatchIndex(0);  // Reset index when clearing
       }
     };
 

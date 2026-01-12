@@ -395,3 +395,33 @@ class RequestHandler {
     assert functions[2]["language"] == "typescript"
     assert functions[3]["name"] == "getInstance"
     assert functions[3]["language"] == "typescript"
+
+
+@pytest.mark.asyncio
+async def test_extract_decorated_methods_from_typescript(agent_request, mock_provider):
+    """Should extract TypeScript decorated methods."""
+    # Create agent
+    with patch('agents.react_agent.get_provider', return_value=mock_provider):
+        agent = ReActSecurityAgent(
+            request=agent_request,
+            repo_path="/tmp/test",
+            on_message=None
+        )
+
+    code = """
+class Controller {
+    @route('/api/upload')
+    handleUpload() {}
+
+    @Get('/users/:id')
+    async getUserById() {}
+}
+    """
+
+    functions = agent._extract_functions_from_code(code)
+
+    assert len(functions) == 2
+    assert functions[0]["name"] == "handleUpload"
+    assert "@route" in functions[0]["signature"]
+    assert functions[1]["name"] == "getUserById"
+    assert "@Get" in functions[1]["signature"]

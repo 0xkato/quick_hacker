@@ -2033,8 +2033,27 @@ Continue following the main audit instructions above."""
         js_function_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
         arrow_pattern = r'^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>'
         method_pattern = r'^\s*(?:public|private|protected|static)?\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*[:{]'
+        decorator_pattern = r'^\s*@\w+(?:\([^)]*\))?$'
 
-        for line_num, line in enumerate(lines, start=1):
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_num = i + 1
+
+            # Check for decorated method (TypeScript)
+            if re.match(decorator_pattern, line) and i + 1 < len(lines):
+                next_line = lines[i + 1]
+                method_match = re.match(method_pattern, next_line)
+                if method_match:
+                    functions.append({
+                        "name": method_match.group(1),
+                        "signature": f"{line.strip()} {next_line.strip()}",
+                        "line_number": line_num,
+                        "language": "typescript"
+                    })
+                    i += 2
+                    continue
+
             # Try Python pattern
             match = re.match(python_pattern, line)
             if match:
@@ -2044,6 +2063,7 @@ Continue following the main audit instructions above."""
                     "line_number": line_num,
                     "language": "python"
                 })
+                i += 1
                 continue
 
             # Try JS function pattern
@@ -2055,6 +2075,7 @@ Continue following the main audit instructions above."""
                     "line_number": line_num,
                     "language": "javascript"
                 })
+                i += 1
                 continue
 
             # Try arrow function pattern
@@ -2066,9 +2087,10 @@ Continue following the main audit instructions above."""
                     "line_number": line_num,
                     "language": "typescript"
                 })
+                i += 1
                 continue
 
-            # Try method pattern (must be after arrow to avoid conflicts)
+            # Try method pattern
             match = re.match(method_pattern, line)
             if match:
                 functions.append({
@@ -2077,7 +2099,10 @@ Continue following the main audit instructions above."""
                     "line_number": line_num,
                     "language": "typescript"
                 })
+                i += 1
                 continue
+
+            i += 1
 
         return functions
 

@@ -2624,4 +2624,1693 @@ This completes Part 2 of the architecture reference, covering:
 - Real-time Communication (WebSocket architecture, broadcasting, message types)
 - Provider System (4 providers: Anthropic, OpenAI, Ollama, Claude SDK)
 
-Continuing with Part 3...
+---
+
+## Frontend Architecture
+
+### Technology Stack
+
+**Framework:** Next.js 14+ (App Router)
+**UI Library:** React 18+ with TypeScript
+**Styling:** Tailwind CSS
+**Code Editor:** Monaco Editor (VS Code's editor)
+**State Management:** React Context + local state
+**API Client:** Fetch API with custom wrapper
+
+### Application Structure
+
+```
+frontend/
+├── app/                      # Next.js App Router pages
+│   ├── page.tsx             # Landing/home page
+│   ├── login/               # Auth pages
+│   ├── projects/            # Project workspace
+│   └── layout.tsx           # Root layout with providers
+├── components/              # React components
+│   ├── Agent/               # Agent management UI
+│   ├── Auth/                # Login/register forms
+│   ├── Chat/                # Chat interface
+│   ├── Editor/              # Monaco editor wrapper
+│   ├── FileExplorer/        # File tree browser
+│   ├── Findings/            # Vulnerability findings list
+│   ├── Flow/                # Flow visualization
+│   ├── Project/             # Project selector
+│   ├── Report/              # Triage reports
+│   ├── Session/             # Session controls
+│   └── Settings/            # Settings modal
+├── contexts/                # React Context providers
+│   └── AuthContext.tsx      # Auth state management
+├── hooks/                   # Custom React hooks
+│   ├── useAuth.ts           # Auth helpers
+│   ├── useWebSocket.ts      # WebSocket connection
+│   ├── useApi.ts            # API client wrapper
+│   └── ... (10+ hooks)
+└── lib/                     # Utilities
+    ├── api.ts               # API client
+    └── types.ts             # TypeScript interfaces
+```
+
+### Key Components
+
+#### 1. Layout & Routing
+
+**File:** `frontend/app/layout.tsx`
+
+**Purpose:** Root layout with global providers.
+
+```typescript
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en">
+      <body>
+        <AuthProvider>
+          <WebSocketProvider>
+            <ThemeProvider>
+              {children}
+            </ThemeProvider>
+          </WebSocketProvider>
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+**Routes:**
+- `/` - Landing page
+- `/login` - Authentication
+- `/projects` - Project selection
+- `/projects/[id]` - Workspace (main IDE)
+
+#### 2. Monaco Editor
+
+**File:** `frontend/components/Editor/MonacoEditor.tsx`
+
+**Purpose:** Code editor with syntax highlighting, IntelliSense, and diff view.
+
+**Features:**
+- Multi-language support (Python, JavaScript, TypeScript, Go, Rust, etc.)
+- Read-only mode for viewing findings
+- Diff view for comparing changes
+- Line highlighting for vulnerability locations
+- Theme switching (light/dark)
+
+**Integration:**
+
+```typescript
+import Editor from '@monaco-editor/react';
+
+export function MonacoEditor({
+  file,
+  onFileChange,
+  readOnly = false,
+  highlightLine = null,
+}) {
+  const editorRef = useRef(null);
+
+  // Highlight vulnerable line
+  useEffect(() => {
+    if (highlightLine && editorRef.current) {
+      const editor = editorRef.current;
+
+      // Add decoration
+      editor.deltaDecorations([], [
+        {
+          range: new monaco.Range(highlightLine, 1, highlightLine, 1),
+          options: {
+            isWholeLine: true,
+            className: 'line-highlight-error',
+            glyphMarginClassName: 'glyph-error',
+          },
+        },
+      ]);
+
+      // Scroll to line
+      editor.revealLineInCenter(highlightLine);
+    }
+  }, [highlightLine]);
+
+  return (
+    <Editor
+      height="100vh"
+      language={detectLanguage(file.path)}
+      value={file.content}
+      onChange={onFileChange}
+      options={{
+        readOnly,
+        minimap: { enabled: false },
+        fontSize: 14,
+        lineNumbers: 'on',
+        scrollBeyondLastLine: false,
+      }}
+      onMount={(editor) => { editorRef.current = editor; }}
+    />
+  );
+}
+```
+
+#### 3. File Explorer
+
+**File:** `frontend/components/FileExplorer/FileTree.tsx`
+
+**Purpose:** Hierarchical file browser with search and filtering.
+
+**Features:**
+- Tree view with expand/collapse
+- File type icons
+- Search by filename
+- Filter by extension
+- Lazy loading for large directories
+- Context menu (open, rename, delete)
+
+**State Management:**
+
+```typescript
+interface FileNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileNode[];
+  expanded?: boolean;
+  size?: number;
+  modified?: Date;
+}
+
+export function FileTree({ projectId }) {
+  const [tree, setTree] = useState<FileNode | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  // Load file tree on mount
+  useEffect(() => {
+    api.get(`/api/files/${projectId}/tree`).then(setTree);
+  }, [projectId]);
+
+  const toggleExpand = (path: string) => {
+    setTree((prev) => updateNode(prev, path, (node) => ({
+      ...node,
+      expanded: !node.expanded,
+    })));
+  };
+
+  const handleSelect = (path: string) => {
+    setSelectedPath(path);
+    // Load file content
+    api.get(`/api/files/${projectId}/content?path=${path}`)
+      .then((content) => onFileOpen(path, content));
+  };
+
+  return (
+    <div className="file-tree">
+      {tree && <TreeNode node={tree} onToggle={toggleExpand} onSelect={handleSelect} selected={selectedPath} />}
+    </div>
+  );
+}
+```
+
+#### 4. Chat Interface
+
+**File:** `frontend/components/Chat/ChatPanel.tsx`
+
+**Purpose:** Interactive chat for querying agents about findings.
+
+**Features:**
+- Message history
+- Markdown rendering
+- Code block syntax highlighting
+- Streaming responses (SSE)
+- Context attachment (findings, code snippets)
+
+**Message Flow:**
+
+```typescript
+export function ChatPanel({ sessionId }) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+
+  const sendMessage = async () => {
+    const userMessage = { role: 'user', content: input };
+    setMessages((prev) => [...prev, userMessage]);
+    setInput('');
+    setStreaming(true);
+
+    // Create placeholder for assistant response
+    const assistantMessage = { role: 'assistant', content: '' };
+    setMessages((prev) => [...prev, assistantMessage]);
+
+    // Stream response
+    const response = await fetch(`/api/chat/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: input }),
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+
+      // Update last message with streamed content
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1].content += chunk;
+        return updated;
+      });
+    }
+
+    setStreaming(false);
+  };
+
+  return (
+    <div className="chat-panel">
+      <MessageList messages={messages} />
+      <MessageInput value={input} onChange={setInput} onSend={sendMessage} disabled={streaming} />
+    </div>
+  );
+}
+```
+
+#### 5. Agent Manager
+
+**File:** `frontend/components/Agent/AgentManager.tsx`
+
+**Purpose:** Control panel for agent execution.
+
+**Features:**
+- Agent type selection (QuickAudit, ReAct, DeepAudit)
+- Start/stop/pause controls
+- Progress visualization
+- Execution logs
+
+**State:**
+
+```typescript
+interface AgentExecution {
+  id: string;
+  type: AgentType;
+  status: 'running' | 'paused' | 'completed' | 'failed';
+  progress: number;
+  current_step: string;
+  findings_count: number;
+  started_at: Date;
+  completed_at?: Date;
+}
+
+export function AgentManager({ projectId }) {
+  const [agents, setAgents] = useState<AgentExecution[]>([]);
+  const { messages: wsMessages } = useWebSocket();
+
+  // Update agent state from WebSocket
+  useEffect(() => {
+    wsMessages.forEach((msg) => {
+      if (msg.type === 'agent_progress') {
+        setAgents((prev) =>
+          prev.map((a) =>
+            a.id === msg.agent_id
+              ? { ...a, current_step: msg.step, ...msg.data }
+              : a
+          )
+        );
+      }
+    });
+  }, [wsMessages]);
+
+  const startAgent = async (type: AgentType) => {
+    const response = await api.post(`/api/agents/execute`, {
+      project_id: projectId,
+      agent_type: type,
+      prompt: 'Perform security audit',
+    });
+
+    setAgents((prev) => [...prev, response]);
+  };
+
+  const stopAgent = async (agentId: string) => {
+    await api.post(`/api/agents/${agentId}/stop`);
+  };
+
+  return (
+    <div className="agent-manager">
+      <AgentSelector onStart={startAgent} />
+      <AgentList agents={agents} onStop={stopAgent} />
+    </div>
+  );
+}
+```
+
+#### 6. Findings Panel
+
+**File:** `frontend/components/Findings/FindingsList.tsx`
+
+**Purpose:** Display and filter vulnerability findings.
+
+**Features:**
+- Grouping by disposition (REPORTABLE vs FILTERED)
+- Filtering by category, severity
+- Sorting by severity, date
+- Detail view with evidence
+- Export to CSV/JSON
+
+**Filtering:**
+
+```typescript
+export function FindingsList({ projectId }) {
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [filter, setFilter] = useState({
+    disposition: ['VALID_SECURITY_ISSUE', 'BUG'], // REPORTABLE only
+    category: null,
+    severity: null,
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams({
+      disposition: filter.disposition.join(','),
+      ...(filter.category && { category: filter.category }),
+      ...(filter.severity && { severity: filter.severity }),
+    });
+
+    api.get(`/api/findings/${projectId}?${params}`).then(setFindings);
+  }, [projectId, filter]);
+
+  const groupedFindings = useMemo(() => {
+    return {
+      reportable: findings.filter((f) =>
+        ['VALID_SECURITY_ISSUE', 'BUG'].includes(f.disposition)
+      ),
+      filtered: findings.filter((f) =>
+        ['BY_DESIGN', 'HARDENING', 'MISCONFIGURATION', 'SPECULATIVE'].includes(f.disposition)
+      ),
+    };
+  }, [findings]);
+
+  return (
+    <div className="findings-panel">
+      <FilterBar filter={filter} onChange={setFilter} />
+
+      <Section title="Reportable" count={groupedFindings.reportable.length}>
+        {groupedFindings.reportable.map((f) => (
+          <FindingCard key={f.id} finding={f} onClick={() => openDetail(f)} />
+        ))}
+      </Section>
+
+      <Section title="Filtered" count={groupedFindings.filtered.length} collapsed>
+        {groupedFindings.filtered.map((f) => (
+          <FindingCard key={f.id} finding={f} onClick={() => openDetail(f)} />
+        ))}
+      </Section>
+    </div>
+  );
+}
+```
+
+#### 7. Flow Visualization
+
+**File:** `frontend/components/Flow/FlowVisualization.tsx`
+
+**Purpose:** Visualize agent execution flow (tool calls, findings discovered).
+
+**Features:**
+- Timeline view
+- Node-edge graph for call relationships
+- Interactive exploration
+- Search/filter by tool or finding
+
+**Uses:** React Flow library for graph rendering.
+
+```typescript
+import ReactFlow, { Node, Edge } from 'reactflow';
+
+export function FlowVisualization({ agentId }) {
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+
+  useEffect(() => {
+    api.get(`/api/flow/${agentId}`).then((flow) => {
+      // Convert flow events to nodes/edges
+      const flowNodes = flow.events.map((event, idx) => ({
+        id: event.id,
+        type: event.type, // 'tool_call', 'tool_result', 'finding'
+        position: { x: idx * 200, y: 0 },
+        data: event.data,
+      }));
+
+      const flowEdges = flow.events
+        .slice(1)
+        .map((event, idx) => ({
+          id: `${flow.events[idx].id}-${event.id}`,
+          source: flow.events[idx].id,
+          target: event.id,
+        }));
+
+      setNodes(flowNodes);
+      setEdges(flowEdges);
+    });
+  }, [agentId]);
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      fitView
+      nodeTypes={{
+        tool_call: ToolCallNode,
+        tool_result: ToolResultNode,
+        finding: FindingNode,
+      }}
+    />
+  );
+}
+```
+
+### State Management
+
+#### Auth Context
+
+**File:** `frontend/contexts/AuthContext.tsx`
+
+**Purpose:** Global authentication state.
+
+```typescript
+interface AuthState {
+  user: User | null;
+  accessToken: string | null;
+  refreshToken: string | null;
+  isAuthenticated: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  refreshAccessToken: () => Promise<void>;
+}
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(
+    localStorage.getItem('access_token')
+  );
+  const [refreshToken, setRefreshToken] = useState<string | null>(
+    localStorage.getItem('refresh_token')
+  );
+
+  const login = async (email: string, password: string) => {
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+
+    const data = await response.json();
+
+    setUser(data.user);
+    setAccessToken(data.access_token);
+    setRefreshToken(data.refresh_token);
+
+    localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('refresh_token', data.refresh_token);
+  };
+
+  const logout = () => {
+    setUser(null);
+    setAccessToken(null);
+    setRefreshToken(null);
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+  };
+
+  const refreshAccessToken = async () => {
+    if (!refreshToken) return;
+
+    const response = await fetch('/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    const data = await response.json();
+    setAccessToken(data.access_token);
+    localStorage.setItem('access_token', data.access_token);
+  };
+
+  // Auto-refresh before token expires
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const payload = JSON.parse(atob(accessToken.split('.')[1]));
+    const expiresIn = payload.exp * 1000 - Date.now();
+    const refreshAt = expiresIn - 5 * 60 * 1000; // 5 min before expiry
+
+    const timer = setTimeout(refreshAccessToken, refreshAt);
+    return () => clearTimeout(timer);
+  }, [accessToken]);
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        accessToken,
+        refreshToken,
+        isAuthenticated: !!user,
+        login,
+        logout,
+        refreshAccessToken,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+```
+
+### API Client
+
+**File:** `frontend/lib/api.ts`
+
+**Purpose:** Centralized API client with auth integration.
+
+```typescript
+class APIClient {
+  private baseURL: string = 'http://localhost:8000';
+
+  async request<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<T> {
+    const accessToken = localStorage.getItem('access_token');
+
+    const response = await fetch(`${this.baseURL}${endpoint}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken && { Authorization: `Bearer ${accessToken}` }),
+        ...options.headers,
+      },
+    });
+
+    if (response.status === 401) {
+      // Token expired, try refresh
+      await this.refreshToken();
+      // Retry request
+      return this.request(endpoint, options);
+    }
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async get<T>(endpoint: string): Promise<T> {
+    return this.request(endpoint, { method: 'GET' });
+  }
+
+  async post<T>(endpoint: string, data: any): Promise<T> {
+    return this.request(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async put<T>(endpoint: string, data: any): Promise<T> {
+    return this.request(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async delete<T>(endpoint: string): Promise<T> {
+    return this.request(endpoint, { method: 'DELETE' });
+  }
+
+  private async refreshToken() {
+    const refreshToken = localStorage.getItem('refresh_token');
+    if (!refreshToken) throw new Error('No refresh token');
+
+    const response = await fetch(`${this.baseURL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    const data = await response.json();
+    localStorage.setItem('access_token', data.access_token);
+  }
+}
+
+export const api = new APIClient();
+```
+
+---
+
+## Code Analysis Services
+
+The code analysis services provide static analysis capabilities for understanding code structure, tracing data flow, and building call graphs.
+
+### Code Graph Service
+
+**File:** `backend/services/code_graph_service.py`
+
+**Purpose:** Build and manage interactive code call graphs for agent exploration.
+
+**Key Concepts:**
+
+1. **Entry Points** - API routes, CLI commands, message handlers
+2. **Call Relationships** - Function A calls function B
+3. **Relevance Scoring** - Prioritize security-relevant nodes
+4. **Lazy Expansion** - Load children on-demand to manage memory
+
+**Graph Structure:**
+
+```python
+class GraphNode:
+    id: str                          # Unique identifier
+    type: str                        # "entry_point", "function", "class"
+    label: str                       # Display name
+    file_path: Optional[str]         # Source location
+    line_number: Optional[int]       # Line number
+    relevance_level: str             # "critical", "high", "medium", "low"
+    relevance_score: float           # 0-100
+    relevance_breakdown: dict        # Scoring details
+    children_loaded: bool            # Expansion state
+    data: dict                       # Type-specific metadata
+
+class GraphEdge:
+    id: str                          # Unique identifier
+    source_id: str                   # Caller node ID
+    target_id: str                   # Callee node ID
+    type: str                        # "calls", "imports", "inherits"
+    label: Optional[str]             # Edge annotation
+
+class CodeGraph:
+    agent_id: str                    # Owner agent session
+    repo_path: str                   # Repository path
+    nodes: List[GraphNode]           # All nodes
+    edges: List[GraphEdge]           # All edges
+    entry_point_ids: List[str]       # Root nodes
+```
+
+**Workflow:**
+
+```python
+# 1. Initialize graph with entry points
+graph = await code_graph_service.initialize_graph(agent_id, repo_path)
+# Returns: Graph with FastAPI routes as root nodes
+
+# 2. Agent explores graph
+for node_id in graph.entry_point_ids:
+    if is_security_relevant(node_id):
+        # Expand node to see what it calls
+        children = await code_graph_service.expand_node(agent_id, node_id)
+
+        # Recursively expand interesting children
+        for child in children:
+            if child.relevance_level in ["critical", "high"]:
+                await code_graph_service.expand_node(agent_id, child.id)
+
+# 3. Query specific paths
+path = await code_graph_service.find_path(
+    agent_id,
+    from_node="route_/api/execute",
+    to_node="exec_function",
+)
+# Returns: Shortest path through call graph
+```
+
+**Relevance Scoring:**
+
+```python
+def calculate_relevance(
+    function_name: str,
+    file_path: str,
+    depth: int,
+) -> RelevanceScore:
+    """
+    Score node importance for security analysis.
+
+    Scoring factors:
+    1. Content score (50%) - Function/file name matches security patterns
+    2. Position score (30%) - Depth in call graph (shallower = more relevant)
+    3. Pattern bonus (20%) - Matches known vulnerability patterns
+
+    Returns:
+        RelevanceScore with level ("critical", "high", "medium", "low")
+    """
+
+    content_score = 0.0
+
+    # High-value patterns
+    if any(p in function_name.lower() for p in ['auth', 'login', 'verify', 'check_permission']):
+        content_score += 30
+    if any(p in function_name.lower() for p in ['exec', 'eval', 'system', 'shell']):
+        content_score += 25
+    if any(p in function_name.lower() for p in ['sql', 'query', 'execute']):
+        content_score += 20
+    if any(p in file_path for p in ['/api/', '/routes/', '/handlers/']):
+        content_score += 15
+
+    # Position score (inverse of depth)
+    position_score = max(0, 30 - (depth * 5))
+
+    # Pattern matching
+    pattern_bonus = 0.0
+    matched_patterns = []
+
+    if re.search(r'(admin|sudo|root)', function_name, re.I):
+        pattern_bonus += 10
+        matched_patterns.append('privileged_operation')
+
+    if re.search(r'(unsafe|dangerous|bypass)', function_name, re.I):
+        pattern_bonus += 15
+        matched_patterns.append('dangerous_function')
+
+    total = content_score + position_score + pattern_bonus
+
+    # Determine level
+    if total >= 70:
+        level = 'critical'
+    elif total >= 50:
+        level = 'high'
+    elif total >= 30:
+        level = 'medium'
+    else:
+        level = 'low'
+
+    return RelevanceScore(
+        total=total,
+        level=level,
+        content_score=content_score,
+        position_score=position_score,
+        pattern_bonus=pattern_bonus,
+        matched_patterns=matched_patterns,
+    )
+```
+
+### Call Tree Builder
+
+**File:** `backend/services/cass/tools/call_tree.py` (from CASS library)
+
+**Purpose:** Low-level AST-based call tree construction.
+
+**Capabilities:**
+
+1. **FastAPI Route Discovery:**
+```python
+routes = builder.list_fastapi_routes()
+# Returns: [
+#   {
+#     "id": "route_abc123",
+#     "method": "POST",
+#     "path": "/api/execute",
+#     "handler": "execute_code",
+#     "file": "backend/routes/executor.py",
+#     "line": 42,
+#   },
+#   ...
+# ]
+```
+
+2. **Function Call Extraction:**
+```python
+calls = builder.get_function_calls("backend/routes/executor.py", "execute_code")
+# Returns: [
+#   {"callee": "validate_input", "file": "backend/validators.py", "line": 10},
+#   {"callee": "exec", "file": "__builtin__", "line": None},
+# ]
+```
+
+3. **Cross-File Resolution:**
+```python
+# Follows imports to resolve external calls
+calls = builder.resolve_call_chain(
+    start_function="execute_code",
+    max_depth=5,
+)
+# Returns: Full call chain with file paths and line numbers
+```
+
+**Implementation:**
+
+Uses `ast` module for Python, `tree-sitter` for other languages:
+
+```python
+class CallTreeBuilder:
+    def __init__(self, repo_path: str):
+        self.repo_path = Path(repo_path)
+        self.ast_cache: Dict[str, ast.Module] = {}
+
+    def get_function_calls(self, file_path: str, function_name: str) -> List[dict]:
+        tree = self._get_ast(file_path)
+
+        # Find function definition
+        func_node = self._find_function(tree, function_name)
+        if not func_node:
+            return []
+
+        # Extract all Call nodes
+        calls = []
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Call):
+                callee = self._resolve_callee(node)
+                calls.append({
+                    'callee': callee,
+                    'line': node.lineno,
+                    'file': self._resolve_import(callee, file_path),
+                })
+
+        return calls
+```
+
+### Flow Tracker
+
+**File:** `backend/services/flow_tracker.py`
+
+**Purpose:** Track agent execution flow for debugging and visualization.
+
+**Tracked Events:**
+
+```python
+class FlowEvent:
+    id: str                    # Event ID
+    agent_id: str              # Owner agent
+    timestamp: datetime        # When event occurred
+    type: str                  # "tool_call", "tool_result", "finding_discovered", etc.
+    data: dict                 # Event-specific payload
+
+# Example events:
+{
+    "type": "tool_call",
+    "data": {
+        "tool": "ripgrep",
+        "args": {"pattern": "exec\\(", "file_pattern": "**/*.py"}
+    }
+}
+
+{
+    "type": "tool_result",
+    "data": {
+        "tool": "ripgrep",
+        "output": "backend/executor.py:42: exec(user_code)",
+        "success": true,
+        "duration_ms": 150
+    }
+}
+
+{
+    "type": "finding_discovered",
+    "data": {
+        "finding_id": "finding_abc123",
+        "category": "CODE_INJECTION",
+        "severity": "CRITICAL",
+        "disposition": "SPECULATIVE",  # Initial, before triage
+    }
+}
+
+{
+    "type": "finding_triaged",
+    "data": {
+        "finding_id": "finding_abc123",
+        "disposition": "VALID_SECURITY_ISSUE",  # After triage
+        "reasoning": ["Sink: exec() at line 42", "Source: HTTP body", ...]
+    }
+}
+```
+
+**Usage:**
+
+```python
+# In AgentOrchestrator
+
+flow_tracker = FlowTracker()
+
+# Before tool call
+await flow_tracker.log_event(agent_id, "tool_call", {
+    "tool": tool.name,
+    "args": tool_args,
+})
+
+# After tool execution
+await flow_tracker.log_event(agent_id, "tool_result", {
+    "tool": tool.name,
+    "output": result.output,
+    "success": result.success,
+    "duration_ms": duration,
+})
+
+# When finding discovered
+await flow_tracker.log_event(agent_id, "finding_discovered", {
+    "finding_id": finding.id,
+    "category": finding.category,
+    "severity": finding.severity,
+})
+
+# After triage
+await flow_tracker.log_event(agent_id, "finding_triaged", {
+    "finding_id": finding.id,
+    "disposition": classification.disposition,
+    "reasoning": classification.reasoning,
+})
+
+# Query flow for visualization
+flow = await flow_tracker.get_flow(agent_id)
+# Returns: List[FlowEvent] in chronological order
+```
+
+---
+
+## Data Flow Patterns
+
+### Request Lifecycle
+
+**HTTP Request Flow:**
+
+```
+User clicks "Run Agent" button
+    ↓
+Frontend: POST /api/agents/execute
+    ↓
+Backend: agents.router.execute_agent()
+    ↓
+Middleware: require_auth() validates JWT
+    ↓
+Router: Extract request params (project_id, agent_type, prompt)
+    ↓
+AgentService: Validate project ownership
+    ↓
+AgentOrchestrator: Check concurrency limit
+    ↓
+Create agent instance (QuickAudit/ReAct/DeepAudit)
+    ↓
+Launch background task: orchestrator.execute_agent()
+    ↓
+Return 202 Accepted with agent_id
+    ↓
+Frontend: Store agent_id, subscribe to WebSocket updates
+    ↓
+[Agent executes in background]
+    ↓
+Agent emits progress events → WebSocket → Frontend UI updates
+    ↓
+Agent completes → Findings persisted to DB → Final WebSocket event
+    ↓
+Frontend: Display findings, enable export/report
+```
+
+### Agent Execution Flow
+
+**Detailed Agent Lifecycle:**
+
+```
+orchestrator.execute_agent(agent_id, agent_type, project_id, prompt)
+    ↓
+1. INITIALIZE
+   - Load project from DB
+   - Initialize code graph with entry points
+   - Setup tool environment
+   - Initialize flow tracker
+    ↓
+2. SEND INITIAL PROMPT
+   - Construct system prompt with:
+     * Audit instructions
+     * Available tools
+     * Triage rules
+     * Validity checklists
+   - Add user prompt
+   - Call LLM provider
+    ↓
+3. AGENTIC LOOP (until done or timeout)
+   │
+   ├──> LLM Response
+   │    ├─ Text response → Log and continue
+   │    └─ Tool calls → Execute each tool
+   │         ↓
+   │    ┌────────────────────────────────────┐
+   │    │ TOOL EXECUTION                     │
+   │    ├────────────────────────────────────┤
+   │    │ 1. Validate tool parameters        │
+   │    │ 2. Check sandboxing requirement    │
+   │    │ 3. Execute (sandboxed if needed)   │
+   │    │ 4. Capture output + errors         │
+   │    │ 5. Log to flow tracker             │
+   │    │ 6. Send WebSocket update           │
+   │    └────────────────────────────────────┘
+   │         ↓
+   │    Tool Results → Feed back to LLM
+   │         ↓
+   └──> Loop back to step 3
+    ↓
+4. FINDING DISCOVERY
+   - Agent identifies potential vulnerability
+   - Creates Finding object
+   - Logs discovery event
+   - Sends WebSocket update
+    ↓
+5. EVIDENCE GATHERING (per finding)
+   - Extract code snippet (±30 lines)
+   - Parse AST for symbol info
+   - Find route registration
+   - Identify auth gates
+   - Search for security controls
+    ↓
+6. TRIAGE (per finding)
+   - Build proof checklist
+   - Apply disposition rules
+   - Generate reasoning
+   - Calculate confidence scores
+   - Classify as REPORTABLE or FILTERED
+    ↓
+7. PERSIST FINDINGS
+   - Save to database with:
+     * Classification disposition
+     * Proof checklist (JSON)
+     * Evidence snippets (JSON)
+     * Reasoning bullets (JSON)
+   - Log triage event
+   - Send WebSocket update
+    ↓
+8. COMPLETION
+   - Generate summary report
+   - Send final WebSocket event
+   - Release concurrency slot
+   - Return execution result
+```
+
+### Triage Pipeline
+
+**Detailed Triage Flow:**
+
+```
+Finding discovered by agent
+    ↓
+EvidenceGatherer.gather_evidence(finding, project_id)
+    ↓
+┌─────────────────────────────────────────┐
+│ 1. EXTRACT HANDLER SNIPPET             │
+│    - Read file at finding.file_path     │
+│    - Extract lines [line_num-30, line_num+30] │
+│    - Parse AST                          │
+│    - Extract symbol info (func/class)   │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│ 2. FIND ROUTE REGISTRATION             │
+│    - Search for @app.route()            │
+│    - Search for @router.post()          │
+│    - Extract HTTP method + path         │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│ 3. IDENTIFY AUTH GATES                 │
+│    - Search for @require_auth           │
+│    - Search for @login_required         │
+│    - Search for middleware checks       │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│ 4. SEARCH SECURITY CONTROLS            │
+│    - Category-specific keywords         │
+│    - e.g., "read_only", "disable_exec"  │
+│    - Search in same file + nearby files │
+└─────────────────────────────────────────┘
+    ↓
+Evidence bundle → StrictClassifier.classify(finding, evidence)
+    ↓
+┌─────────────────────────────────────────┐
+│ BUILD PROOF CHECKLIST                   │
+│                                         │
+│ For each item:                          │
+│  - source_controlled_input              │
+│  - sink_present                         │
+│  - dataflow_evidenced                   │
+│  - reachable                            │
+│  - boundary_crossed                     │
+│  - not_only_misconfig                   │
+│  - security_control_bypassed (optional) │
+│                                         │
+│ Evaluate as:                            │
+│  - PROVEN_TRUE (evidence confirms)      │
+│  - PROVEN_FALSE (evidence contradicts)  │
+│  - UNKNOWN (insufficient evidence)      │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│ APPLY DISPOSITION RULES (in order)     │
+│                                         │
+│ 1. Security control bypassed? → BUG    │
+│ 2. Misconfig-only? → MISCONFIGURATION  │
+│ 3. Code exec sink?                      │
+│    a. Feature intent proven?            │
+│       → BY_DESIGN                       │
+│    b. Full proof + auth bypass?         │
+│       → VALID_SECURITY_ISSUE            │
+│    c. Full proof but auth unknown?      │
+│       → SPECULATIVE                     │
+│    d. Default → SPECULATIVE             │
+│ 4. Full proof chain (all PROVEN_TRUE)?  │
+│    → VALID_SECURITY_ISSUE               │
+│ 5. Pattern downgrades (category rules)  │
+│ 6. Default → SPECULATIVE                │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│ GENERATE REASONING                      │
+│                                         │
+│ - Exec-specific bullets (if applicable) │
+│ - Checklist item reasons                │
+│ - Truncate to 4 bullets max             │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│ CALCULATE CONFIDENCE SCORES             │
+│                                         │
+│ Classification confidence:              │
+│  - PROVEN items / total items * 100     │
+│                                         │
+│ Exploit confidence (if REPORTABLE):     │
+│  - Weighted by criticality of items     │
+│  - Source + Sink + Dataflow = 70%       │
+│  - Reachable + Boundary = 30%           │
+└─────────────────────────────────────────┘
+    ↓
+ClassificationResult returned
+    ↓
+┌─────────────────────────────────────────┐
+│ CATEGORIZE AS REPORTABLE OR FILTERED    │
+│                                         │
+│ REPORTABLE:                             │
+│  - VALID_SECURITY_ISSUE                 │
+│  - BUG                                  │
+│                                         │
+│ FILTERED:                               │
+│  - BY_DESIGN                            │
+│  - HARDENING                            │
+│  - MISCONFIGURATION                     │
+│  - SPECULATIVE                          │
+└─────────────────────────────────────────┘
+    ↓
+Finding saved to database with classification
+    ↓
+WebSocket update sent to frontend
+    ↓
+Frontend displays in appropriate section
+```
+
+---
+
+## Configuration System
+
+**File:** `backend/config.py`
+
+All configuration is centralized in a Pydantic Settings class that loads from environment variables with sensible defaults.
+
+### Configuration Categories
+
+#### 1. Application Settings
+
+```python
+app_name: str = "quick_hack"
+debug: bool = True  # Enable SQL logging, detailed errors
+```
+
+**Environment Variables:**
+- `APP_NAME` - Application name
+- `DEBUG` - Debug mode (true/false)
+
+#### 2. JWT Authentication
+
+```python
+jwt_secret_key: str = "CHANGE_ME_IN_PRODUCTION..."
+jwt_algorithm: str = "HS256"
+jwt_access_token_expire_minutes: int = 1440  # 24 hours
+jwt_refresh_token_expire_days: int = 30
+```
+
+**Environment Variables:**
+- `JWT_SECRET_KEY` - Secret for signing tokens (REQUIRED in production)
+- `JWT_ALGORITHM` - Algorithm (HS256, RS256, etc.)
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` - Access token TTL
+- `JWT_REFRESH_TOKEN_EXPIRE_DAYS` - Refresh token TTL
+
+**Security Note:** `jwt_secret_key` MUST be changed in production. Use 64+ random characters.
+
+#### 3. File Paths
+
+```python
+repos_dir: Path = Path("./repos")      # Cloned repositories
+db_path: Path = Path("./data/quick_hack.db")  # SQLite database
+```
+
+**Environment Variables:**
+- `REPOS_DIR` - Repository storage location
+- `DB_PATH` - Database file path (SQLite only)
+
+**Note:** Directories are auto-created on startup if missing.
+
+#### 4. LLM Provider API Keys
+
+```python
+openai_api_key: Optional[str] = None
+anthropic_api_key: Optional[str] = None
+anthropic_auth_token: Optional[str] = None  # For Claude SDK
+ollama_base_url: str = "http://localhost:11434"
+```
+
+**Environment Variables:**
+- `OPENAI_API_KEY` - OpenAI API key
+- `ANTHROPIC_API_KEY` - Anthropic API key
+- `ANTHROPIC_AUTH_TOKEN` - Claude SDK auth token
+- `OLLAMA_BASE_URL` - Ollama server URL
+
+**Note:** Keys can also be provided per-user via database (encrypted).
+
+#### 5. Agent Settings
+
+```python
+max_concurrent_agents: int = 10        # Max parallel agent executions
+agent_timeout_seconds: int = 300       # 5 minutes per agent
+max_context_tokens: int = 128000       # Context window limit
+```
+
+**Environment Variables:**
+- `MAX_CONCURRENT_AGENTS` - Concurrency limit
+- `AGENT_TIMEOUT_SECONDS` - Execution timeout
+- `MAX_CONTEXT_TOKENS` - Context window size
+
+**Tuning:**
+- Increase `max_concurrent_agents` for high-throughput (watch memory)
+- Increase `agent_timeout_seconds` for DeepAudit (can take 10-20 min)
+- Adjust `max_context_tokens` based on model capabilities
+
+#### 6. Triage System
+
+```python
+triage_enabled: bool = True
+triage_policy_version: str = "1.0.0"           # For audit trail
+triage_batch_budget_ms: int = 15000            # 15 seconds total
+triage_per_finding_budget_ms: int = 300        # 300ms per finding
+triage_max_evidence_bytes: int = 10000         # 10KB evidence size
+triage_max_snippet_lines: int = 200            # Max code snippet size
+triage_enable_redaction: bool = True           # Redact secrets in evidence
+triage_show_filtered_by_default: bool = False  # Hide non-reportable in UI
+triage_allow_manual_override: bool = True      # Allow human override
+```
+
+**Environment Variables:**
+- `TRIAGE_ENABLED` - Enable/disable triage system
+- `TRIAGE_POLICY_VERSION` - Policy version for tracking
+- `TRIAGE_BATCH_BUDGET_MS` - Total time budget for batch
+- `TRIAGE_PER_FINDING_BUDGET_MS` - Per-finding time budget
+- `TRIAGE_MAX_EVIDENCE_BYTES` - Evidence size limit
+- `TRIAGE_MAX_SNIPPET_LINES` - Code snippet line limit
+- `TRIAGE_ENABLE_REDACTION` - Redact secrets in evidence
+- `TRIAGE_SHOW_FILTERED_BY_DEFAULT` - Show filtered findings
+- `TRIAGE_ALLOW_MANUAL_OVERRIDE` - Allow manual override
+
+**Tuning:**
+- Increase budgets for complex codebases
+- Enable `show_filtered_by_default` for debugging triage rules
+- Disable `allow_manual_override` for strict compliance mode
+
+#### 7. Sandbox Settings
+
+```python
+sandbox_enabled: bool = True
+sandbox_timeout_seconds: int = 30
+sandbox_memory_limit: str = "256m"
+sandbox_network_disabled: bool = True
+```
+
+**Environment Variables:**
+- `SANDBOX_ENABLED` - Enable Docker sandboxing
+- `SANDBOX_TIMEOUT_SECONDS` - Command timeout
+- `SANDBOX_MEMORY_LIMIT` - Memory limit (e.g., "256m", "1g")
+- `SANDBOX_NETWORK_DISABLED` - Disable network in sandbox
+
+**Security:**
+- ALWAYS enable `sandbox_enabled` in production
+- ALWAYS set `sandbox_network_disabled=True` unless needed
+- Keep `sandbox_timeout_seconds` low to prevent DoS
+
+#### 8. CORS Settings
+
+```python
+cors_origins: list[str] = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
+```
+
+**Environment Variables:**
+- `CORS_ORIGINS` - Comma-separated allowed origins
+
+**Production:** Set to frontend domain(s) only.
+
+#### 9. Auth Bootstrap
+
+```python
+auth_bootstrap_allow_remote: bool = False
+```
+
+**Environment Variables:**
+- `AUTH_BOOTSTRAP_ALLOW_REMOTE` - Allow remote signup/login
+
+**Security:** Keep `False` in production. Only enable for development.
+
+### Environment File Example
+
+**`.env` file:**
+
+```bash
+# Application
+APP_NAME=quick_hack
+DEBUG=false
+
+# JWT (REQUIRED - change in production!)
+JWT_SECRET_KEY=your-secret-key-here-64-chars-minimum-use-random-string
+
+# Paths
+REPOS_DIR=/var/lib/quickhack/repos
+DB_PATH=/var/lib/quickhack/data/quickhack.db
+
+# API Keys (optional - can use per-user keys)
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+
+# Agent Settings
+MAX_CONCURRENT_AGENTS=5
+AGENT_TIMEOUT_SECONDS=600
+MAX_CONTEXT_TOKENS=200000
+
+# Triage
+TRIAGE_ENABLED=true
+TRIAGE_BATCH_BUDGET_MS=20000
+TRIAGE_ENABLE_REDACTION=true
+
+# Sandbox
+SANDBOX_ENABLED=true
+SANDBOX_NETWORK_DISABLED=true
+
+# CORS
+CORS_ORIGINS=https://quickhack.example.com
+
+# Auth
+AUTH_BOOTSTRAP_ALLOW_REMOTE=false
+```
+
+---
+
+## Key Architectural Decisions
+
+### 1. Async-First Backend
+
+**Decision:** Use FastAPI with async/await throughout.
+
+**Rationale:**
+- Agent execution is I/O-bound (LLM API calls, file reads, subprocess execution)
+- Async enables high concurrency without thread overhead
+- SQLAlchemy 2.0 provides native async support
+- WebSocket integration is natural with async
+
+**Trade-offs:**
+- More complex than sync code (async/await everywhere)
+- Some libraries lack async support (use run_in_executor)
+- Debugging async code is harder
+
+**Alternatives Rejected:**
+- Flask + threads: Lower concurrency, harder to integrate WebSocket
+- Django: Too heavyweight, poor async story until recently
+
+### 2. Tri-State Proof Checklist
+
+**Decision:** Use PROVEN_TRUE / PROVEN_FALSE / UNKNOWN instead of boolean flags.
+
+**Rationale:**
+- Security triage requires distinguishing "proven safe" from "unknown"
+- Boolean logic leads to false negatives (assuming safe when unknown)
+- Tri-state forces explicit evidence gathering
+- Aligns with "unknown ≠ safe" philosophy
+
+**Example:**
+```python
+# Bad (boolean):
+has_auth_gate: bool = find_auth_decorator()  # Returns False if not found
+if not has_auth_gate:
+    return Disposition.VALID_SECURITY_ISSUE  # Assumes no auth!
+
+# Good (tri-state):
+has_auth_gate: ChecklistItem = find_auth_decorator()
+if has_auth_gate.status == ChecklistStatus.PROVEN_FALSE:
+    # We explicitly confirmed NO auth gate exists
+    return Disposition.VALID_SECURITY_ISSUE
+elif has_auth_gate.status == ChecklistStatus.UNKNOWN:
+    # We couldn't determine if auth exists
+    return Disposition.SPECULATIVE  # Honest about uncertainty
+```
+
+**Trade-offs:**
+- More verbose than booleans
+- Requires careful status checking
+- Higher false negatives (SPECULATIVE) but lower false positives (VALID)
+
+### 3. Code-Only Evidence Analysis
+
+**Decision:** Triage classifier NEVER uses `finding.description`, only code evidence.
+
+**Rationale:**
+- Prevents scanner manipulation (adversarial descriptions)
+- Forces evidence to come from source code
+- Ensures reproducibility (code is ground truth)
+- Aligns with "trust but verify" approach
+
+**Example:**
+```python
+# Bad: Using description
+if "public endpoint" in finding.description:
+    disposition = Disposition.VALID_SECURITY_ISSUE  # Easily spoofed!
+
+# Good: Using code evidence
+if "@public_endpoint" in evidence.handler_snippet:
+    disposition = Disposition.VALID_SECURITY_ISSUE  # Verified in code
+```
+
+**Trade-offs:**
+- May miss context provided by scanners
+- Requires more sophisticated evidence gathering
+- Can't leverage scanner's deep analysis
+
+**Mitigation:** Scanners can still influence by pointing to specific files/lines, but classification is code-based.
+
+### 4. Conservative Feature Intent Detection
+
+**Decision:** Require 2+ strong signals to classify as BY_DESIGN.
+
+**Rationale:**
+- Single signal is insufficient (e.g., path alone could be coincidence)
+- Multiple signals provide high confidence
+- Reduces false BY_DESIGN classifications
+- Errs on side of caution (SPECULATIVE instead)
+
+**Signals:**
+- **Path:** `/pipelines/`, `/executor/`, `/kernel/`
+- **Symbol:** `PipelineExecutor`, `run_kernel()`, `eval_block()`
+- **Documentation:** Comments/docstrings mentioning feature intent
+
+**Logic:**
+```
+if (path_match AND symbol_match) OR (path_match AND doc_match):
+    return BY_DESIGN
+else:
+    return SPECULATIVE
+```
+
+**Trade-offs:**
+- Higher false negatives (SPECULATIVE when actually BY_DESIGN)
+- More findings require human review
+- But dramatically reduces false positives (reporting product features as vulns)
+
+### 5. LangGraph for Complex Workflows
+
+**Decision:** Use LangGraph state machine for DeepAudit agent.
+
+**Rationale:**
+- Multi-step audit workflow is deterministic (not open-ended conversation)
+- State machine provides clear progress tracking
+- Easier to debug than implicit agent loops
+- Checkpointing enables pause/resume
+
+**Workflow Stages:**
+1. Analyze architecture → 2. Identify entry points → 3. Trace data flows → 4. Identify sinks → 5. Validate findings → 6. Triage → 7. Generate report
+
+**Trade-offs:**
+- More complex than simple agent loop
+- Requires explicit state definitions
+- Less flexible than free-form agent
+
+**When to Use:**
+- DeepAudit: Yes (deterministic workflow)
+- ReAct: No (open-ended exploration)
+- QuickAudit: No (single-pass pattern matching)
+
+### 6. WebSocket for Real-Time Updates
+
+**Decision:** Use WebSocket (not polling) for agent progress.
+
+**Rationale:**
+- Real-time updates without polling overhead
+- Bidirectional communication (cancel agent, adjust params)
+- Native FastAPI WebSocket support
+- Low latency for user feedback
+
+**Authentication:**
+- JWT token sent in first WebSocket message
+- Connection rejected if invalid
+- Per-user connection tracking
+
+**Trade-offs:**
+- More complex than polling
+- Requires persistent connection (harder to scale)
+- Need careful handling of reconnects
+
+**Alternatives Rejected:**
+- Server-Sent Events (SSE): One-way only, no cancellation
+- Polling: High latency, server load
+
+### 7. Sandboxed Tool Execution
+
+**Decision:** Run bash commands in Docker containers (when enabled).
+
+**Rationale:**
+- Prevents malicious code in audited repos from compromising system
+- Isolates each execution (no shared state)
+- Enforces resource limits (memory, CPU, network)
+- Read-only file system access
+
+**Implementation:**
+```bash
+docker run --rm \
+  --network none \
+  --memory 256m \
+  --cpus 1 \
+  -v /project/path:/workspace:ro \
+  quickhack-sandbox \
+  bash -c "command"
+```
+
+**Trade-offs:**
+- Slower than native execution (~100-200ms overhead)
+- Requires Docker installed
+- More complex error handling
+
+**When to Sandbox:**
+- ALWAYS: Bash, shell commands
+- NEVER: Read file, ripgrep (read-only operations)
+
+### 8. Encrypted API Key Storage
+
+**Decision:** Encrypt user API keys in database with Fernet.
+
+**Rationale:**
+- Database compromise doesn't leak API keys
+- Encryption key derived from `JWT_SECRET_KEY`
+- Per-user keys enable fine-grained access control
+
+**Implementation:**
+```python
+from cryptography.fernet import Fernet
+
+cipher = Fernet(encryption_key)
+encrypted = cipher.encrypt(plain_key.encode()).decode()
+# Store encrypted in database
+```
+
+**Trade-offs:**
+- Encryption key must be protected (env variable)
+- Key rotation requires re-encrypting all keys
+- Can't query by API key (must decrypt all)
+
+**Security Note:** If `JWT_SECRET_KEY` is compromised, API keys are also compromised. Rotate both together.
+
+### 9. Provider Abstraction Layer
+
+**Decision:** Use abstract `BaseProvider` class for all LLM providers.
+
+**Rationale:**
+- Easy to add new providers (Gemini, Mistral, etc.)
+- Swap providers per agent type or user preference
+- Unified interface for tool calling
+- Cost optimization (use cheap models where possible)
+
+**Interface:**
+```python
+class BaseProvider(ABC):
+    async def create_completion(...) -> CompletionResponse
+    async def create_streaming_completion(...) -> AsyncIterator[CompletionChunk]
+    def supports_tools() -> bool
+    def get_available_models() -> List[str]
+```
+
+**Trade-offs:**
+- Abstracts away provider-specific features
+- Tool calling formats differ (need conversion layer)
+- Streaming implementation varies
+
+**Benefit:** Switched from OpenAI to Anthropic for agents in <1 hour during development.
+
+### 10. Disposition-First Triage
+
+**Decision:** Classify into 6 dispositions (not just "vulnerable" vs "not vulnerable").
+
+**Rationale:**
+- Nuanced classification reduces ambiguity
+- BY_DESIGN vs SPECULATIVE vs HARDENING have different actions
+- Audit trail shows why findings were filtered
+- Compliance requirements (explain all findings)
+
+**Dispositions:**
+1. **VALID_SECURITY_ISSUE** - Exploitable vulnerability (REPORT)
+2. **BUG** - Security control contradicted (REPORT)
+3. **HARDENING** - Risky but credible defenses (OPTIONAL REPORT)
+4. **MISCONFIGURATION** - Only exploitable when security off (OPTIONAL REPORT)
+5. **BY_DESIGN** - Intentional product feature (FILTER)
+6. **SPECULATIVE** - High-risk but unproven (FILTER)
+
+**Trade-offs:**
+- More complex than binary classification
+- Requires clear definitions for each disposition
+- May disagree with scanner's severity
+
+**Benefit:** Dramatically reduces false positives (BY_DESIGN) while maintaining auditability (SPECULATIVE).
+
+---
+
+## Conclusion
+
+This architecture reference documents the quick_hack system comprehensively:
+
+- **System Overview:** High-level architecture, tech stack, component diagrams
+- **Core Architecture:** Request flow, directory structure
+- **Backend:** FastAPI, 13 routers, 31 services, agent system, tool system
+- **Triage System:** Evidence gathering, strict classification, disposition rules
+- **Database:** 6 models, async SQLAlchemy, schema validation
+- **Authentication:** JWT tokens, signup/login/refresh endpoints
+- **Real-Time:** WebSocket architecture, broadcasting, message types
+- **Providers:** 4 LLM providers with abstraction layer
+- **Frontend:** Next.js, React components, state management, API client
+- **Code Analysis:** Code graph, call tree, flow tracking
+- **Data Flow:** Request lifecycle, agent execution, triage pipeline
+- **Configuration:** 9 config categories, environment variables
+- **Architectural Decisions:** 10 key design choices with rationale
+
+**Document Statistics:**
+- **Total Lines:** 3,800+
+- **Code Examples:** 100+
+- **Diagrams:** 15+
+- **Files Documented:** 70+
+- **Components Covered:** Every major feature, framework, and code path
+
+**Maintenance:**
+- Update this document when adding new features
+- Keep code examples in sync with implementation
+- Document new architectural decisions as they occur
+- Version this document alongside code releases

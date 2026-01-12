@@ -41,6 +41,11 @@ class TestCacheKeyGeneration:
         key2 = cache.generate_key("read_file", {"offset": 10, "path": "auth.py"}, "abc123")
         assert key1 == key2  # Same args in different order = same key
 
+    def test_cache_key_rejects_non_serializable_args(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        with pytest.raises(ValueError, match="must be JSON-serializable"):
+            cache.generate_key("read_file", {"callback": lambda x: x}, "abc123")
+
 
 class TestCacheOperations:
     def test_get_nonexistent_key_returns_none(self):
@@ -74,3 +79,18 @@ class TestCacheOperations:
         time.sleep(1.1)
         cache.get("key1")  # Trigger cleanup
         assert "key1" not in cache._cache
+
+    def test_multiple_keys_coexist(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        assert cache.get("key1") == "value1"
+        assert cache.get("key2") == "value2"
+
+    def test_invalid_max_size_raises_error(self):
+        with pytest.raises(ValueError, match="max_size must be positive"):
+            ToolCache(max_size=0, ttl_seconds=3600)
+
+    def test_invalid_ttl_raises_error(self):
+        with pytest.raises(ValueError, match="ttl_seconds must be positive"):
+            ToolCache(max_size=100, ttl_seconds=-1)

@@ -32,6 +32,11 @@ class ToolCache:
             max_size: Maximum number of cached entries (LRU eviction)
             ttl_seconds: Time-to-live for cached entries (default 1 hour)
         """
+        if max_size <= 0:
+            raise ValueError("max_size must be positive")
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
         self._cache: Dict[str, CacheEntry] = {}  # Storage implementation in future tasks
@@ -85,7 +90,7 @@ class ToolCache:
         entry = self._cache[key]
 
         # Check expiration
-        if time.time() > entry.expires_at:
+        if time.time() >= entry.expires_at:
             # Remove expired entry
             del self._cache[key]
             return None
@@ -100,4 +105,5 @@ class ToolCache:
             value: Value to cache (any JSON-serializable object)
         """
         expires_at = time.time() + self.ttl_seconds
+        # TODO: Implement LRU eviction when cache size exceeds max_size (Task 3)
         self._cache[key] = CacheEntry(value=value, expires_at=expires_at)

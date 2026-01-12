@@ -240,6 +240,11 @@ class ProofChecklist(BaseModel):
     not_only_misconfig: ChecklistItem
     security_control_bypassed: Optional[ChecklistItem] = None
 
+    # Exec/eval specific reasoning (for auditable filtering)
+    exec_sink_reason: Optional[str] = None
+    feature_intent_reason: Optional[str] = None
+    auth_bypass_reason: Optional[str] = None
+
 
 class EvidenceBlob(BaseModel):
     """Evidence snippet gathered during triage."""

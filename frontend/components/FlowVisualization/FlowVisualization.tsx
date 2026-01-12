@@ -445,6 +445,40 @@ export function FlowVisualization({
     });
   }, [nodes, edges, collapsedNodes, searchQuery, searchMatches, getDescendants]);
 
+  // Keyboard shortcuts for search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + F: Focus search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        // Focus search input
+        const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      }
+
+      // Cmd/Ctrl + G: Next match
+      if ((e.metaKey || e.ctrlKey) && e.key === 'g') {
+        e.preventDefault();
+        if (searchMatches.length > 0) {
+          handleNavigate(e.shiftKey ? 'up' : 'down');
+        }
+      }
+
+      // Escape: Clear search
+      if (e.key === 'Escape' && searchQuery) {
+        e.preventDefault();
+        setSearchQuery('');
+        setSearchMatches([]);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [searchQuery, searchMatches, handleNavigate]);
+
   // Stats
   type InvestigationStats = {
     kind: 'investigation';

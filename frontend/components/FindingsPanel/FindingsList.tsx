@@ -11,7 +11,7 @@ import {
   Shield,
 } from 'lucide-react';
 import clsx from 'clsx';
-import type { Finding, Severity, FindingClassification } from '@/types';
+import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
 
 // Classification badge colors and labels
 const CLASSIFICATION_COLORS: Record<FindingClassification, string> = {
@@ -27,6 +27,28 @@ const CLASSIFICATION_LABELS: Record<FindingClassification, string> = {
   misconfiguration: 'Misconfiguration',
   hardening: 'Hardening',
 };
+
+// Disposition badge colors and labels
+const DISPOSITION_COLORS: Record<Disposition, string> = {
+  VALID_SECURITY_ISSUE: 'rgba(220, 38, 38, 0.85)',  // red-600
+  BUG: 'rgba(234, 88, 12, 0.85)',                   // orange-600
+  MISCONFIGURATION: 'rgba(234, 179, 8, 0.85)',       // yellow-500
+  HARDENING: 'rgba(59, 130, 246, 0.85)',            // blue-500
+  BY_DESIGN: 'rgba(107, 114, 128, 0.85)',           // gray-500
+  SPECULATIVE: 'rgba(156, 163, 175, 0.85)',         // gray-400
+};
+
+const DISPOSITION_LABELS: Record<Disposition, string> = {
+  VALID_SECURITY_ISSUE: 'Valid Issue',
+  BUG: 'Bug',
+  MISCONFIGURATION: 'Misconfiguration',
+  HARDENING: 'Hardening',
+  BY_DESIGN: 'By Design',
+  SPECULATIVE: 'Speculative',
+};
+
+// Reportable dispositions
+const REPORTABLE_DISPOSITIONS: Set<Disposition> = new Set(['VALID_SECURITY_ISSUE', 'BUG']);
 
 interface FindingsListProps {
   findings: Finding[];
@@ -65,25 +87,63 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
         </button>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span
-              className="text-vsc-xs px-2 py-0.5 font-medium"
-              style={{
-                borderRadius: 'var(--radius-sm)',
-                background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
-                  : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
-                  : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
-                  : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
-                  : 'rgba(117, 190, 255, 0.25)',
-                color: finding.severity === 'critical' ? 'var(--sev-critical)'
-                  : finding.severity === 'high' ? 'var(--sev-high)'
-                  : finding.severity === 'medium' ? 'var(--sev-medium)'
-                  : finding.severity === 'low' ? 'var(--sev-low)'
-                  : 'var(--sev-info)',
-              }}
-            >
-              {finding.severity.toUpperCase()}
-            </span>
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            {/* Disposition badge (always shown if present) */}
+            {finding.disposition && (
+              <span
+                className="text-vsc-xs px-2 py-0.5 font-medium text-white"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  background: DISPOSITION_COLORS[finding.disposition],
+                }}
+                title={`Triage disposition: ${DISPOSITION_LABELS[finding.disposition]}`}
+              >
+                {DISPOSITION_LABELS[finding.disposition]}
+              </span>
+            )}
+            {/* Severity badge (only for reportable findings) */}
+            {finding.severity && finding.disposition && REPORTABLE_DISPOSITIONS.has(finding.disposition) && (
+              <span
+                className="text-vsc-xs px-2 py-0.5 font-medium"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
+                    : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
+                    : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
+                    : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
+                    : 'rgba(117, 190, 255, 0.25)',
+                  color: finding.severity === 'critical' ? 'var(--sev-critical)'
+                    : finding.severity === 'high' ? 'var(--sev-high)'
+                    : finding.severity === 'medium' ? 'var(--sev-medium)'
+                    : finding.severity === 'low' ? 'var(--sev-low)'
+                    : 'var(--sev-info)',
+                }}
+              >
+                {finding.severity.toUpperCase()}
+              </span>
+            )}
+            {/* Legacy: Show severity if no disposition (backward compatibility) */}
+            {finding.severity && !finding.disposition && (
+              <span
+                className="text-vsc-xs px-2 py-0.5 font-medium"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
+                    : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
+                    : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
+                    : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
+                    : 'rgba(117, 190, 255, 0.25)',
+                  color: finding.severity === 'critical' ? 'var(--sev-critical)'
+                    : finding.severity === 'high' ? 'var(--sev-high)'
+                    : finding.severity === 'medium' ? 'var(--sev-medium)'
+                    : finding.severity === 'low' ? 'var(--sev-low)'
+                    : 'var(--sev-info)',
+                }}
+              >
+                {finding.severity.toUpperCase()}
+              </span>
+            )}
+            {/* Legacy classification badge */}
             {finding.classification && (
               <span
                 className="text-vsc-xs px-2 py-0.5 font-medium text-white"
@@ -93,6 +153,19 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
                 }}
               >
                 {CLASSIFICATION_LABELS[finding.classification]}
+              </span>
+            )}
+            {/* Non-reportable notice */}
+            {finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition) && (
+              <span
+                className="text-vsc-xs px-2 py-0.5 font-medium text-vsc-text-muted"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(107, 114, 128, 0.2)',
+                }}
+                title="This finding was filtered by triage. Click 'Show Filtered' to see why."
+              >
+                Filtered by triage
               </span>
             )}
             <span className="text-vsc-sm truncate text-vsc-text">{finding.title}</span>
@@ -183,6 +256,58 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
             </div>
             <span className="text-vsc-xs text-vsc-text">{Math.round(finding.confidence * 100)}%</span>
           </div>
+
+          {/* Triage reasoning */}
+          {finding.reasoning && finding.reasoning.length > 0 && (
+            <div>
+              <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
+                Triage Reasoning
+              </h4>
+              <ul className="text-vsc-text leading-relaxed space-y-1 list-disc list-inside">
+                {finding.reasoning.map((reason, idx) => (
+                  <li key={idx}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Triage confidence scores */}
+          {(finding.classification_confidence !== undefined || finding.exploit_confidence !== undefined) && (
+            <div className="space-y-2">
+              {finding.classification_confidence !== undefined && (
+                <div className="flex items-center gap-2">
+                  <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
+                    Classification Confidence
+                  </span>
+                  <div className="flex-1 max-w-24">
+                    <div className="progress-bar">
+                      <div
+                        className="progress-bar-fill"
+                        style={{ width: `${finding.classification_confidence}%` }}
+                      />
+                    </div>
+                  </div>
+                  <span className="text-vsc-xs text-vsc-text">{finding.classification_confidence}%</span>
+                </div>
+              )}
+              {finding.exploit_confidence !== undefined && (
+                <div className="flex items-center gap-2">
+                  <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
+                    Exploit Confidence
+                  </span>
+                  <div className="flex-1 max-w-24">
+                    <div className="progress-bar">
+                      <div
+                        className="progress-bar-fill"
+                        style={{ width: `${finding.exploit_confidence}%` }}
+                      />
+                    </div>
+                  </div>
+                  <span className="text-vsc-xs text-vsc-text">{finding.exploit_confidence}%</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

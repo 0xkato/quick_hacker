@@ -13,6 +13,16 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
+class CandidateStatus(str, Enum):
+    """Taxonomy of validation outcomes (zero-FP protocol)."""
+    PENDING = "pending"
+    VALIDATED_VULNERABILITY = "validated_vulnerability"
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
+    HARDENING_OPPORTUNITY = "hardening_opportunity"
+    NOT_A_VULNERABILITY = "not_a_vulnerability"
+    DUPLICATE = "duplicate"
+
+
 class SinkSignalStatus(str, Enum):
     UNREVIEWED = "unreviewed"
     QUEUED = "queued"

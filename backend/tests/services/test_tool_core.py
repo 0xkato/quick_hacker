@@ -592,3 +592,34 @@ async def test_track_file_analysis(tool_core, mock_flow_service):
     assert flow.context.current_file == "api/routes.py"
     assert flow.context.current_function is None
     assert flow.context.call_depth == 0
+
+
+@pytest.mark.asyncio
+async def test_track_function_discovered(tool_core, mock_flow_service):
+    """Test tracking function discovery creates function node."""
+    mock_flow_service.initialize_flow(tool_core.agent_id)
+
+    # First track the file
+    await tool_core.track_file_analysis("api/routes.py")
+
+    # Then track function
+    result = await tool_core.track_function_discovered(
+        function_name="handleUpload",
+        file_path="api/routes.py",
+        line_number=45,
+        signature="async def handleUpload(file: UploadFile)",
+        reason="handles file uploads"
+    )
+
+    assert "node_id" in result
+
+    # Verify function node created
+    flow = mock_flow_service.get_flow(tool_core.agent_id)
+    func_nodes = [n for n in flow.nodes if n.type == "function"]
+    assert len(func_nodes) == 1
+    assert func_nodes[0].label == "handleUpload"
+    assert func_nodes[0].data["line_number"] == 45
+    assert func_nodes[0].data["signature"] == "async def handleUpload(file: UploadFile)"
+
+    # Verify context updated
+    assert flow.context.current_function == "handleUpload"

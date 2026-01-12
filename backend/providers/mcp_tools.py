@@ -187,6 +187,21 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["file_path"]
         }
+    },
+    {
+        "name": "track_function_discovered",
+        "description": "Record a function you found interesting during analysis",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "Function name (e.g., 'handleUpload')"},
+                "file_path": {"type": "string", "description": "File containing function"},
+                "line_number": {"type": "integer", "description": "Line where function defined"},
+                "signature": {"type": "string", "description": "Full function signature (optional)"},
+                "reason": {"type": "string", "description": "Why it's interesting (optional)"}
+            },
+            "required": ["function_name", "file_path", "line_number"]
+        }
     }
 ]
 
@@ -464,6 +479,26 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         except Exception as e:
             return _make_error_response(e)
 
+    @tool("track_function_discovered", "Record a function you found interesting", {
+        "function_name": str,
+        "file_path": str,
+        "line_number": int,
+        "signature": str,
+        "reason": str,
+    })
+    async def track_function_discovered(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = await tool_core.track_function_discovered(
+                function_name=args["function_name"],
+                file_path=args["file_path"],
+                line_number=args["line_number"],
+                signature=args.get("signature"),
+                reason=args.get("reason")
+            )
+            return _make_response(json.dumps(result, indent=2))
+        except Exception as e:
+            return _make_error_response(e)
+
     # Create SDK MCP server with all tools
     sdk_tools = [
         read_file,
@@ -477,6 +512,7 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         grep_semantic,
         generate_security_report,
         track_file_analysis,
+        track_function_discovered,
     ]
 
     mcp_server = create_sdk_mcp_server(

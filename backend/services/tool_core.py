@@ -707,3 +707,52 @@ class ToolCore:
         )
 
         return {"node_id": node.id, "status": "tracked"}
+
+    async def track_function_discovered(
+        self,
+        function_name: str,
+        file_path: str,
+        line_number: int,
+        signature: Optional[str] = None,
+        reason: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Track function discovery in flow tree.
+
+        Args:
+            function_name: Name of the function
+            file_path: File containing function
+            line_number: Line where defined
+            signature: Full function signature
+            reason: Why it's interesting
+
+        Returns:
+            dict with node_id
+        """
+        from services.flow_service import flow_service
+
+        if not self.agent_id:
+            return {"node_id": None}
+
+        # Update context
+        flow_service.update_context(
+            self.agent_id,
+            current_function=function_name,
+            current_file=file_path
+        )
+
+        # Create function node
+        node = flow_service.add_node(
+            self.agent_id,
+            node_type="function",
+            label=function_name,
+            data={
+                "function_name": function_name,
+                "file_path": file_path,
+                "line_number": line_number,
+                "signature": signature,
+                "reason": reason
+            },
+            auto_parent=True  # Parents to current file
+        )
+
+        return {"node_id": node.id}

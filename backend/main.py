@@ -14,6 +14,8 @@ from routers import graph as graph_router
 from routers import session as session_router
 from routers.websocket import set_main_loop
 from database import init_db
+from database.connection import engine
+from database.schema_checker import initialize_triage_availability
 from services.settings_service import settings_service
 from services.project_service import project_service
 from middleware.auth import require_auth
@@ -34,6 +36,10 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await init_db()
     print("Database initialized")
+
+    # Check triage system schema availability
+    await initialize_triage_availability(engine)
+    print("Triage schema compatibility checked")
 
     # Initialize services
     await settings_service.initialize()

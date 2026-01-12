@@ -494,7 +494,16 @@ async def retriage_findings(
     """
     import asyncio
     from database.models import Finding as FindingModel, EvidenceBlob as EvidenceBlobModel
+    from database.schema_checker import is_triage_available
     from sqlalchemy import select
+
+    # Check if triage schema is available
+    if not is_triage_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Triage system not available. Database schema missing. "
+                   "Run: psql $DATABASE_URL < backend/migrations/add_triage_columns.sql"
+        )
 
     # Get agent (check authorization)
     agent = await orchestrator.get_agent(agent_id)
@@ -593,6 +602,15 @@ async def get_triaged_findings_batch(
     Security note: This endpoint exposes code snippets and reasoning.
     Authorization is strictly enforced.
     """
+    from database.schema_checker import is_triage_available
+
+    # Check if triage schema is available
+    if not is_triage_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Triage system not available. Database schema missing."
+        )
+
     # Get agent (check authorization)
     agent = await orchestrator.get_agent(agent_id)
     if not agent:

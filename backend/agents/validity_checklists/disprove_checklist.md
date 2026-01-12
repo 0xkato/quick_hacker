@@ -28,7 +28,9 @@ Before finalizing ANY finding as VALIDATED_VULNERABILITY, you MUST attempt to di
 - [ ] Code is not disabled by default configuration
 - [ ] Code is reachable in common/default deployment configurations
 
-**If NO**: Downgrade to HARDENING_OPPORTUNITY or NOT_A_VULNERABILITY
+**If NO**: Downgrade based on the reason:
+- Dead/test-only/example code → NOT_A_VULNERABILITY
+- Disabled by default but could be enabled → HARDENING_OPPORTUNITY
 
 ---
 
@@ -48,7 +50,7 @@ Before finalizing ANY finding as VALIDATED_VULNERABILITY, you MUST attempt to di
 ### 5. Is the sanitizer/validator actually effective?
 - [ ] I have identified all validators/sanitizers on this path
 - [ ] I have analyzed each one for effectiveness in THIS context
-- [ ] I am not just noting their presence - I have shown why they fail to prevent exploitation
+- [ ] I have analyzed their effectiveness (not just noted their presence) and determined they do not prevent exploitation in this context
 - [ ] There is no safer interpretation of how the validation works
 
 **If validator is effective**: Downgrade to NOT_A_VULNERABILITY

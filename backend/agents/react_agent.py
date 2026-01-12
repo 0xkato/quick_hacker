@@ -2018,40 +2018,54 @@ Continue following the main audit instructions above."""
     def _extract_functions_from_code(self, code: str) -> list[dict]:
         """Extract function definitions from code.
 
-        Note: Only matches single-line function signatures. Multiline signatures
-        are not currently supported.
-
-        Returns list of dicts with: name, signature, line_number
+        Supports: Python, JavaScript, TypeScript (arrow functions, methods, decorators)
         """
         if not code or not isinstance(code, str):
             return []
 
         functions = []
-        lines = code.split('\n')  # Split once for O(n) performance
+        lines = code.split('\n')
 
-        # Python functions
-        pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
+        # Python pattern
+        python_pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
+
+        # JavaScript/TypeScript patterns
+        js_function_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
+        arrow_pattern = r'^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>'
+
         for line_num, line in enumerate(lines, start=1):
-            match = re.match(pattern, line)
+            # Try Python pattern
+            match = re.match(python_pattern, line)
             if match:
                 functions.append({
                     "name": match.group(1),
                     "signature": match.group(0).strip(),
-                    "line_number": line_num
+                    "line_number": line_num,
+                    "language": "python"
                 })
+                continue
 
-        # JavaScript/TypeScript functions
-        js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
-        for line_num, line in enumerate(lines, start=1):
-            match = re.match(js_pattern, line)
+            # Try JS function pattern
+            match = re.match(js_function_pattern, line)
             if match:
-                sig_match = re.match(r'^\s*(.+?)\s*\(', match.group(0))
-                signature = sig_match.group(1).strip() + "()" if sig_match else f"function {match.group(1)}()"
                 functions.append({
                     "name": match.group(1),
-                    "signature": signature,
-                    "line_number": line_num
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num,
+                    "language": "javascript"
                 })
+                continue
+
+            # Try arrow function pattern
+            match = re.match(arrow_pattern, line)
+            if match:
+                functions.append({
+                    "name": match.group(1),
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num,
+                    "language": "typescript"
+                })
+                continue
 
         return functions
 

@@ -2032,6 +2032,7 @@ Continue following the main audit instructions above."""
         # JavaScript/TypeScript patterns
         js_function_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
         arrow_pattern = r'^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>'
+        method_pattern = r'^\s*(?:public|private|protected|static)?\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*[:{]'
 
         for line_num, line in enumerate(lines, start=1):
             # Try Python pattern
@@ -2058,6 +2059,17 @@ Continue following the main audit instructions above."""
 
             # Try arrow function pattern
             match = re.match(arrow_pattern, line)
+            if match:
+                functions.append({
+                    "name": match.group(1),
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num,
+                    "language": "typescript"
+                })
+                continue
+
+            # Try method pattern (must be after arrow to avoid conflicts)
+            match = re.match(method_pattern, line)
             if match:
                 functions.append({
                     "name": match.group(1),

@@ -362,3 +362,33 @@ const validateInput = (input: string) => {}
     assert functions[1]["language"] == "typescript"
     assert functions[2]["name"] == "validateInput"
     assert functions[2]["language"] == "typescript"
+
+
+@pytest.mark.asyncio
+async def test_extract_class_methods_from_typescript(agent_request, mock_provider):
+    """Should extract TypeScript class methods."""
+    # Create agent
+    with patch('agents.react_agent.get_provider', return_value=mock_provider):
+        agent = ReActSecurityAgent(
+            request=agent_request,
+            repo_path="/tmp/test",
+            on_message=None
+        )
+
+    code = """
+class RequestHandler {
+    handleRequest() {}
+    async processData() {}
+    private validateInput() {}
+    static getInstance() {}
+}
+    """
+
+    functions = agent._extract_functions_from_code(code)
+
+    assert len(functions) == 4
+    assert functions[0]["name"] == "handleRequest"
+    assert functions[0]["language"] == "typescript"
+    assert functions[1]["name"] == "processData"
+    assert functions[2]["name"] == "validateInput"
+    assert functions[3]["name"] == "getInstance"

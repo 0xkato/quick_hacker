@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from models.sink_signals import RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
+from models.sink_signals import CandidateStatus, RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
 from services.security_scanners import (
     ScanFinding,
     ScanResult,
@@ -1028,3 +1028,83 @@ class ToolCore:
                 "class": vulnerability_class,
                 "error": f"Error reading checklist: {str(e)}"
             }
+
+    def finalize_finding(
+        self,
+        signal_id: str,
+        classification: CandidateStatus | str,
+        disprove_answers: dict[str, str],
+        reasoning: str
+    ) -> dict[str, Any]:
+        """Finalize a finding with the disprove-first self-critique checklist.
+
+        This method enforces the zero-FP protocol by requiring agents to answer
+        all 6 disprove questions before finalizing a finding. It validates the
+        classification and ensures the reasoning is provided.
+
+        Args:
+            signal_id: The SinkSignal ID being finalized
+            classification: Final classification (must be a valid CandidateStatus
+                except PENDING)
+            disprove_answers: Answers to the 6 disprove questions, with keys
+                q1, q2, q3, q4, q5, q6 and string values
+            reasoning: Detailed reasoning for the classification decision
+
+        Returns:
+            Dictionary with:
+            - success: True if finalization accepted, False if validation failed
+            - classification: The validated classification (if success=True)
+            - disprove_answers: The provided answers (if success=True)
+            - reasoning: The provided reasoning (if success=True)
+            - error: Error message (if success=False)
+        """
+        # Convert string to enum if needed
+        if isinstance(classification, str):
+            try:
+                classification = CandidateStatus(classification)
+            except ValueError:
+                return {
+                    "success": False,
+                    "error": f"Invalid classification '{classification}'. Must be one of: {', '.join(c.value for c in CandidateStatus)}"
+                }
+
+        # Validate classification (cannot be PENDING)
+        if classification == CandidateStatus.PENDING:
+            return {
+                "success": False,
+                "error": "Cannot finalize with PENDING classification. Must choose a final outcome: VALIDATED_VULNERABILITY, NEEDS_HUMAN_REVIEW, HARDENING_OPPORTUNITY, NOT_A_VULNERABILITY, or DUPLICATE."
+            }
+
+        # Validate disprove answers (must have all 6 questions)
+        required_questions = {"q1", "q2", "q3", "q4", "q5", "q6"}
+        provided_questions = set(disprove_answers.keys())
+
+        if provided_questions != required_questions:
+            missing = required_questions - provided_questions
+            extra = provided_questions - required_questions
+            error_parts = []
+            if missing:
+                error_parts.append(f"Missing answers for: {', '.join(sorted(missing))}")
+            if extra:
+                error_parts.append(f"Unexpected questions: {', '.join(sorted(extra))}")
+
+            return {
+                "success": False,
+                "error": f"Must answer all 6 questions. {' '.join(error_parts)}"
+            }
+
+        # Validate reasoning is provided
+        if not reasoning or not reasoning.strip():
+            return {
+                "success": False,
+                "error": "Reasoning is required for finalization."
+            }
+
+        # Return successful finalization
+        return {
+            "success": True,
+            "signal_id": signal_id,
+            "classification": classification,
+            "disprove_answers": disprove_answers,
+            "reasoning": reasoning
+        }

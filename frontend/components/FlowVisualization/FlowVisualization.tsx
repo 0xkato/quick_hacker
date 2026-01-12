@@ -35,6 +35,7 @@ import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
 import { CollapseButton } from './CollapseButton';
 import { SearchToolbar } from './SearchToolbar';
+import { parseSearchQuery, matchesQuery } from './searchUtils';
 
 // Types matching backend
 interface FlowNode {
@@ -239,23 +240,6 @@ export function FlowVisualization({
     }));
   }, []);
 
-  // Search handlers
-  const handleSearch = useCallback((query: string) => {
-    setSearchQuery(query);
-    setCurrentMatchIndex(0);
-    // Search logic will be added in next task
-  }, []);
-
-  const handleNavigate = useCallback((direction: 'up' | 'down') => {
-    setCurrentMatchIndex(prev => {
-      if (direction === 'up') {
-        return prev > 0 ? prev - 1 : searchMatches.length - 1;
-      } else {
-        return prev < searchMatches.length - 1 ? prev + 1 : 0;
-      }
-    });
-  }, [searchMatches.length]);
-
   // Get all descendants of a node
   const getDescendants = useCallback((nodeId: string, edges: Edge[]): string[] => {
     const descendants: string[] = [];
@@ -299,6 +283,42 @@ export function FlowVisualization({
 
     return ancestors;
   }, []);
+
+  // Search handlers
+  const handleSearch = useCallback((query: string) => {
+    setSearchQuery(query);
+    setCurrentMatchIndex(0);
+
+    if (!query.trim()) {
+      setSearchMatches([]);
+      return;
+    }
+
+    const parsedQuery = parseSearchQuery(query);
+    const matches = new Set<string>();
+
+    // Find matching nodes
+    nodes.forEach(node => {
+      if (matchesQuery(node, parsedQuery)) {
+        matches.add(node.id);
+        // Include ancestors to keep path visible
+        const ancestors = getAncestors(node.id, edges);
+        ancestors.forEach(id => matches.add(id));
+      }
+    });
+
+    setSearchMatches(Array.from(matches));
+  }, [nodes, edges, getAncestors]);
+
+  const handleNavigate = useCallback((direction: 'up' | 'down') => {
+    setCurrentMatchIndex(prev => {
+      if (direction === 'up') {
+        return prev > 0 ? prev - 1 : searchMatches.length - 1;
+      } else {
+        return prev < searchMatches.length - 1 ? prev + 1 : 0;
+      }
+    });
+  }, [searchMatches.length]);
 
   // Count descendants of a node
   const getDescendantCount = useCallback((nodeId: string, edges: Edge[]): number => {
@@ -396,6 +416,7 @@ export function FlowVisualization({
   // Calculate which nodes to show based on collapse state
   const visibleNodes = useMemo(() => {
     const hidden = new Set<string>();
+    const hasSearch = searchQuery.trim().length > 0;
 
     // Mark descendants of collapsed nodes as hidden
     Object.entries(collapsedNodes).forEach(([nodeId, isCollapsed]) => {
@@ -405,13 +426,23 @@ export function FlowVisualization({
       }
     });
 
-    // Update nodes with visibility
-    // Note: node.data already contains onToggleCollapse, isCollapsed, and descendantCount from useEffect
-    return nodes.map(node => ({
-      ...node,
-      hidden: hidden.has(node.id),
-    }));
-  }, [nodes, edges, collapsedNodes, getDescendants]);
+    // Update nodes with visibility, collapse data, and search highlighting
+    return nodes.map(node => {
+      const isMatch = searchMatches.includes(node.id);
+      const isVisible = !hasSearch || isMatch;
+
+      return {
+        ...node,
+        hidden: hidden.has(node.id),
+        style: {
+          ...node.style,
+          opacity: isVisible ? 1 : 0.3,  // Dim non-matching nodes
+          borderColor: isMatch && hasSearch ? '#facc15' : undefined,  // Yellow for matches
+          borderWidth: isMatch && hasSearch ? '2px' : '1px',
+        },
+      };
+    });
+  }, [nodes, edges, collapsedNodes, searchQuery, searchMatches, getDescendants]);
 
   // Stats
   type InvestigationStats = {

@@ -33,6 +33,9 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
+import { CollapseButton } from './CollapseButton';
+import { SearchToolbar } from './SearchToolbar';
+import { parseSearchQuery, matchesQuery } from './searchUtils';
 
 // Types matching backend
 interface FlowNode {
@@ -72,6 +75,10 @@ interface FlowVisualizationProps {
   variant?: 'investigation' | 'calltree';
 }
 
+interface CollapsedState {
+  [nodeId: string]: boolean;
+}
+
 // Get border color based on confidence score
 function getConfidenceBorderColor(confidence?: number): string {
   if (confidence === undefined) return '';
@@ -81,8 +88,15 @@ function getConfidenceBorderColor(confidence?: number): string {
   return 'ring-2 ring-sev-critical ring-offset-1 ring-offset-vsc-bg';
 }
 
+// Extended data type for node component
+interface FlowNodeData extends FlowNode {
+  isCollapsed?: boolean;
+  descendantCount?: number;
+  onToggleCollapse?: (nodeId: string) => void;
+}
+
 // Custom node component
-function FlowNodeComponent({ data }: { data: FlowNode }) {
+function FlowNodeComponent({ data }: { data: FlowNodeData }) {
   const statusColors = {
     pending: 'border-vsc-border bg-vsc-sidebar',
     running: 'border-vsc-accent bg-vsc-accent/20 animate-pulse',
@@ -133,6 +147,16 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
     >
       <Handle type="target" position={Position.Left} isConnectable={false} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={{ opacity: 0 }} />
+
+      {/* Collapse button */}
+      {data.onToggleCollapse && (
+        <CollapseButton
+          nodeId={data.id}
+          isCollapsed={data.isCollapsed || false}
+          descendantCount={data.descendantCount || 0}
+          onToggle={data.onToggleCollapse}
+        />
+      )}
       <div className="flex items-center gap-2">
         <span className="text-vsc-text-muted">
           {typeIcons[data.type] || <Code className="w-4 h-4" />}
@@ -184,6 +208,22 @@ const nodeTypes = {
   flowNode: FlowNodeComponent,
 };
 
+/**
+ * Interactive flow tree visualization with search, collapse, and filtering.
+ *
+ * Features:
+ * - Collapsible subtrees (click chevron on nodes)
+ * - Search with type filters (type:file, function:*, etc.)
+ * - Keyboard shortcuts (Cmd+F, Cmd+G, Escape)
+ * - Real-time updates via WebSocket/polling
+ *
+ * @param agentId - Agent identifier for this flow
+ * @param flow - Investigation flow data from backend
+ * @param onQueueInvestigation - Callback when user queues a node for investigation
+ * @param variant - Display mode: 'investigation' or 'calltree'
+ * @param emptySelectionText - Text shown when no agent is selected
+ * @param emptyFlowText - Text shown when flow has no nodes
+ */
 export function FlowVisualization({
   agentId,
   flow,
@@ -199,6 +239,108 @@ export function FlowVisualization({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isQueueing, setIsQueueing] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
+
+  // Collapsed nodes state
+  const [collapsedNodes, setCollapsedNodes] = useState<CollapsedState>({});
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<string[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+
+  // Toggle collapse for a node
+  const toggleCollapse = useCallback((nodeId: string) => {
+    setCollapsedNodes(prev => ({
+      ...prev,
+      [nodeId]: !prev[nodeId]
+    }));
+  }, []);
+
+  // Get all descendants of a node
+  const getDescendants = useCallback((nodeId: string, edges: Edge[]): string[] => {
+    const descendants: string[] = [];
+    const queue = [nodeId];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+
+      // Find children
+      const children = edges
+        .filter(e => e.source === current)
+        .map(e => e.target);
+
+      descendants.push(...children);
+      queue.push(...children);
+    }
+
+    return descendants;
+  }, []);
+
+  /**
+   * Gets all ancestor nodes by following parent edges.
+   * Assumes tree structure (each node has at most one parent).
+   * @param nodeId - The starting node ID
+   * @param edges - The graph edges
+   * @returns Array of ancestor node IDs in order from immediate parent to root
+   */
+  const getAncestors = useCallback((nodeId: string, edges: Edge[]): string[] => {
+    const ancestors: string[] = [];
+    let current = nodeId;
+
+    while (current) {
+      const parent = edges.find(e => e.target === current);
+      if (!parent) break;
+      ancestors.push(parent.source);
+      current = parent.source;
+    }
+
+    return ancestors;
+  }, []);
+
+  // Search handlers
+  const handleSearch = useCallback((query: string) => {
+    setSearchQuery(query);
+    setCurrentMatchIndex(0);
+
+    if (!query.trim()) {
+      setSearchMatches([]);
+      setCurrentMatchIndex(0);  // Reset index when clearing
+      return;
+    }
+
+    const parsedQuery = parseSearchQuery(query);
+    const matches = new Set<string>();
+
+    // Find matching nodes
+    nodes.forEach(node => {
+      if (matchesQuery(node, parsedQuery)) {
+        matches.add(node.id);
+        // Include ancestors to keep path visible
+        const ancestors = getAncestors(node.id, edges);
+        ancestors.forEach(id => matches.add(id));
+      }
+    });
+
+    setSearchMatches(Array.from(matches));
+  }, [nodes, edges, getAncestors]);
+
+  const handleNavigate = useCallback((direction: 'up' | 'down') => {
+    setCurrentMatchIndex(prev => {
+      if (direction === 'up') {
+        return prev > 0 ? prev - 1 : searchMatches.length - 1;
+      } else {
+        return prev < searchMatches.length - 1 ? prev + 1 : 0;
+      }
+    });
+  }, [searchMatches.length]);
+
+  // Count descendants of a node
+  const getDescendantCount = useCallback((nodeId: string, edges: Edge[]): number => {
+    return getDescendants(nodeId, edges).length;
+  }, [getDescendants]);
 
   // Handle node click to show popover
   const onNodeClick: NodeMouseHandler = useCallback((event, node) => {
@@ -249,14 +391,24 @@ export function FlowVisualization({
     // Layout nodes in a tree structure
     const nodePositions = calculateLayout(flow.nodes, flow.edges);
 
-    const rfNodes: Node[] = flow.nodes.map((node, index) => ({
-      id: node.id,
-      type: 'flowNode',
-      position: nodePositions.get(node.id) || { x: 100, y: index * 80 },
-      data: node,
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-    }));
+    const rfNodes: Node[] = flow.nodes.map((node, index) => {
+      const descendantCount = getDescendantCount(node.id, flow.edges);
+      const isCollapsed = collapsedNodes[node.id] || false;
+
+      return {
+        id: node.id,
+        type: 'flowNode',
+        position: nodePositions.get(node.id) || { x: 100, y: index * 80 },
+        data: {
+          ...node,
+          isCollapsed,
+          descendantCount,
+          onToggleCollapse: toggleCollapse,
+        } as FlowNodeData,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      };
+    });
 
     const rfEdges: Edge[] = flow.edges.map((edge) => ({
       id: edge.id,
@@ -276,7 +428,74 @@ export function FlowVisualization({
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [flow, setNodes, setEdges]);
+  }, [flow, setNodes, setEdges, collapsedNodes, getDescendantCount, toggleCollapse]);
+
+  // Calculate which nodes to show based on collapse state
+  const visibleNodes = useMemo(() => {
+    const hidden = new Set<string>();
+    const matchSet = new Set(searchMatches);
+    const hasSearch = searchQuery.trim().length > 0;
+
+    // Mark descendants of collapsed nodes as hidden
+    Object.entries(collapsedNodes).forEach(([nodeId, isCollapsed]) => {
+      if (isCollapsed) {
+        const descendants = getDescendants(nodeId, edges);
+        descendants.forEach(id => hidden.add(id));
+      }
+    });
+
+    // Update nodes with visibility, collapse data, and search highlighting
+    return nodes.map(node => {
+      const isMatch = matchSet.has(node.id);
+      const isVisible = !hasSearch || isMatch;
+
+      return {
+        ...node,
+        hidden: hidden.has(node.id),
+        style: {
+          ...node.style,
+          opacity: isVisible ? 1 : 0.3,  // Dim non-matching nodes
+          borderColor: isMatch && hasSearch ? '#facc15' : undefined,  // Yellow for matches
+          borderWidth: isMatch && hasSearch ? '2px' : '1px',
+        },
+      };
+    });
+  }, [nodes, edges, collapsedNodes, searchQuery, searchMatches, getDescendants]);
+
+  // Keyboard shortcuts for search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + F: Focus search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        // Focus search input
+        const searchInput = document.getElementById('flow-search-input') as HTMLInputElement;
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      }
+
+      // Cmd/Ctrl + G: Next match
+      if ((e.metaKey || e.ctrlKey) && e.key === 'g') {
+        e.preventDefault();
+        if (searchMatches.length > 0) {
+          handleNavigate(e.shiftKey ? 'up' : 'down');
+        }
+      }
+
+      // Escape: Clear search
+      if (e.key === 'Escape' && (searchQuery || searchMatches.length > 0)) {
+        e.preventDefault();
+        setSearchQuery('');
+        setSearchMatches([]);
+        setCurrentMatchIndex(0);  // Reset index when clearing
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [searchQuery, searchMatches, handleNavigate]);
 
   // Stats
   type InvestigationStats = {
@@ -348,8 +567,14 @@ export function FlowVisualization({
 
   return (
     <div className="h-full w-full relative" ref={containerRef}>
+      <SearchToolbar
+        onSearch={handleSearch}
+        resultCount={searchMatches.length}
+        currentIndex={currentMatchIndex}
+        onNavigate={handleNavigate}
+      />
       <ReactFlow
-        nodes={nodes}
+        nodes={visibleNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}

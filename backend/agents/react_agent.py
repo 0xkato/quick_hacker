@@ -1911,40 +1911,91 @@ class ReActSecurityAgent:
     def _extract_functions_from_code(self, code: str) -> list[dict]:
         """Extract function definitions from code.
 
-        Note: Only matches single-line function signatures. Multiline signatures
-        are not currently supported.
-
-        Returns list of dicts with: name, signature, line_number
+        Supports: Python, JavaScript, TypeScript (arrow functions, methods, decorators)
         """
         if not code or not isinstance(code, str):
             return []
 
         functions = []
-        lines = code.split('\n')  # Split once for O(n) performance
+        lines = code.split('\n')
 
-        # Python functions
-        pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
-        for line_num, line in enumerate(lines, start=1):
-            match = re.match(pattern, line)
+        # Python pattern
+        python_pattern = r'^\s*(?:async\s+)?def\s+(\w+)\s*\('
+
+        # JavaScript/TypeScript patterns
+        js_function_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
+        arrow_pattern = r'^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>'
+        method_pattern = r'^\s*(?:public|private|protected|static)?\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*[:{]'
+        decorator_pattern = r'^\s*@\w+(?:\([^)]*\))?$'
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_num = i + 1
+
+            # Check for decorated method (TypeScript)
+            if re.match(decorator_pattern, line) and i + 1 < len(lines):
+                next_line = lines[i + 1]
+                method_match = re.match(method_pattern, next_line)
+                if method_match:
+                    functions.append({
+                        "name": method_match.group(1),
+                        "signature": f"{line.strip()} {next_line.strip()}",
+                        "line_number": line_num,
+                        "language": "typescript"
+                    })
+                    i += 2
+                    continue
+
+            # Try Python pattern
+            match = re.match(python_pattern, line)
             if match:
                 functions.append({
                     "name": match.group(1),
                     "signature": match.group(0).strip(),
-                    "line_number": line_num
+                    "line_number": line_num,
+                    "language": "python"
                 })
+                i += 1
+                continue
 
-        # JavaScript/TypeScript functions
-        js_pattern = r'^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\('
-        for line_num, line in enumerate(lines, start=1):
-            match = re.match(js_pattern, line)
+            # Try JS function pattern
+            match = re.match(js_function_pattern, line)
             if match:
-                sig_match = re.match(r'^\s*(.+?)\s*\(', match.group(0))
-                signature = sig_match.group(1).strip() + "()" if sig_match else f"function {match.group(1)}()"
                 functions.append({
                     "name": match.group(1),
-                    "signature": signature,
-                    "line_number": line_num
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num,
+                    "language": "javascript"
                 })
+                i += 1
+                continue
+
+            # Try arrow function pattern
+            match = re.match(arrow_pattern, line)
+            if match:
+                functions.append({
+                    "name": match.group(1),
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num,
+                    "language": "typescript"
+                })
+                i += 1
+                continue
+
+            # Try method pattern
+            match = re.match(method_pattern, line)
+            if match:
+                functions.append({
+                    "name": match.group(1),
+                    "signature": match.group(0).strip(),
+                    "line_number": line_num,
+                    "language": "typescript"
+                })
+                i += 1
+                continue
+
+            i += 1
 
         return functions
 

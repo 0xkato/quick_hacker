@@ -14,11 +14,29 @@ from collections import defaultdict
 
 @dataclass
 class FlowContext:
-    """Tracks investigation context for proper tree branching."""
+    """Tracks investigation context for proper tree branching.
+
+    Attributes:
+        current_file: File currently being read/analyzed
+        current_function: Function currently being analyzed
+        current_candidate_node_id: Root of current investigation tree
+        investigation_root_id: For multi-threaded investigations
+        call_depth: Current depth in call chain (must be non-negative)
+        max_call_depth: Maximum depth for call tracing (must be positive)
+    """
     current_file: Optional[str] = None
     current_function: Optional[str] = None
     current_candidate_node_id: Optional[str] = None
     investigation_root_id: Optional[str] = None
+    call_depth: int = 0              # NEW: Current depth in call chain
+    max_call_depth: int = 3          # NEW: Configurable limit
+
+    def __post_init__(self):
+        """Validate field values."""
+        if self.call_depth < 0:
+            raise ValueError(f"call_depth must be non-negative, got {self.call_depth}")
+        if self.max_call_depth <= 0:
+            raise ValueError(f"max_call_depth must be positive, got {self.max_call_depth}")
 
 
 NodeType = Literal[
@@ -154,8 +172,23 @@ class FlowService:
         current_function: Optional[str] = None,
         current_candidate_node_id: Optional[str] = None,
         investigation_root_id: Optional[str] = None,
+        call_depth: Optional[int] = None,
+        max_call_depth: Optional[int] = None,
     ) -> None:
-        """Update investigation context for proper tree branching."""
+        """Update investigation context for proper tree branching.
+
+        Args:
+            agent_id: Agent identifier
+            current_file: File currently being read/analyzed
+            current_function: Function currently being analyzed
+            current_candidate_node_id: Root of current investigation tree
+            investigation_root_id: For multi-threaded investigations
+            call_depth: Current depth in call chain (0 = root function)
+            max_call_depth: Maximum depth for call tracing (prevents infinite recursion)
+
+        Raises:
+            ValueError: If call_depth < 0 or max_call_depth <= 0
+        """
         flow = self._flows.get(agent_id)
         if not flow:
             return
@@ -168,6 +201,14 @@ class FlowService:
             flow.context.current_candidate_node_id = current_candidate_node_id
         if investigation_root_id is not None:
             flow.context.investigation_root_id = investigation_root_id
+        if call_depth is not None:
+            if call_depth < 0:
+                raise ValueError(f"call_depth must be non-negative, got {call_depth}")
+            flow.context.call_depth = call_depth
+        if max_call_depth is not None:
+            if max_call_depth <= 0:
+                raise ValueError(f"max_call_depth must be positive, got {max_call_depth}")
+            flow.context.max_call_depth = max_call_depth
 
     def get_or_create_file_node(
         self,
@@ -175,6 +216,13 @@ class FlowService:
         file_path: str,
     ) -> Optional[FlowNode]:
         """Get existing file node or return None (let caller create it).
+
+        This prevents duplicate file nodes in the tree. Each file should
+        only appear once, with functions as children.
+
+        Args:
+            agent_id: Agent identifier
+            file_path: Path to the file being investigated
 
         Returns:
             FlowNode if file already has a node, None otherwise

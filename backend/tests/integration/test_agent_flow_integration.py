@@ -334,3 +334,94 @@ def multiline_function(param1, param2):
     assert functions[0]["name"] == "multiline_function"
     # Signature captures up to opening paren, not full parameter list
     assert functions[0]["signature"] == "def multiline_function("
+
+
+@pytest.mark.asyncio
+async def test_extract_arrow_functions_from_typescript(agent_request, mock_provider):
+    """Should extract TypeScript arrow functions."""
+    # Create agent
+    with patch('agents.react_agent.get_provider', return_value=mock_provider):
+        agent = ReActSecurityAgent(
+            request=agent_request,
+            repo_path="/tmp/test",
+            on_message=None
+        )
+
+    code = """
+const handleRequest = () => {}
+export const processData = async (data) => {}
+const validateInput = (input: string) => {}
+    """
+
+    functions = agent._extract_functions_from_code(code)
+
+    assert len(functions) == 3
+    assert functions[0]["name"] == "handleRequest"
+    assert functions[0]["language"] == "typescript"
+    assert functions[1]["name"] == "processData"
+    assert functions[1]["language"] == "typescript"
+    assert functions[2]["name"] == "validateInput"
+    assert functions[2]["language"] == "typescript"
+
+
+@pytest.mark.asyncio
+async def test_extract_class_methods_from_typescript(agent_request, mock_provider):
+    """Should extract TypeScript class methods."""
+    # Create agent
+    with patch('agents.react_agent.get_provider', return_value=mock_provider):
+        agent = ReActSecurityAgent(
+            request=agent_request,
+            repo_path="/tmp/test",
+            on_message=None
+        )
+
+    code = """
+class RequestHandler {
+    handleRequest() {}
+    async processData() {}
+    private validateInput() {}
+    static getInstance() {}
+}
+    """
+
+    functions = agent._extract_functions_from_code(code)
+
+    assert len(functions) == 4
+    assert functions[0]["name"] == "handleRequest"
+    assert functions[0]["language"] == "typescript"
+    assert functions[1]["name"] == "processData"
+    assert functions[1]["language"] == "typescript"
+    assert functions[2]["name"] == "validateInput"
+    assert functions[2]["language"] == "typescript"
+    assert functions[3]["name"] == "getInstance"
+    assert functions[3]["language"] == "typescript"
+
+
+@pytest.mark.asyncio
+async def test_extract_decorated_methods_from_typescript(agent_request, mock_provider):
+    """Should extract TypeScript decorated methods."""
+    # Create agent
+    with patch('agents.react_agent.get_provider', return_value=mock_provider):
+        agent = ReActSecurityAgent(
+            request=agent_request,
+            repo_path="/tmp/test",
+            on_message=None
+        )
+
+    code = """
+class Controller {
+    @route('/api/upload')
+    handleUpload() {}
+
+    @Get('/users/:id')
+    async getUserById() {}
+}
+    """
+
+    functions = agent._extract_functions_from_code(code)
+
+    assert len(functions) == 2
+    assert functions[0]["name"] == "handleUpload"
+    assert "@route" in functions[0]["signature"]
+    assert functions[1]["name"] == "getUserById"
+    assert "@Get" in functions[1]["signature"]

@@ -175,6 +175,18 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["findings"]
         }
+    },
+    {
+        "name": "track_file_analysis",
+        "description": "Record that you're analyzing a file to build investigation tree",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path relative to repository root"},
+                "purpose": {"type": "string", "description": "Why analyzing this file (e.g., 'looking for entry points')"}
+            },
+            "required": ["file_path"]
+        }
     }
 ]
 
@@ -438,6 +450,20 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         except Exception as e:
             return _make_error_response(e)
 
+    @tool("track_file_analysis", "Record that you're analyzing a file", {
+        "file_path": str,
+        "purpose": str,
+    })
+    async def track_file_analysis(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = await tool_core.track_file_analysis(
+                file_path=args["file_path"],
+                purpose=args.get("purpose", "analyzing")
+            )
+            return _make_response(json.dumps(result, indent=2))
+        except Exception as e:
+            return _make_error_response(e)
+
     # Create SDK MCP server with all tools
     sdk_tools = [
         read_file,
@@ -450,6 +476,7 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         dependency_audit,
         grep_semantic,
         generate_security_report,
+        track_file_analysis,
     ]
 
     mcp_server = create_sdk_mcp_server(

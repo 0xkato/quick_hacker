@@ -370,6 +370,36 @@ export function FlowVisualization({
     setEdges(rfEdges);
   }, [flow, setNodes, setEdges, collapsedNodes, getDescendantCount, toggleCollapse]);
 
+  // Calculate which nodes to show based on collapse state
+  const visibleNodes = useMemo(() => {
+    const hidden = new Set<string>();
+
+    // Mark descendants of collapsed nodes as hidden
+    Object.entries(collapsedNodes).forEach(([nodeId, isCollapsed]) => {
+      if (isCollapsed) {
+        const descendants = getDescendants(nodeId, edges);
+        descendants.forEach(id => hidden.add(id));
+      }
+    });
+
+    // Update nodes with visibility and collapse data
+    return nodes.map(node => {
+      const descendantCount = getDescendantCount(node.id, edges);
+      const isCollapsed = collapsedNodes[node.id] || false;
+
+      return {
+        ...node,
+        hidden: hidden.has(node.id),
+        data: {
+          ...node.data,
+          isCollapsed,
+          descendantCount,
+          onToggle: toggleCollapse,
+        },
+      };
+    });
+  }, [nodes, edges, collapsedNodes, getDescendants, getDescendantCount, toggleCollapse]);
+
   // Stats
   type InvestigationStats = {
     kind: 'investigation';
@@ -441,7 +471,7 @@ export function FlowVisualization({
   return (
     <div className="h-full w-full relative" ref={containerRef}>
       <ReactFlow
-        nodes={nodes}
+        nodes={visibleNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}

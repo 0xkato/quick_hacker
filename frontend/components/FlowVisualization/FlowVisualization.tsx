@@ -382,17 +382,13 @@ export function FlowVisualization({
       }
     });
 
-    // Update nodes with visibility and toggle callback
-    // Note: isCollapsed and descendantCount are already computed in useEffect
+    // Update nodes with visibility
+    // Note: node.data already contains onToggleCollapse, isCollapsed, and descendantCount from useEffect
     return nodes.map(node => ({
       ...node,
       hidden: hidden.has(node.id),
-      data: {
-        ...node.data,  // Already contains isCollapsed and descendantCount from useEffect
-        onToggle: toggleCollapse,
-      },
     }));
-  }, [nodes, edges, collapsedNodes, getDescendants, toggleCollapse]);
+  }, [nodes, edges, collapsedNodes, getDescendants]);
 
   // Stats
   type InvestigationStats = {

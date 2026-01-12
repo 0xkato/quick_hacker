@@ -48,8 +48,7 @@ backend/tests/fixtures/generated_fastapi_repo/
 # TypeScript incremental build info
 *.tsbuildinfo
 
-# Plans (keep local/untracked)
-docs/plans/
+# Plans (now tracked for design documentation)
 
 # Worktrees
 .worktrees/

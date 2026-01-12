@@ -35,6 +35,6 @@ class GitHeadTracker:
                 timeout=5,
             )
             return result.stdout.strip()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-            # Not a git repo, git not installed, or timeout
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, NotADirectoryError, PermissionError):
+            # Not a git repo, git not installed, timeout, or permission error
             return None

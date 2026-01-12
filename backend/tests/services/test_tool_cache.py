@@ -140,3 +140,54 @@ class TestLRUEviction:
 
         assert cache.get("key1") == "value1_updated"  # Not evicted
         assert cache.get("key2") is None  # Evicted
+
+
+class TestCacheMetrics:
+    def test_initial_metrics_are_zero(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        metrics = cache.get_metrics()
+        assert metrics["hits"] == 0
+        assert metrics["misses"] == 0
+        assert metrics["hit_rate"] == 0.0
+        assert metrics["size"] == 0
+
+    def test_get_miss_increments_misses(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.get("nonexistent")
+        metrics = cache.get_metrics()
+        assert metrics["misses"] == 1
+        assert metrics["hits"] == 0
+
+    def test_get_hit_increments_hits(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.get("key1")
+        metrics = cache.get_metrics()
+        assert metrics["hits"] == 1
+        assert metrics["misses"] == 0
+
+    def test_hit_rate_calculation(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.get("key1")  # hit
+        cache.get("key2")  # miss
+        cache.get("key1")  # hit
+        metrics = cache.get_metrics()
+        assert metrics["hits"] == 2
+        assert metrics["misses"] == 1
+        assert metrics["hit_rate"] == 2 / 3  # 66.67%
+
+    def test_size_reflects_cache_entries(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        metrics = cache.get_metrics()
+        assert metrics["size"] == 2
+
+    def test_eviction_updates_size(self):
+        cache = ToolCache(max_size=2, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key3", "value3")  # Evicts key1
+        metrics = cache.get_metrics()
+        assert metrics["size"] == 2

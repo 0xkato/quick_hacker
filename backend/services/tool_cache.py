@@ -46,6 +46,9 @@ class ToolCache:
         self.ttl_seconds = ttl_seconds
         # OrderedDict maintains insertion order for LRU
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
+        # Metrics
+        self._hits: int = 0
+        self._misses: int = 0
 
     def generate_key(
         self,
@@ -91,6 +94,7 @@ class ToolCache:
             Cached value if present and not expired, None otherwise
         """
         if key not in self._cache:
+            self._misses += 1
             return None
 
         entry = self._cache[key]
@@ -99,10 +103,12 @@ class ToolCache:
         if time.time() >= entry.expires_at:
             # Remove expired entry
             del self._cache[key]
+            self._misses += 1
             return None
 
         # Move to end (mark as recently used)
         self._cache.move_to_end(key)
+        self._hits += 1
 
         return entry.value
 
@@ -126,3 +132,23 @@ class ToolCache:
         if len(self._cache) > self.max_size:
             # popitem(last=False) removes oldest (FIFO)
             self._cache.popitem(last=False)
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get cache performance metrics.
+
+        Returns:
+            Dictionary with:
+            - hits: Number of cache hits
+            - misses: Number of cache misses
+            - hit_rate: Ratio of hits to total requests (0.0-1.0)
+            - size: Current number of cached entries
+        """
+        total_requests = self._hits + self._misses
+        hit_rate = self._hits / total_requests if total_requests > 0 else 0.0
+
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": hit_rate,
+            "size": len(self._cache),
+        }

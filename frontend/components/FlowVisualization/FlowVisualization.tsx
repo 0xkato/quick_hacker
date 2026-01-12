@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
+import { CollapseButton } from './CollapseButton';
 
 // Types matching backend
 interface FlowNode {
@@ -85,8 +86,15 @@ function getConfidenceBorderColor(confidence?: number): string {
   return 'ring-2 ring-sev-critical ring-offset-1 ring-offset-vsc-bg';
 }
 
+// Extended data type for node component
+interface FlowNodeData extends FlowNode {
+  isCollapsed?: boolean;
+  descendantCount?: number;
+  onToggleCollapse?: (nodeId: string) => void;
+}
+
 // Custom node component
-function FlowNodeComponent({ data }: { data: FlowNode }) {
+function FlowNodeComponent({ data }: { data: FlowNodeData }) {
   const statusColors = {
     pending: 'border-vsc-border bg-vsc-sidebar',
     running: 'border-vsc-accent bg-vsc-accent/20 animate-pulse',
@@ -137,6 +145,16 @@ function FlowNodeComponent({ data }: { data: FlowNode }) {
     >
       <Handle type="target" position={Position.Left} isConnectable={false} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={{ opacity: 0 }} />
+
+      {/* Collapse button */}
+      {data.onToggleCollapse && (
+        <CollapseButton
+          nodeId={data.id}
+          isCollapsed={data.isCollapsed || false}
+          descendantCount={data.descendantCount || 0}
+          onToggle={data.onToggleCollapse}
+        />
+      )}
       <div className="flex items-center gap-2">
         <span className="text-vsc-text-muted">
           {typeIcons[data.type] || <Code className="w-4 h-4" />}
@@ -313,14 +331,24 @@ export function FlowVisualization({
     // Layout nodes in a tree structure
     const nodePositions = calculateLayout(flow.nodes, flow.edges);
 
-    const rfNodes: Node[] = flow.nodes.map((node, index) => ({
-      id: node.id,
-      type: 'flowNode',
-      position: nodePositions.get(node.id) || { x: 100, y: index * 80 },
-      data: node,
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-    }));
+    const rfNodes: Node[] = flow.nodes.map((node, index) => {
+      const descendantCount = getDescendantCount(node.id, flow.edges);
+      const isCollapsed = collapsedNodes[node.id] || false;
+
+      return {
+        id: node.id,
+        type: 'flowNode',
+        position: nodePositions.get(node.id) || { x: 100, y: index * 80 },
+        data: {
+          ...node,
+          isCollapsed,
+          descendantCount,
+          onToggleCollapse: toggleCollapse,
+        } as FlowNodeData,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      };
+    });
 
     const rfEdges: Edge[] = flow.edges.map((edge) => ({
       id: edge.id,
@@ -340,7 +368,7 @@ export function FlowVisualization({
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [flow, setNodes, setEdges]);
+  }, [flow, setNodes, setEdges, collapsedNodes, getDescendantCount, toggleCollapse]);
 
   // Stats
   type InvestigationStats = {

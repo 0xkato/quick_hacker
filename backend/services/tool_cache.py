@@ -2,7 +2,16 @@
 """Tool output caching for performance optimization."""
 import hashlib
 import json
+import time
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+
+@dataclass
+class CacheEntry:
+    """Cache entry with value and expiration timestamp."""
+    value: Any
+    expires_at: float
 
 
 class ToolCache:
@@ -25,7 +34,7 @@ class ToolCache:
         """
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self._cache: Dict[str, Any] = {}  # Storage implementation in future tasks
+        self._cache: Dict[str, CacheEntry] = {}  # Storage implementation in future tasks
 
     def generate_key(
         self,
@@ -60,3 +69,35 @@ class ToolCache:
         # Generate SHA-256 hash
         key_str = json.dumps(key_components, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()
+
+    def get(self, key: str) -> Optional[Any]:
+        """Get value from cache if present and not expired.
+
+        Args:
+            key: Cache key (SHA-256 hex string)
+
+        Returns:
+            Cached value if present and not expired, None otherwise
+        """
+        if key not in self._cache:
+            return None
+
+        entry = self._cache[key]
+
+        # Check expiration
+        if time.time() > entry.expires_at:
+            # Remove expired entry
+            del self._cache[key]
+            return None
+
+        return entry.value
+
+    def set(self, key: str, value: Any) -> None:
+        """Store value in cache with TTL.
+
+        Args:
+            key: Cache key (SHA-256 hex string)
+            value: Value to cache (any JSON-serializable object)
+        """
+        expires_at = time.time() + self.ttl_seconds
+        self._cache[key] = CacheEntry(value=value, expires_at=expires_at)

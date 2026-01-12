@@ -1,5 +1,6 @@
 # backend/tests/services/test_tool_cache.py
 import pytest
+import time
 from services.tool_cache import ToolCache
 
 
@@ -39,3 +40,37 @@ class TestCacheKeyGeneration:
         key1 = cache.generate_key("read_file", {"path": "auth.py", "offset": 10}, "abc123")
         key2 = cache.generate_key("read_file", {"offset": 10, "path": "auth.py"}, "abc123")
         assert key1 == key2  # Same args in different order = same key
+
+
+class TestCacheOperations:
+    def test_get_nonexistent_key_returns_none(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        result = cache.get("nonexistent_key")
+        assert result is None
+
+    def test_set_and_get_value(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.set("key1", {"result": "data"})
+        result = cache.get("key1")
+        assert result == {"result": "data"}
+
+    def test_set_overwrites_existing_key(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        cache.set("key1", {"result": "old"})
+        cache.set("key1", {"result": "new"})
+        result = cache.get("key1")
+        assert result == {"result": "new"}
+
+    def test_expired_entry_returns_none(self):
+        cache = ToolCache(max_size=100, ttl_seconds=1)  # 1 second TTL
+        cache.set("key1", {"result": "data"})
+        time.sleep(1.1)  # Wait for expiration
+        result = cache.get("key1")
+        assert result is None
+
+    def test_expired_entry_is_removed(self):
+        cache = ToolCache(max_size=100, ttl_seconds=1)
+        cache.set("key1", {"result": "data"})
+        time.sleep(1.1)
+        cache.get("key1")  # Trigger cleanup
+        assert "key1" not in cache._cache

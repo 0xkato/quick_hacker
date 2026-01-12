@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     nodejs \
     npm \
     gosu \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for Claude SDK compatibility

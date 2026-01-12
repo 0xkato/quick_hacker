@@ -1,0 +1,399 @@
+/**
+ * Frontend Integration Tests for Flow Tree Enhancements
+ *
+ * Copy this file to: frontend/components/FlowVisualization/__tests__/integration.test.tsx
+ *
+ * Required dependencies:
+ * - @testing-library/react
+ * - @testing-library/user-event
+ * - @testing-library/jest-dom
+ */
+
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { FlowVisualization } from '../FlowVisualization';
+import type { InvestigationFlow, FlowNode, FlowEdge } from '../types';
+
+// Mock data
+const createMockFlow = (): InvestigationFlow => ({
+  session_id: 'test-session',
+  nodes: [
+    {
+      id: '1',
+      type: 'scan',
+      label: 'Security Scan',
+      status: 'completed',
+      data: {},
+      timestamp: new Date().toISOString()
+    },
+    {
+      id: '2',
+      type: 'entry_point',
+      label: 'POST /api/upload',
+      status: 'completed',
+      data: {},
+      timestamp: new Date().toISOString()
+    },
+    {
+      id: '3',
+      type: 'file',
+      label: 'api/routes.py',
+      status: 'completed',
+      data: { file_path: 'api/routes.py' },
+      timestamp: new Date().toISOString()
+    },
+    {
+      id: '4',
+      type: 'function',
+      label: 'handleRequest',
+      status: 'completed',
+      data: { function_name: 'handleRequest' },
+      timestamp: new Date().toISOString()
+    },
+    {
+      id: '5',
+      type: 'call',
+      label: '→ validateInput',
+      status: 'completed',
+      data: { target_function: 'validateInput' },
+      timestamp: new Date().toISOString()
+    },
+  ],
+  edges: [
+    { id: 'e1', source: '1', target: '2', label: 'investigates' },
+    { id: 'e2', source: '2', target: '3', label: 'reads' },
+    { id: 'e3', source: '3', target: '4', label: 'contains' },
+    { id: 'e4', source: '4', target: '5', label: 'calls' },
+  ],
+  current_node_id: '5',
+  context: {
+    current_file: 'api/routes.py',
+    current_function: 'handleRequest',
+    current_candidate_node_id: '2',
+    investigation_root_id: '2',
+    call_depth: 1,
+    max_call_depth: 3
+  }
+});
+
+describe('FlowVisualization Integration', () => {
+  describe('Basic Rendering', () => {
+    it('should render all nodes and edges', () => {
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      // Check that all node labels appear
+      expect(screen.getByText(/Security Scan/i)).toBeInTheDocument();
+      expect(screen.getByText(/POST \/api\/upload/i)).toBeInTheDocument();
+      expect(screen.getByText(/api\/routes\.py/i)).toBeInTheDocument();
+      expect(screen.getByText(/handleRequest/i)).toBeInTheDocument();
+      expect(screen.getByText(/validateInput/i)).toBeInTheDocument();
+    });
+
+    it('should display correct node count', () => {
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      // Should show node count somewhere in UI
+      expect(screen.getByText(/5 nodes/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('Search with Type Filters', () => {
+    it('should filter by node type', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+
+      // Search for file nodes only
+      await user.type(searchInput, 'type:file');
+
+      // Wait for debounce
+      await waitFor(() => {
+        // File node should be highlighted
+        const fileNode = screen.getByText(/api\/routes\.py/i);
+        expect(fileNode.closest('[data-highlighted="true"]')).toBeInTheDocument();
+      }, { timeout: 500 });
+    });
+
+    it('should support multiple type filters', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+
+      await user.type(searchInput, 'type:file,function');
+
+      await waitFor(() => {
+        // Both file and function nodes should be highlighted
+        const fileNode = screen.getByText(/api\/routes\.py/i);
+        const funcNode = screen.getByText(/handleRequest/i);
+        expect(fileNode.closest('[data-highlighted="true"]')).toBeInTheDocument();
+        expect(funcNode.closest('[data-highlighted="true"]')).toBeInTheDocument();
+
+        // Call node should be dimmed
+        const callNode = screen.getByText(/validateInput/i);
+        expect(callNode.closest('[data-dimmed="true"]')).toBeInTheDocument();
+      });
+    });
+
+    it('should combine type filter with text search', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+
+      await user.type(searchInput, 'type:function handle');
+
+      await waitFor(() => {
+        // Function node with "handle" should be highlighted
+        const funcNode = screen.getByText(/handleRequest/i);
+        expect(funcNode.closest('[data-highlighted="true"]')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Collapse and Expand', () => {
+    it('should collapse and expand subtrees', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      // Find collapse button on file node
+      const fileNode = screen.getByText(/api\/routes\.py/i);
+      const collapseButton = fileNode.closest('[data-node-id="3"]')
+        ?.querySelector('[data-action="collapse"]');
+
+      expect(collapseButton).toBeInTheDocument();
+
+      // Click to collapse
+      await user.click(collapseButton!);
+
+      // Children should be hidden
+      await waitFor(() => {
+        expect(screen.queryByText(/handleRequest/i)).not.toBeVisible();
+        expect(screen.queryByText(/validateInput/i)).not.toBeVisible();
+      });
+
+      // Click to expand
+      const expandButton = fileNode.closest('[data-node-id="3"]')
+        ?.querySelector('[data-action="expand"]');
+      await user.click(expandButton!);
+
+      // Children should reappear
+      await waitFor(() => {
+        expect(screen.getByText(/handleRequest/i)).toBeVisible();
+      });
+    });
+
+    it('should work with search active', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      // First do a search
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+      await user.type(searchInput, 'validate');
+
+      await waitFor(() => {
+        expect(screen.getByText(/validateInput/i)
+          .closest('[data-highlighted="true"]')).toBeInTheDocument();
+      });
+
+      // Then collapse the file node (parent of matching call node)
+      const fileNode = screen.getByText(/api\/routes\.py/i);
+      const collapseButton = fileNode.closest('[data-node-id="3"]')
+        ?.querySelector('[data-action="collapse"]');
+
+      await user.click(collapseButton!);
+
+      // Collapsed node should show match badge
+      await waitFor(() => {
+        const badge = fileNode.closest('[data-node-id="3"]')
+          ?.querySelector('[data-match-count]');
+        expect(badge).toHaveTextContent('1');
+      });
+    });
+  });
+
+  describe('Keyboard Shortcuts', () => {
+    it('should focus search on Cmd+F or Ctrl+F', async () => {
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+
+      // Press Cmd+F (Mac) or Ctrl+F (Windows)
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      fireEvent.keyDown(window, {
+        key: 'f',
+        metaKey: isMac,
+        ctrlKey: !isMac
+      });
+
+      expect(searchInput).toHaveFocus();
+    });
+
+    it('should clear search on Escape', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+
+      // Type search query
+      await user.type(searchInput, 'function');
+      expect(searchInput).toHaveValue('function');
+
+      // Press Escape
+      fireEvent.keyDown(searchInput, { key: 'Escape' });
+
+      expect(searchInput).toHaveValue('');
+    });
+  });
+
+  describe('Performance', () => {
+    const generateLargeFlow = (nodeCount: number): InvestigationFlow => {
+      const nodes: FlowNode[] = [];
+      const edges: FlowEdge[] = [];
+
+      // Root scan node
+      nodes.push({
+        id: '0',
+        type: 'scan',
+        label: 'Large Scan',
+        status: 'completed',
+        data: {},
+        timestamp: new Date().toISOString()
+      });
+
+      // Generate nodes
+      for (let i = 1; i < nodeCount; i++) {
+        const type = i % 4 === 0 ? 'file' :
+                     i % 4 === 1 ? 'function' :
+                     i % 4 === 2 ? 'call' : 'entry_point';
+
+        nodes.push({
+          id: String(i),
+          type,
+          label: `Node ${i}`,
+          status: 'completed',
+          data: {},
+          timestamp: new Date().toISOString()
+        });
+
+        // Create edges
+        const parentId = i === 1 ? '0' : String(Math.floor((i - 1) / 2));
+        edges.push({
+          id: `e${i}`,
+          source: parentId,
+          target: String(i),
+          label: null
+        });
+      }
+
+      return {
+        session_id: 'large-flow',
+        nodes,
+        edges,
+        current_node_id: String(nodeCount - 1),
+        context: {
+          current_file: null,
+          current_function: null,
+          current_candidate_node_id: '1',
+          investigation_root_id: '1',
+          call_depth: 0,
+          max_call_depth: 3
+        }
+      };
+    };
+
+    it('should render 500 nodes within 1 second', () => {
+      const largeFlow = generateLargeFlow(500);
+
+      const startTime = performance.now();
+      render(<FlowVisualization agentId="test" flow={largeFlow} />);
+      const renderTime = performance.now() - startTime;
+
+      expect(renderTime).toBeLessThan(1000);
+    });
+
+    it('should handle search on large flows quickly', async () => {
+      const user = userEvent.setup();
+      const largeFlow = generateLargeFlow(500);
+      render(<FlowVisualization agentId="test" flow={largeFlow} />);
+
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+
+      const startTime = performance.now();
+      await user.type(searchInput, 'Node 250');
+
+      // Wait for debounce + search
+      await waitFor(() => {
+        const searchTime = performance.now() - startTime;
+        // Should complete within 500ms (300ms debounce + 200ms search)
+        expect(searchTime).toBeLessThan(500);
+      });
+    });
+  });
+
+  describe('Integration: Search + Collapse', () => {
+    it('should show match count in collapsed nodes', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      // Search for matches
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+      await user.type(searchInput, 'validate');
+
+      await waitFor(() => {
+        expect(screen.getByText(/validateInput/i)).toBeInTheDocument();
+      });
+
+      // Collapse parent node
+      const fileNode = screen.getByText(/api\/routes\.py/i);
+      const collapseButton = fileNode.closest('[data-node-id="3"]')
+        ?.querySelector('[data-action="collapse"]');
+      await user.click(collapseButton!);
+
+      // Should show match count badge
+      await waitFor(() => {
+        const badge = screen.getByText(/1 match/i);
+        expect(badge).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('End-to-End Flow', () => {
+    it('should complete full investigation workflow', async () => {
+      const user = userEvent.setup();
+      const mockFlow = createMockFlow();
+      render(<FlowVisualization agentId="test" flow={mockFlow} />);
+
+      // 1. Verify initial render
+      expect(screen.getByText(/Security Scan/i)).toBeInTheDocument();
+
+      // 2. Search for specific nodes
+      const searchInput = screen.getByPlaceholderText(/Search/i);
+      await user.type(searchInput, 'type:file');
+
+      // 3. Collapse unrelated branches
+      await waitFor(() => {
+        const fileNode = screen.getByText(/api\/routes\.py/i);
+        expect(fileNode).toBeInTheDocument();
+      });
+
+      // 4. Use keyboard shortcuts
+      fireEvent.keyDown(searchInput, { key: 'Escape' });
+      expect(searchInput).toHaveValue('');
+
+      // 5. Verify state consistency
+      expect(screen.getByText(/5 nodes/i)).toBeInTheDocument();
+    });
+  });
+});

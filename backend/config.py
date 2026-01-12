@@ -44,10 +44,12 @@ class Settings(BaseSettings):
     )
     tool_cache_max_size: int = Field(
         default=1000,
+        gt=0,  # Must be positive
         description="Maximum number of cached tool outputs (LRU eviction)"
     )
     tool_cache_ttl_seconds: int = Field(
         default=3600,
+        gt=0,  # Must be positive
         description="Time-to-live for cached entries in seconds (default 1 hour)"
     )
 

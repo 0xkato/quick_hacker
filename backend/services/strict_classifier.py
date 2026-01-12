@@ -440,15 +440,15 @@ class StrictClassifier:
 
         # Try AST parsing first (most reliable)
         ast_parse_succeeded = False
+        target_node = None  # Initialize outside try block for scope
         if evidence.snippet:
             try:
                 tree = ast.parse(evidence.snippet)
                 ast_parse_succeeded = True
 
                 # Find the target symbol (function or class) in the AST
-                target_node = None
                 for node in ast.walk(tree):
-                    if symbol_type == "function" and isinstance(node, ast.FunctionDef):
+                    if symbol_type == "function" and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         if node.name == symbol_name:
                             target_node = node
                             break
@@ -487,11 +487,14 @@ class StrictClassifier:
                     # Found the target node and checked it - return False (no sink found)
                     return (False, f"No exec/eval/compile sink in {symbol_name}")
 
+                # If AST parsing succeeded but target_node not found, fall through to regex fallback
+                # (symbol name might not match exactly)
+
             except SyntaxError:
                 pass  # Fall back to regex
 
-        # Only use regex fallback if AST parsing failed or couldn't find the symbol
-        if not ast_parse_succeeded:
+        # Use regex fallback if AST parsing failed or couldn't find the symbol
+        if not ast_parse_succeeded or target_node is None:
             # Regex fallback: search entire snippet (can't reliably scope with regex)
             # This is less precise but better than false negatives
             snippet = evidence.snippet or finding.code_snippet or ""

@@ -859,6 +859,85 @@ class TestStrictExecEvalFiltering:
         assert is_sink is True
         assert "compile" in reason.lower()
 
+    def test_detects_exec_in_async_function(self, classifier):
+        """Detect exec() in async function (critical bug fix)."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-008",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Async exec",
+            description="Async function with exec",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="async def handler(code):\n    exec(code)",
+            symbol_info=SymbolInfo(
+                name="handler",
+                qualified_name="handler",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is True
+        assert "exec" in reason.lower()
+        assert "handler" in reason.lower()
+
+    def test_symbol_name_mismatch_fallback_to_regex(self, classifier):
+        """Symbol name mismatch should fall back to regex and still detect exec()."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-009",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Symbol name mismatch",
+            description="Symbol info name doesn't match function name in snippet",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        # Symbol info says "handler" but snippet has "process_data"
+        evidence = EvidenceResult(
+            snippet="def process_data(code):\n    exec(code)",
+            symbol_info=SymbolInfo(
+                name="handler",  # Mismatch: actual function is process_data
+                qualified_name="handler",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        # Should still detect exec() via regex fallback
+        assert is_sink is True
+        assert "exec" in reason.lower()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

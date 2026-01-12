@@ -30,6 +30,7 @@ import {
   ArrowRight,
   ExternalLink,
   Shield,
+  Filter,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
@@ -88,6 +89,48 @@ function getConfidenceBorderColor(confidence?: number): string {
   return 'ring-2 ring-sev-critical ring-offset-1 ring-offset-vsc-bg';
 }
 
+// Get border color for triage gateway based on dominant disposition
+function getTriageGatewayBorderColor(byDisposition?: Record<string, number>): string {
+  if (!byDisposition || typeof byDisposition !== 'object') return '';
+
+  // Priority order: VALID_SECURITY_ISSUE/BUG > MISCONFIGURATION > HARDENING > BY_DESIGN > SPECULATIVE
+  const dispositionPriority: Record<string, number> = {
+    'VALID_SECURITY_ISSUE': 5,
+    'BUG': 5,
+    'MISCONFIGURATION': 4,
+    'HARDENING': 3,
+    'BY_DESIGN': 2,
+    'SPECULATIVE': 1,
+  };
+
+  const dispositionColors: Record<string, string> = {
+    'VALID_SECURITY_ISSUE': 'ring-2 ring-sev-critical ring-offset-1 ring-offset-vsc-bg',
+    'BUG': 'ring-2 ring-sev-high ring-offset-1 ring-offset-vsc-bg',
+    'MISCONFIGURATION': 'ring-2 ring-sev-medium ring-offset-1 ring-offset-vsc-bg',
+    'HARDENING': 'ring-2 ring-blue-500 ring-offset-1 ring-offset-vsc-bg',
+    'BY_DESIGN': 'ring-2 ring-vsc-text-muted ring-offset-1 ring-offset-vsc-bg',
+    'SPECULATIVE': 'ring-2 ring-vsc-border ring-offset-1 ring-offset-vsc-bg',
+  };
+
+  // Find dominant disposition by priority
+  let dominantDisposition = '';
+  let highestPriority = 0;
+  let highestCount = 0;
+
+  for (const [disposition, count] of Object.entries(byDisposition)) {
+    if (typeof count !== 'number' || count <= 0) continue;
+
+    const priority = dispositionPriority[disposition] || 0;
+    if (priority > highestPriority || (priority === highestPriority && count > highestCount)) {
+      dominantDisposition = disposition;
+      highestPriority = priority;
+      highestCount = count;
+    }
+  }
+
+  return dispositionColors[dominantDisposition] || '';
+}
+
 // Extended data type for node component
 interface FlowNodeData extends FlowNode {
   isCollapsed?: boolean;
@@ -123,6 +166,7 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
     external: <ExternalLink className="w-4 h-4 text-gray-400" />,
     auth_boundary: <Shield className="w-4 h-4 text-yellow-400" />,
     cycle: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
+    triage_gateway: <Filter className="w-4 h-4 text-vsc-accent" />,
   };
 
   const statusIcons = {
@@ -132,7 +176,13 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
     failed: <XCircle className="w-3 h-3 text-sev-critical" />,
   };
 
-  const confidenceRing = getConfidenceBorderColor(data.confidence_score);
+  // Apply appropriate border color based on node type
+  let borderRing = '';
+  if (data.type === 'triage_gateway' && data.data?.by_disposition) {
+    borderRing = getTriageGatewayBorderColor(data.data.by_disposition as Record<string, number>);
+  } else if (data.confidence_score !== undefined) {
+    borderRing = getConfidenceBorderColor(data.confidence_score);
+  }
 
   return (
     <div
@@ -141,7 +191,7 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
         'px-3 py-2 rounded-lg border-2 min-w-[120px] max-w-[200px] bg-vsc-bg cursor-pointer',
         'transition-all duration-150 hover:scale-105 hover:shadow-lg',
         statusColors[data.status],
-        confidenceRing
+        borderRing
       )}
       title={data.llm_reasoning ? `${data.label}\n\nClick for details` : data.label}
     >
@@ -193,6 +243,39 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
           >
             {(data.data.severity as string) || 'unknown'}
           </span>
+        </div>
+      )}
+
+      {data.data && data.type === 'triage_gateway' && (
+        <div className="mt-2 space-y-1 text-vsc-xs">
+          <div className="flex justify-between">
+            <span className="text-vsc-text-muted">Reportable:</span>
+            <span className="text-vsc-success font-medium">
+              {typeof data.data.reportable_count === 'number' ? data.data.reportable_count : 0}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-vsc-text-muted">Filtered:</span>
+            <span className="text-vsc-text-muted">
+              {typeof data.data.triaged_count === 'number' && typeof data.data.reportable_count === 'number'
+                ? data.data.triaged_count - data.data.reportable_count
+                : 0}
+            </span>
+          </div>
+          {data.data.by_disposition && typeof data.data.by_disposition === 'object' && (
+            <div className="text-vsc-xs text-vsc-text-muted pt-1 border-t border-vsc-border">
+              {Object.entries(data.data.by_disposition as Record<string, number>)
+                .filter(([_, count]) => count > 0)
+                .sort(([_, a], [__, b]) => (b as number) - (a as number))
+                .slice(0, 3)
+                .map(([disposition, count]) => (
+                  <div key={disposition} className="flex justify-between">
+                    <span className="truncate">{disposition}:</span>
+                    <span>{count as number}</span>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       )}
 

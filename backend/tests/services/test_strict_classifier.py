@@ -10,13 +10,13 @@ Tests ensure:
 """
 
 import pytest
+from dataclasses import replace
 from models.schemas import (
     Finding,
-    EvidenceResult,
-    EvidenceMatch,
     ChecklistStatus,
     Disposition,
 )
+from services.evidence_gatherer import EvidenceResult, EvidenceMatch, SSRFAnalysis
 from services.strict_classifier import StrictClassifier
 
 
@@ -49,15 +49,11 @@ def empty_evidence():
     """Empty evidence result."""
     return EvidenceResult(
         snippet="",
-        sources=[],
-        sinks=[],
-        auth_gates=[],
-        route_registrations=[],
-        symbol_references=[],
         symbol_info=None,
-        framework_detected=None,
-        url_is_constant=None,
-        url_from_config=None,
+        framework=None,
+        matches=[],
+        ssrf_analysis=None,
+        timed_out=False,
     )
 
 
@@ -71,20 +67,22 @@ class TestCodeExecutionByDesign:
         finding.file_path = "/app/pipelines/data_processor.py"
         finding.description = "Use of exec() function for dynamic code execution"
 
-        evidence = empty_evidence.model_copy()
-        evidence.snippet = """
+        evidence = replace(
+            empty_evidence,
+            snippet="""
 def process_pipeline(config):
     # Dynamic pipeline execution
     exec(config['transformation_code'])
-"""
-        evidence.sinks = [
-            EvidenceMatch(
-                file="/app/pipelines/data_processor.py",
-                line=10,
-                snippet="exec(config['transformation_code'])",
-                match_type="sink",
-            )
-        ]
+""",
+            matches=[
+                EvidenceMatch(
+                    file="/app/pipelines/data_processor.py",
+                    line=10,
+                    snippet="exec(config['transformation_code'])",
+                    match_type="sink",
+                )
+            ]
+        )
 
         result = classifier.classify(finding, evidence)
 
@@ -99,15 +97,14 @@ def process_pipeline(config):
         finding.vulnerability_type = "Command Injection"
         finding.file_path = "/app/api/handlers.py"
         finding.description = "Shell command with user input"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 @app.post("/execute")
 async def execute_command(cmd: str):
     result = subprocess.run(cmd, shell=True)
     return {"output": result.stdout}
 """
-        evidence.sources = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api/handlers.py",
                 line=2,
@@ -115,7 +112,7 @@ async def execute_command(cmd: str):
                 match_type="source",
             )
         ]
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api/handlers.py",
                 line=3,
@@ -123,7 +120,7 @@ async def execute_command(cmd: str):
                 match_type="sink",
             )
         ]
-        evidence.route_registrations = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api/handlers.py",
                 line=1,
@@ -149,14 +146,13 @@ class TestSSRFPatternDowngrades:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
         finding.description = "HTTP request to external URL"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 def check_service_health():
     response = requests.get("https://api.example.com/health")
     return response.json()
 """
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/health.py",
                 line=3,
@@ -164,7 +160,7 @@ def check_service_health():
                 match_type="sink",
             )
         ]
-        evidence.url_is_constant = True
+        evidence.ssrf_analysis = SSRFAnalysis(url_is_constant=True)
 
         result = classifier.classify(finding, evidence)
 
@@ -176,14 +172,13 @@ def check_service_health():
         """SSRF with config-only URL → SPECULATIVE (integration test)."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 def fetch_data():
     url = os.getenv("API_ENDPOINT")
     response = requests.get(url)
 """
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=3,
@@ -191,7 +186,7 @@ def fetch_data():
                 match_type="sink",
             )
         ]
-        evidence.url_from_config = True
+        evidence.ssrf_analysis = SSRFAnalysis(url_from_config=True)
 
         result = classifier.classify(finding, evidence)
 
@@ -202,15 +197,14 @@ def fetch_data():
         """SSRF with user-controlled URL → VALID_SECURITY_ISSUE."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 @app.post("/fetch")
 async def fetch_url(url: str):
     response = requests.get(url)
     return response.text
 """
-        evidence.sources = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=2,
@@ -218,7 +212,7 @@ async def fetch_url(url: str):
                 match_type="source",
             )
         ]
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=3,
@@ -226,7 +220,7 @@ async def fetch_url(url: str):
                 match_type="sink",
             )
         ]
-        evidence.route_registrations = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=1,
@@ -234,7 +228,7 @@ async def fetch_url(url: str):
                 match_type="route_registration",
             )
         ]
-        evidence.url_is_constant = False
+        evidence.ssrf_analysis = SSRFAnalysis(url_is_constant=False)
 
         result = classifier.classify(finding, evidence)
 
@@ -249,8 +243,7 @@ class TestCSWSHPatterns:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Cross-Site WebSocket Hijacking"
         finding.description = "WebSocket without origin validation"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 async def websocket_handler(websocket: WebSocket):
     # Check origin header
@@ -259,7 +252,7 @@ async def websocket_handler(websocket: WebSocket):
         return
     await websocket.accept()
 """
-        evidence.auth_gates = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/ws.py",
                 line=3,
@@ -279,14 +272,13 @@ async def websocket_handler(websocket: WebSocket):
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Code Injection"  # Different vuln type
         finding.description = "RCE via websocket message handler"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 async def handle_message(websocket, message):
     # Execute user command
     exec(message['code'])
 """
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/ws.py",
                 line=3,
@@ -312,15 +304,14 @@ class TestDeserializationPatterns:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Deserialization"
         finding.description = "Use of unsafe yaml.load()"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 def load_config():
     with open('config.yaml', 'r') as f:
         config = yaml.load(f, Loader=yaml.Loader)
     return config
 """
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/config.py",
                 line=3,
@@ -345,19 +336,18 @@ class TestSQLInjectionPatterns:
         finding.vulnerability_type = "SQL Injection"
         finding.file_path = "/app/connectors/database.py"
         finding.description = "Dynamic SQL query construction"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 def build_query(table_name, columns):
     # Internal connector - developer-controlled
     query = f"SELECT {','.join(columns)} FROM {table_name}"
     return execute_query(query)
 """
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/connectors/database.py",
                 line=3,
-                snippet='query = f"SELECT {\\',\\'.join(columns)} FROM {table_name}"',
+                snippet='query = f"SELECT {columns} FROM {table_name}"',
                 match_type="sink",
             )
         ]
@@ -372,15 +362,14 @@ def build_query(table_name, columns):
         """SQL injection with request input → VALID_SECURITY_ISSUE."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SQL Injection"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 @app.get("/users")
 async def get_users(name: str):
     query = f"SELECT * FROM users WHERE name = '{name}'"
     return db.execute(query)
 """
-        evidence.sources = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=2,
@@ -388,15 +377,15 @@ async def get_users(name: str):
                 match_type="source",
             )
         ]
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=3,
-                snippet='query = f"SELECT * FROM users WHERE name = \\'{name}\\'"',
+                snippet='query = f"SELECT * FROM users WHERE name = \'{name}\'"',
                 match_type="sink",
             )
         ]
-        evidence.route_registrations = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=1,
@@ -418,8 +407,7 @@ class TestBugDisposition:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Authentication Bypass"
         finding.description = "Route bypasses authentication check"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 @app.post("/admin/delete")
 async def delete_user(user_id: str, skip_auth: bool = False):
@@ -428,7 +416,7 @@ async def delete_user(user_id: str, skip_auth: bool = False):
     # Delete user - dangerous operation
     db.users.delete(user_id)
 """
-        evidence.sources = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/admin.py",
                 line=2,
@@ -436,7 +424,7 @@ async def delete_user(user_id: str, skip_auth: bool = False):
                 match_type="source",
             )
         ]
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/admin.py",
                 line=6,
@@ -444,7 +432,7 @@ async def delete_user(user_id: str, skip_auth: bool = False):
                 match_type="sink",
             )
         ]
-        evidence.route_registrations = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/admin.py",
                 line=1,
@@ -469,8 +457,7 @@ class TestMisconfiguration:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Unauthorized Access"
         finding.description = "Endpoint accessible when authentication is disabled"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 @app.post("/admin/users")
 async def create_user(username: str):
@@ -478,7 +465,7 @@ async def create_user(username: str):
         # No authentication when disabled
         db.users.create(username)
 """
-        evidence.sources = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=2,
@@ -486,7 +473,7 @@ async def create_user(username: str):
                 match_type="source",
             )
         ]
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=5,
@@ -494,7 +481,7 @@ async def create_user(username: str):
                 match_type="sink",
             )
         ]
-        evidence.route_registrations = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/api.py",
                 line=1,
@@ -517,10 +504,9 @@ class TestPatternDowngradesOnly:
         """Pattern rules must never return VALID_SECURITY_ISSUE or BUG."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = "requests.get(url)"
-        evidence.sinks = [
+        evidence.matches = [
             EvidenceMatch(
                 file="/app/test.py",
                 line=1,
@@ -549,11 +535,10 @@ class TestConfidenceScoring:
         """VALID_SECURITY_ISSUE should have exploit confidence."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Command Injection"
-
-        evidence = empty_evidence.model_copy()
-        evidence.sources = [EvidenceMatch(file="test.py", line=1, snippet="def handler(cmd: str)", match_type="source")]
-        evidence.sinks = [EvidenceMatch(file="test.py", line=2, snippet="subprocess.run(cmd, shell=True)", match_type="sink")]
-        evidence.route_registrations = [EvidenceMatch(file="test.py", line=0, snippet="@app.post", match_type="route_registration")]
+        evidence = replace(empty_evidence)
+        evidence.matches = [EvidenceMatch(file="test.py", line=1, snippet="def handler(cmd: str)", match_type="source")]
+        evidence.matches = [EvidenceMatch(file="test.py", line=2, snippet="subprocess.run(cmd, shell=True)", match_type="sink")]
+        evidence.matches = [EvidenceMatch(file="test.py", line=0, snippet="@app.post", match_type="route_registration")]
 
         result = classifier.classify(finding, evidence)
 
@@ -593,8 +578,7 @@ class TestHardenedCodeDetection:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Hardcoded Secret"
         finding.file_path = "/app/examples/docker-compose.yml"
-
-        evidence = empty_evidence.model_copy()
+        evidence = replace(empty_evidence)
         evidence.snippet = """
 services:
   db:
@@ -606,6 +590,274 @@ services:
 
         # Example files with hardcoded secrets → HARDENING
         assert result.disposition == Disposition.HARDENING
+
+
+class TestStrictExecEvalFiltering:
+    """Tests for aggressive exec/eval filtering logic."""
+
+    def test_detects_direct_exec_call(self, classifier):
+        """Detect direct exec() call within symbol range."""
+        from models.schemas import Finding, VulnerabilityCategory
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code execution in handler",
+            description="Executes user code",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="def handler(user_code: str):\n    exec(user_code)",
+            symbol_info=SymbolInfo(
+                name="handler",
+                qualified_name="handler",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is True
+        assert "exec" in reason.lower()
+        assert "handler" in reason.lower()
+
+    def test_ignores_exec_in_comment(self, classifier):
+        """Do not detect exec in comment."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-002",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Comment mentions exec",
+            description="Comment only",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="# We could use exec() but chose subprocess\nresult = subprocess.run(data)",
+            symbol_info=SymbolInfo(
+                name="handler",
+                qualified_name="handler",
+                type="function",
+                line_start=42,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+        assert is_sink is False
+
+    def test_detects_obfuscated_exec(self, classifier):
+        """Detect getattr(__builtins__, 'exec') pattern."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-003",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Obfuscated exec",
+            description="Obfuscated",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet='def handler(code):\n    getattr(__builtins__, "exec")(code)',
+            symbol_info=SymbolInfo(
+                name="handler",
+                qualified_name="handler",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is True
+        assert "exec" in reason.lower()
+
+    def test_scoped_to_symbol_range(self, classifier):
+        """Do not detect exec outside symbol range."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-004",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Function without exec",
+            description="No exec",
+            file_path="/app/api.py",
+            line_start=45,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="def other_func():\n    exec(internal)\n\ndef handler(user_code):\n    process(user_code)",
+            symbol_info=SymbolInfo(
+                name="handler",
+                qualified_name="handler",
+                type="function",
+                line_start=44,
+                line_end=45,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is False
+
+    def test_handles_line_number_prefixes(self, classifier):
+        """Handle snippets with line-number prefixes like '42: exec(code)'."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-005",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Snippet with line numbers",
+            description="Has line prefixes",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="41: def handler(user_code: str):\n42:     exec(user_code)",
+            symbol_info=SymbolInfo(
+                name="handler",
+                qualified_name="handler",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is True
+        assert "exec" in reason.lower()
+
+    def test_detects_eval_call(self, classifier):
+        """Detect eval() call as code-exec sink."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-006",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Eval usage",
+            description="Uses eval",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="def calculate(expression):\n    result = eval(expression)\n    return result",
+            symbol_info=SymbolInfo(
+                name="calculate",
+                qualified_name="calculate",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is True
+        assert "eval" in reason.lower()
+
+    def test_detects_compile_call(self, classifier):
+        """Detect compile() call as code-exec sink."""
+        from models.schemas import Finding
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-exec-007",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Compile usage",
+            description="Uses compile",
+            file_path="/app/api.py",
+            line_start=42,
+            vulnerability_type="Code Injection",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        evidence = EvidenceResult(
+            snippet="def dynamic_compile(code):\n    bytecode = compile(code, '<string>', 'exec')\n    return bytecode",
+            symbol_info=SymbolInfo(
+                name="dynamic_compile",
+                qualified_name="dynamic_compile",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[],
+        )
+
+        is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
+
+        assert is_sink is True
+        assert "compile" in reason.lower()
 
 
 if __name__ == "__main__":

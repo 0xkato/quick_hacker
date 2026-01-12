@@ -5,9 +5,10 @@ Implements tri-state proof checklist and strict disposition rules.
 Runs synchronously (called via asyncio.to_thread).
 """
 
+import ast
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 from models.schemas import (
     Finding,
@@ -420,6 +421,94 @@ class StrictClassifier:
             status=ChecklistStatus.UNKNOWN,
             reason="No explicit bypass markers found"
         )
+
+    def _is_code_exec_sink(self, finding: Finding, evidence: EvidenceResult) -> Tuple[bool, str]:
+        """
+        Detect if finding involves exec/eval/compile sink within symbol range.
+
+        Uses AST parsing when available (avoids comment false positives).
+        Falls back to regex that handles line-number prefixes.
+
+        Returns:
+            (is_sink, reason) - reason explains what was detected
+        """
+        if not evidence.symbol_info:
+            return (False, "No symbol info")
+
+        symbol_name = evidence.symbol_info.name
+        symbol_type = evidence.symbol_info.type
+
+        # Try AST parsing first (most reliable)
+        ast_parse_succeeded = False
+        if evidence.snippet:
+            try:
+                tree = ast.parse(evidence.snippet)
+                ast_parse_succeeded = True
+
+                # Find the target symbol (function or class) in the AST
+                target_node = None
+                for node in ast.walk(tree):
+                    if symbol_type == "function" and isinstance(node, ast.FunctionDef):
+                        if node.name == symbol_name:
+                            target_node = node
+                            break
+                    elif symbol_type == "class" and isinstance(node, ast.ClassDef):
+                        if node.name == symbol_name:
+                            target_node = node
+                            break
+
+                # If we found the target, check only within its body
+                if target_node:
+                    for node in ast.walk(target_node):
+                        # Direct calls: exec(), eval(), compile()
+                        if isinstance(node, ast.Call):
+                            if isinstance(node.func, ast.Name) and node.func.id in ['exec', 'eval', 'compile']:
+                                return (True, f"Code-exec sink: {node.func.id}() in {symbol_name}")
+
+                            # Obfuscated: getattr(__builtins__, "exec")
+                            if isinstance(node.func, ast.Attribute):
+                                if node.func.attr in ['exec', 'eval', 'compile']:
+                                    return (True, f"Code-exec sink: .{node.func.attr}() in {symbol_name}")
+
+                            # getattr with string literal
+                            if isinstance(node.func, ast.Call):
+                                if isinstance(node.func.func, ast.Name) and node.func.func.id == 'getattr':
+                                    if len(node.func.args) >= 2:
+                                        if isinstance(node.func.args[1], ast.Constant):
+                                            if node.func.args[1].value in ['exec', 'eval', 'compile']:
+                                                return (True, f"Code-exec sink: getattr(..., '{node.func.args[1].value}') in {symbol_name}")
+
+                        # Subscript: __builtins__["exec"]
+                        if isinstance(node, ast.Subscript):
+                            if isinstance(node.slice, ast.Constant):
+                                if node.slice.value in ['exec', 'eval', 'compile']:
+                                    return (True, f"Code-exec sink: subscript['{node.slice.value}'] in {symbol_name}")
+
+                    # Found the target node and checked it - return False (no sink found)
+                    return (False, f"No exec/eval/compile sink in {symbol_name}")
+
+            except SyntaxError:
+                pass  # Fall back to regex
+
+        # Only use regex fallback if AST parsing failed or couldn't find the symbol
+        if not ast_parse_succeeded:
+            # Regex fallback: search entire snippet (can't reliably scope with regex)
+            # This is less precise but better than false negatives
+            snippet = evidence.snippet or finding.code_snippet or ""
+
+            for line in snippet.split('\n'):
+                # Strip line-number prefix: "123: code" -> "code"
+                clean_line = re.sub(r'^\s*\d+\s*:\s*', '', line)
+
+                # Skip comment lines
+                if re.match(r'^\s*#', clean_line):
+                    continue
+
+                # Check for exec/eval/compile calls
+                if re.search(r'\b(exec|eval|compile)\s*\(', clean_line):
+                    return (True, f"Code-exec sink: detected in snippet")
+
+        return (False, "No exec/eval/compile sink detected")
 
     def _apply_rules(
         self,

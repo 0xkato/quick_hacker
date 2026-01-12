@@ -268,6 +268,13 @@ class ProjectService:
             return str(repo_path.absolute())
         return None
 
+    def get_project_path(self, project_id: str) -> Optional[str]:
+        """Get the path of a project by ID (synchronous)."""
+        project = self._projects.get(project_id)
+        if project:
+            return project.path
+        return None
+
     def get_current_project_path(self) -> Optional[str]:
         """Get the path of the currently active project (synchronous)."""
         if not self._current_project_id:

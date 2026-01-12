@@ -110,17 +110,13 @@ async def execute_command(cmd: str):
                 line=2,
                 snippet="async def execute_command(cmd: str):",
                 match_type="source",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api/handlers.py",
                 line=3,
                 snippet="subprocess.run(cmd, shell=True)",
                 match_type="sink",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api/handlers.py",
                 line=1,
@@ -210,17 +206,13 @@ async def fetch_url(url: str):
                 line=2,
                 snippet="async def fetch_url(url: str):",
                 match_type="source",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api.py",
                 line=3,
                 snippet="requests.get(url)",
                 match_type="sink",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api.py",
                 line=1,
@@ -375,17 +367,13 @@ async def get_users(name: str):
                 line=2,
                 snippet="async def get_users(name: str):",
                 match_type="source",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api.py",
                 line=3,
                 snippet='query = f"SELECT * FROM users WHERE name = \'{name}\'"',
                 match_type="sink",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api.py",
                 line=1,
@@ -422,17 +410,13 @@ async def delete_user(user_id: str, skip_auth: bool = False):
                 line=2,
                 snippet="async def delete_user(user_id: str, skip_auth: bool = False):",
                 match_type="source",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/admin.py",
                 line=6,
                 snippet="db.users.delete(user_id)",
                 match_type="sink",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/admin.py",
                 line=1,
@@ -471,17 +455,13 @@ async def create_user(username: str):
                 line=2,
                 snippet="async def create_user(username: str):",
                 match_type="source",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api.py",
                 line=5,
                 snippet="db.users.create(username)",
                 match_type="sink",
-            )
-        ]
-        evidence.matches = [
+            ),
             EvidenceMatch(
                 file="/app/api.py",
                 line=1,
@@ -536,9 +516,11 @@ class TestConfidenceScoring:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Command Injection"
         evidence = replace(empty_evidence)
-        evidence.matches = [EvidenceMatch(file="test.py", line=1, snippet="def handler(cmd: str)", match_type="source")]
-        evidence.matches = [EvidenceMatch(file="test.py", line=2, snippet="subprocess.run(cmd, shell=True)", match_type="sink")]
-        evidence.matches = [EvidenceMatch(file="test.py", line=0, snippet="@app.post", match_type="route_registration")]
+        evidence.matches = [
+            EvidenceMatch(file="test.py", line=1, snippet="def handler(cmd: str)", match_type="source"),
+            EvidenceMatch(file="test.py", line=2, snippet="subprocess.run(cmd, shell=True)", match_type="sink"),
+            EvidenceMatch(file="test.py", line=0, snippet="@app.post", match_type="route_registration")
+        ]
 
         result = classifier.classify(finding, evidence)
 
@@ -1237,6 +1219,135 @@ class TestStrictExecEvalFiltering:
         proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
 
         assert proven is False  # Description should be ignored
+
+    def test_exec_with_feature_intent_is_by_design(self, classifier):
+        """Classify exec as BY_DESIGN when feature intent proven."""
+        from models.schemas import Finding, VulnerabilityCategory, Severity, ChecklistStatus
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-integration-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Pipeline executor",
+            vulnerability_type="Code Injection",
+            severity=Severity.HIGH,
+            file_path="/app/pipelines/executor.py",
+            line_start=42,
+            code_snippet="exec(block_code)",
+            description="Pipeline",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet="class PipelineExecutor:\n    def run_block(self, code):\n        exec(code)",
+            symbol_info=SymbolInfo(
+                name="PipelineExecutor.run_block",
+                qualified_name="PipelineExecutor.run_block",
+                type="method",
+                line_start=41,
+                line_end=43,
+                file_path="/app/pipelines/executor.py"
+            ),
+            framework=None,
+            matches=[]
+        )
+
+        result = classifier.classify(finding, evidence)
+
+        assert result.disposition == Disposition.BY_DESIGN
+        assert result.proof_checklist.exec_sink_reason is not None
+        assert "exec" in result.proof_checklist.exec_sink_reason.lower()
+        assert result.proof_checklist.feature_intent_reason is not None
+        assert "PROVEN" in result.proof_checklist.feature_intent_reason
+
+    def test_exec_with_unknown_auth_is_speculative(self, classifier):
+        """Classify exec as SPECULATIVE when auth unknown."""
+        from models.schemas import Finding, VulnerabilityCategory, Severity, ChecklistStatus
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
+
+        finding = Finding(
+            id="test-integration-002",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code execution",
+            vulnerability_type="Code Injection",
+            severity=Severity.HIGH,
+            file_path="/app/api.py",
+            line_start=42,
+            code_snippet="exec(code)",
+            description="Unknown auth",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info=SymbolInfo(
+                name="run_code",
+                qualified_name="run_code",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[
+                EvidenceMatch(
+                    file="/app/api.py",
+                    line=41,
+                    snippet='@app.post("/execute")',
+                    match_type="route_registration"
+                )
+            ]
+        )
+
+        result = classifier.classify(finding, evidence)
+
+        assert result.disposition == Disposition.SPECULATIVE
+        assert result.proof_checklist.exec_sink_reason is not None
+        assert result.proof_checklist.auth_bypass_reason is not None
+        assert "not PROVEN" in result.proof_checklist.auth_bypass_reason
+
+    def test_exec_filter_forces_sink_proven(self, classifier):
+        """Ensure exec detection forces sink_present to PROVEN."""
+        from models.schemas import Finding, VulnerabilityCategory, Severity, ChecklistStatus
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-integration-003",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code execution",
+            vulnerability_type="Code Injection",
+            severity=Severity.HIGH,
+            file_path="/app/api.py",
+            line_start=42,
+            code_snippet="exec(code)",
+            description="Exec",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet="def run(code):\n    exec(code)",
+            symbol_info=SymbolInfo(
+                name="run",
+                qualified_name="run",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[]
+        )
+
+        result = classifier.classify(finding, evidence)
+
+        assert result.proof_checklist.sink_present.status == ChecklistStatus.PROVEN
+        assert result.proof_checklist.sink_present.value is True
 
 
 if __name__ == "__main__":

@@ -432,16 +432,17 @@ class StrictClassifier:
         Returns:
             (is_sink, reason) - reason explains what was detected
         """
-        if not evidence.symbol_info:
-            return (False, "No symbol info")
+        symbol_name = None
+        symbol_type = None
 
-        symbol_name = evidence.symbol_info.name
-        symbol_type = evidence.symbol_info.type
+        if evidence.symbol_info:
+            symbol_name = evidence.symbol_info.name
+            symbol_type = evidence.symbol_info.type
 
-        # Try AST parsing first (most reliable)
+        # Try AST parsing first (most reliable) - only if we have symbol info
         ast_parse_succeeded = False
         target_node = None  # Initialize outside try block for scope
-        if evidence.snippet:
+        if evidence.snippet and symbol_name and symbol_type:
             try:
                 tree = ast.parse(evidence.snippet)
                 ast_parse_succeeded = True
@@ -507,8 +508,8 @@ class StrictClassifier:
                 if re.match(r'^\s*#', clean_line):
                     continue
 
-                # Check for exec/eval/compile calls
-                if re.search(r'\b(exec|eval|compile)\s*\(', clean_line):
+                # Check for exec/eval/compile calls (exact word, not part of larger identifier)
+                if re.search(r'(?<![a-zA-Z_])(exec|eval|compile)\s*\(', clean_line):
                     return (True, f"Code-exec sink: detected in snippet")
 
         return (False, "No exec/eval/compile sink detected")
@@ -559,7 +560,8 @@ class StrictClassifier:
         doc_keywords = ['execute user code', 'run pipeline', 'notebook kernel',
                         'block execution', 'pipeline runtime', 'run user block',
                         'execute block', 'kernel execution', 'run notebook',
-                        'notebook cell', 'execute notebook', 'run block', 'execute cell']
+                        'notebook cell', 'execute notebook', 'run block', 'execute cell',
+                        'pipeline execution', 'dynamic execution', 'code execution']
         doc_match = any(kw in snippet.lower() for kw in doc_keywords)
 
         if doc_match:
@@ -673,7 +675,53 @@ class StrictClassifier:
                 checklist.reachable.value):
             return Disposition.BUG
 
-        # Rule 3: MISCONFIGURATION (not_only_misconfig PROVEN False + others PROVEN True)
+        # Rule 3: STRICT EXEC/EVAL FILTERING
+        is_exec_sink, exec_reason = self._is_code_exec_sink(finding, evidence)
+        if is_exec_sink:
+            # Store reason and force sink_present to PROVEN
+            checklist.exec_sink_reason = exec_reason
+            checklist.sink_present = ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason=exec_reason
+            )
+            sink = checklist.sink_present  # Update local reference
+
+            # Sub-rule 3a: Feature intent proven → BY_DESIGN
+            feature_proven, feature_reason = self._feature_intent_proven(finding, evidence)
+            checklist.feature_intent_reason = feature_reason
+            if feature_proven:
+                return Disposition.BY_DESIGN
+
+            # Sub-rule 3b: Full proof chain → VALID or SPECULATIVE
+            source = checklist.source_controlled_input
+            reachable = checklist.reachable
+            dataflow = checklist.dataflow_evidenced
+            boundary_crossed = checklist.boundary_crossed
+
+            if (source.status == ChecklistStatus.PROVEN and source.value and
+                reachable.status == ChecklistStatus.PROVEN and reachable.value and
+                dataflow.status == ChecklistStatus.PROVEN and dataflow.value):
+
+                bypass_proven, bypass_reason = self._auth_bypass_explicitly_proven(finding, evidence)
+                checklist.auth_bypass_reason = bypass_reason
+
+                boundary_violated = (boundary_crossed.status == ChecklistStatus.PROVEN and
+                                   boundary_crossed.value)
+
+                if bypass_proven or boundary_violated:
+                    return Disposition.VALID_SECURITY_ISSUE
+
+                return Disposition.SPECULATIVE  # Auth unknown, high-risk but unproven
+
+            # Sub-rule 3c: Default → SPECULATIVE
+            # Always check auth bypass for auditing (even if incomplete proof chain)
+            if checklist.auth_bypass_reason is None:
+                bypass_proven, bypass_reason = self._auth_bypass_explicitly_proven(finding, evidence)
+                checklist.auth_bypass_reason = bypass_reason
+            return Disposition.SPECULATIVE
+
+        # Rule 4: MISCONFIGURATION (not_only_misconfig PROVEN False + others PROVEN True)
         if (checklist.not_only_misconfig.status == ChecklistStatus.PROVEN and
                 not checklist.not_only_misconfig.value and
                 checklist.sink_present.status == ChecklistStatus.PROVEN and
@@ -686,12 +734,12 @@ class StrictClassifier:
                 checklist.boundary_crossed.value):
             return Disposition.MISCONFIGURATION
 
-        # Rule 4: BY_DESIGN (code-exec features with conservative heuristics)
+        # Rule 5: BY_DESIGN (code-exec features with conservative heuristics)
         # NEVER treat command injection as BY_DESIGN
         if self._is_product_feature(finding, evidence, checklist):
             return Disposition.BY_DESIGN
 
-        # Rule 5: HARDENING (sink + (reachable OR source) but no dataflow)
+        # Rule 6: HARDENING (sink + (reachable OR source) but no dataflow)
         if (checklist.sink_present.status == ChecklistStatus.PROVEN and
                 checklist.sink_present.value and
                 (
@@ -701,7 +749,7 @@ class StrictClassifier:
                 checklist.dataflow_evidenced.status != ChecklistStatus.PROVEN):
             return Disposition.HARDENING
 
-        # Rule 6: SPECULATIVE (default)
+        # Rule 7: SPECULATIVE (default)
         return Disposition.SPECULATIVE
 
     def _is_product_feature(

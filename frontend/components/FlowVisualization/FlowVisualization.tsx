@@ -200,6 +200,64 @@ export function FlowVisualization({
   const [isQueueing, setIsQueueing] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
 
+  // Collapsed nodes state
+  interface CollapsedState {
+    [nodeId: string]: boolean;
+  }
+
+  const [collapsedNodes, setCollapsedNodes] = useState<CollapsedState>({});
+
+  // Toggle collapse for a node
+  const toggleCollapse = useCallback((nodeId: string) => {
+    setCollapsedNodes(prev => ({
+      ...prev,
+      [nodeId]: !prev[nodeId]
+    }));
+  }, []);
+
+  // Get all descendants of a node
+  const getDescendants = useCallback((nodeId: string, edges: Edge[]): string[] => {
+    const descendants: string[] = [];
+    const queue = [nodeId];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+
+      // Find children
+      const children = edges
+        .filter(e => e.source === current)
+        .map(e => e.target);
+
+      descendants.push(...children);
+      queue.push(...children);
+    }
+
+    return descendants;
+  }, []);
+
+  // Get all ancestors of a node
+  const getAncestors = useCallback((nodeId: string, edges: Edge[]): string[] => {
+    const ancestors: string[] = [];
+    let current = nodeId;
+
+    while (current) {
+      const parent = edges.find(e => e.target === current);
+      if (!parent) break;
+      ancestors.push(parent.source);
+      current = parent.source;
+    }
+
+    return ancestors;
+  }, []);
+
+  // Count descendants of a node
+  const getDescendantCount = useCallback((nodeId: string, edges: Edge[]): number => {
+    return getDescendants(nodeId, edges).length;
+  }, [getDescendants]);
+
   // Handle node click to show popover
   const onNodeClick: NodeMouseHandler = useCallback((event, node) => {
     const nodeData = node.data as FlowNode;

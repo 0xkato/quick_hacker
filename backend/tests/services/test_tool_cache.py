@@ -33,3 +33,9 @@ class TestCacheKeyGeneration:
         key = cache.generate_key("read_file", {"path": "auth.py"}, "abc123")
         assert len(key) == 64  # SHA-256 hex is 64 characters
         assert all(c in "0123456789abcdef" for c in key)
+
+    def test_cache_key_ignores_arg_order(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+        key1 = cache.generate_key("read_file", {"path": "auth.py", "offset": 10}, "abc123")
+        key2 = cache.generate_key("read_file", {"offset": 10, "path": "auth.py"}, "abc123")
+        assert key1 == key2  # Same args in different order = same key

@@ -25,7 +25,7 @@ class ToolCache:
         """
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self._cache: Dict[str, Any] = {}
+        self._cache: Dict[str, Any] = {}  # Storage implementation in future tasks
 
     def generate_key(
         self,
@@ -45,7 +45,10 @@ class ToolCache:
         """
         # Canonicalize args to ensure deterministic key generation
         # sort_keys=True ensures {"a": 1, "b": 2} == {"b": 2, "a": 1}
-        canonical_args = json.dumps(args, sort_keys=True)
+        try:
+            canonical_args = json.dumps(args, sort_keys=True)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Tool arguments must be JSON-serializable: {e}") from e
 
         # Combine all components
         key_components = {

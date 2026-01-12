@@ -225,6 +225,35 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["from_function", "calls"]
         }
+    },
+    {
+        "name": "track_sink_identified",
+        "description": "Mark a dangerous sink discovered during investigation",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sink_type": {"type": "string", "description": "Type: sql, exec, file_write, deserialize, ssrf"},
+                "file_path": {"type": "string", "description": "File containing sink"},
+                "line_number": {"type": "integer", "description": "Line number of sink"},
+                "code_snippet": {"type": "string", "description": "Code showing the sink (optional)"}
+            },
+            "required": ["sink_type", "file_path", "line_number"]
+        }
+    },
+    {
+        "name": "track_entry_point",
+        "description": "Mark an entry point discovered (API route, CLI arg, etc.)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry_type": {"type": "string", "description": "Type: api_route, cli_arg, form_handler, websocket"},
+                "file_path": {"type": "string", "description": "File containing entry point"},
+                "line_number": {"type": "integer", "description": "Line number"},
+                "route": {"type": "string", "description": "Route path like /api/upload (optional)"},
+                "method": {"type": "string", "description": "HTTP method like POST (optional)"}
+            },
+            "required": ["entry_type", "file_path", "line_number"]
+        }
     }
 ]
 
@@ -536,6 +565,44 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         except Exception as e:
             return _make_error_response(e)
 
+    @tool("track_sink_identified", "Mark a dangerous sink discovered", {
+        "sink_type": str,
+        "file_path": str,
+        "line_number": int,
+        "code_snippet": str,
+    })
+    async def track_sink_identified(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = await tool_core.track_sink_identified(
+                sink_type=args["sink_type"],
+                file_path=args["file_path"],
+                line_number=args["line_number"],
+                code_snippet=args.get("code_snippet")
+            )
+            return _make_response(json.dumps(result, indent=2))
+        except Exception as e:
+            return _make_error_response(e)
+
+    @tool("track_entry_point", "Mark an entry point discovered", {
+        "entry_type": str,
+        "file_path": str,
+        "line_number": int,
+        "route": str,
+        "method": str,
+    })
+    async def track_entry_point(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = await tool_core.track_entry_point(
+                entry_type=args["entry_type"],
+                file_path=args["file_path"],
+                line_number=args["line_number"],
+                route=args.get("route"),
+                method=args.get("method")
+            )
+            return _make_response(json.dumps(result, indent=2))
+        except Exception as e:
+            return _make_error_response(e)
+
     # Create SDK MCP server with all tools
     sdk_tools = [
         read_file,
@@ -551,6 +618,8 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         track_file_analysis,
         track_function_discovered,
         track_call_chain,
+        track_sink_identified,
+        track_entry_point,
     ]
 
     mcp_server = create_sdk_mcp_server(

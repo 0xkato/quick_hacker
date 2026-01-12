@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from models.sink_signals import RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
 from services.security_scanners import (
@@ -814,3 +814,90 @@ class ToolCore:
             call_node_ids.append(node.id)
 
         return {"call_nodes": call_node_ids}
+
+    async def track_sink_identified(
+        self,
+        sink_type: str,
+        file_path: str,
+        line_number: int,
+        code_snippet: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Track dangerous sink in flow tree.
+
+        Args:
+            sink_type: Type of sink (sql, exec, etc.)
+            file_path: File containing sink
+            line_number: Line number
+            code_snippet: Code showing sink
+
+        Returns:
+            dict with node_id and marked_dangerous flag
+        """
+        from services.flow_service import flow_service
+
+        if not self.agent_id:
+            return {"node_id": None, "marked_dangerous": False}
+
+        # Create dangerous_sink node
+        node = flow_service.add_node(
+            self.agent_id,
+            node_type="dangerous_sink",
+            label=f"⚠️ {sink_type.upper()} sink",
+            data={
+                "sink_type": sink_type,
+                "file_path": file_path,
+                "line_number": line_number,
+                "code_snippet": code_snippet,
+                "severity": "high"
+            },
+            auto_parent=True
+        )
+
+        return {"node_id": node.id, "marked_dangerous": True}
+
+    async def track_entry_point(
+        self,
+        entry_type: str,
+        file_path: str,
+        line_number: int,
+        route: Optional[str] = None,
+        method: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Track entry point in flow tree.
+
+        Args:
+            entry_type: Type of entry point
+            file_path: File location
+            line_number: Line number
+            route: Route path if applicable
+            method: HTTP method if applicable
+
+        Returns:
+            dict with node_id
+        """
+        from services.flow_service import flow_service
+
+        if not self.agent_id:
+            return {"node_id": None}
+
+        # Build label
+        label = route if route else f"{entry_type} entry point"
+        if method:
+            label = f"{method} {label}"
+
+        # Create entry_point node
+        node = flow_service.add_node(
+            self.agent_id,
+            node_type="entry_point",
+            label=label,
+            data={
+                "entry_type": entry_type,
+                "file_path": file_path,
+                "line_number": line_number,
+                "route": route,
+                "method": method
+            },
+            auto_parent=True
+        )
+
+        return {"node_id": node.id}

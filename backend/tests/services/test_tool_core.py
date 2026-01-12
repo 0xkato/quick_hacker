@@ -686,3 +686,50 @@ async def test_track_call_chain_respects_depth(tool_core, mock_flow_service):
     flow = mock_flow_service.get_flow(tool_core.agent_id)
     call_nodes = [n for n in flow.nodes if n.type == "call"]
     assert len(call_nodes) == 2
+
+
+@pytest.mark.asyncio
+async def test_track_sink_identified(tool_core, mock_flow_service):
+    """Test tracking sink creates dangerous_sink node."""
+    mock_flow_service.initialize_flow(tool_core.agent_id)
+
+    result = await tool_core.track_sink_identified(
+        sink_type="sql",
+        file_path="db/queries.py",
+        line_number=89,
+        code_snippet="cursor.execute(f'SELECT * FROM users WHERE id={user_id}')"
+    )
+
+    assert "node_id" in result
+    assert result["marked_dangerous"] is True
+
+    # Verify sink node
+    flow = mock_flow_service.get_flow(tool_core.agent_id)
+    sink_nodes = [n for n in flow.nodes if n.type == "dangerous_sink"]
+    assert len(sink_nodes) == 1
+    assert sink_nodes[0].label == "⚠️ SQL sink"
+    assert sink_nodes[0].data["sink_type"] == "sql"
+    assert sink_nodes[0].data["line_number"] == 89
+
+
+@pytest.mark.asyncio
+async def test_track_entry_point(tool_core, mock_flow_service):
+    """Test tracking entry point creates entry_point node."""
+    mock_flow_service.initialize_flow(tool_core.agent_id)
+
+    result = await tool_core.track_entry_point(
+        entry_type="api_route",
+        file_path="api/routes.py",
+        line_number=45,
+        route="/api/upload",
+        method="POST"
+    )
+
+    assert "node_id" in result
+
+    # Verify entry point node
+    flow = mock_flow_service.get_flow(tool_core.agent_id)
+    entry_nodes = [n for n in flow.nodes if n.type == "entry_point"]
+    assert len(entry_nodes) == 1
+    assert entry_nodes[0].label == "POST /api/upload"
+    assert entry_nodes[0].data["entry_type"] == "api_route"

@@ -25,7 +25,10 @@ export function parseSearchQuery(query: string): SearchQuery {
       // Convert wildcard to regex
       functionPattern = part.substring(9).replace(/\*/g, '.*');
     } else if (part !== 'OR' && part !== 'AND') {
-      labelPattern = part;
+      // Use first plain text part as label pattern
+      if (!labelPattern) {
+        labelPattern = part;
+      }
     }
   });
 

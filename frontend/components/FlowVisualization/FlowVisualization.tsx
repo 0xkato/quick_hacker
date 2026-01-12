@@ -72,6 +72,10 @@ interface FlowVisualizationProps {
   variant?: 'investigation' | 'calltree';
 }
 
+interface CollapsedState {
+  [nodeId: string]: boolean;
+}
+
 // Get border color based on confidence score
 function getConfidenceBorderColor(confidence?: number): string {
   if (confidence === undefined) return '';
@@ -201,10 +205,6 @@ export function FlowVisualization({
   const [queueError, setQueueError] = useState<string | null>(null);
 
   // Collapsed nodes state
-  interface CollapsedState {
-    [nodeId: string]: boolean;
-  }
-
   const [collapsedNodes, setCollapsedNodes] = useState<CollapsedState>({});
 
   // Toggle collapse for a node
@@ -238,7 +238,13 @@ export function FlowVisualization({
     return descendants;
   }, []);
 
-  // Get all ancestors of a node
+  /**
+   * Gets all ancestor nodes by following parent edges.
+   * Assumes tree structure (each node has at most one parent).
+   * @param nodeId - The starting node ID
+   * @param edges - The graph edges
+   * @returns Array of ancestor node IDs in order from immediate parent to root
+   */
   const getAncestors = useCallback((nodeId: string, edges: Edge[]): string[] => {
     const ancestors: string[] = [];
     let current = nodeId;

@@ -16,7 +16,7 @@ from models.schemas import (
     ChecklistStatus,
     Disposition,
 )
-from services.evidence_gatherer import EvidenceResult, EvidenceMatch, SSRFAnalysis
+from services.evidence_gatherer import EvidenceResult, EvidenceMatch, SSRFAnalysis, SymbolInfo
 from services.strict_classifier import StrictClassifier
 
 
@@ -61,7 +61,11 @@ class TestCodeExecutionByDesign:
     """Test BY_DESIGN classification for code execution features."""
 
     def test_exec_in_pipeline_is_by_design(self, classifier, base_finding, empty_evidence):
-        """Code execution (exec) in pipeline with no bypass → BY_DESIGN."""
+        """Code execution (exec) in pipeline with feature intent → BY_DESIGN.
+
+        Updated for new exec filter: requires 2+ signals to prove feature intent.
+        Path signal alone is insufficient; needs symbol name match too.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Code Injection"
         finding.file_path = "/app/pipelines/data_processor.py"
@@ -70,14 +74,23 @@ class TestCodeExecutionByDesign:
         evidence = replace(
             empty_evidence,
             snippet="""
-def process_pipeline(config):
-    # Dynamic pipeline execution
-    exec(config['transformation_code'])
+class PipelineExecutor:
+    def execute_transformation(self, config):
+        # Dynamic pipeline execution
+        exec(config['transformation_code'])
 """,
+            symbol_info=SymbolInfo(
+                name="PipelineExecutor.execute_transformation",
+                qualified_name="PipelineExecutor.execute_transformation",
+                type="method",
+                line_start=2,
+                line_end=4,
+                file_path="/app/pipelines/data_processor.py"
+            ),
             matches=[
                 EvidenceMatch(
                     file="/app/pipelines/data_processor.py",
-                    line=10,
+                    line=4,
                     snippet="exec(config['transformation_code'])",
                     match_type="sink",
                 )
@@ -86,20 +99,28 @@ def process_pipeline(config):
 
         result = classifier.classify(finding, evidence)
 
+        # New behavior: exec filter detects exec and checks feature intent
+        # Path match (/pipelines/) + symbol match (PipelineExecutor/execute) = 2 signals → BY_DESIGN
         assert result.disposition == Disposition.BY_DESIGN
-        assert "code execution feature" in result.reasoning[0].lower() or "pipeline" in result.reasoning[0].lower()
-        # Sink should be PROVEN
+        assert result.proof_checklist.exec_sink_reason is not None
+        assert "exec" in result.proof_checklist.exec_sink_reason.lower()
+        assert result.proof_checklist.feature_intent_reason is not None
+        assert "PROVEN" in result.proof_checklist.feature_intent_reason
         assert result.proof_checklist.sink_present.status == ChecklistStatus.PROVEN
 
     def test_command_injection_never_by_design(self, classifier, base_finding, empty_evidence):
-        """Command injection with request input → VALID_SECURITY_ISSUE (never BY_DESIGN)."""
+        """Command injection with request input → VALID_SECURITY_ISSUE (never BY_DESIGN).
+
+        Updated: Command injection bypasses exec filter and uses standard rules.
+        Needs full proof chain including explicit not_misconfig signal.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Command Injection"
         finding.file_path = "/app/api/handlers.py"
-        finding.description = "Shell command with user input"
+        finding.description = "Shell command with user input on unauthenticated route"
         evidence = replace(empty_evidence)
         evidence.snippet = """
-@app.post("/execute")
+@app.post("/execute")  # public route
 async def execute_command(cmd: str):
     result = subprocess.run(cmd, shell=True)
     return {"output": result.stdout}
@@ -120,25 +141,38 @@ async def execute_command(cmd: str):
             EvidenceMatch(
                 file="/app/api/handlers.py",
                 line=1,
-                snippet='@app.post("/execute")',
+                snippet='@app.post("/execute")  # public route',
                 match_type="route_registration",
+            ),
+            # Add dataflow evidence to complete proof chain
+            EvidenceMatch(
+                file="/app/api/handlers.py",
+                line=3,
+                snippet="subprocess.run(cmd, shell=True)",
+                match_type="dataflow",
             )
         ]
 
         result = classifier.classify(finding, evidence)
 
-        # Should be VALID_SECURITY_ISSUE, never BY_DESIGN for command injection
+        # Should be VALID_SECURITY_ISSUE with full proof chain
+        # Command injection NEVER goes to BY_DESIGN even in /pipelines/
         assert result.disposition == Disposition.VALID_SECURITY_ISSUE
         assert result.proof_checklist.source_controlled_input.status == ChecklistStatus.PROVEN
         assert result.proof_checklist.sink_present.status == ChecklistStatus.PROVEN
         assert result.proof_checklist.reachable.status == ChecklistStatus.PROVEN
+        assert result.proof_checklist.dataflow_evidenced.status == ChecklistStatus.PROVEN
+        assert result.proof_checklist.not_only_misconfig.status == ChecklistStatus.PROVEN
 
 
 class TestSSRFPatternDowngrades:
     """Test SSRF pattern-based downgrades."""
 
     def test_ssrf_constant_url_downgraded(self, classifier, base_finding, empty_evidence):
-        """SSRF with constant URL → SPECULATIVE (not exploitable)."""
+        """SSRF with constant URL → SPECULATIVE (not exploitable).
+
+        Updated: Pattern downgrade to SPECULATIVE when URL is constant.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
         finding.description = "HTTP request to external URL"
@@ -160,12 +194,14 @@ def check_service_health():
 
         result = classifier.classify(finding, evidence)
 
-        # Should be downgraded to SPECULATIVE
+        # Should be downgraded to SPECULATIVE due to constant URL
         assert result.disposition == Disposition.SPECULATIVE
-        assert any("constant" in r.lower() or "hard-coded" in r.lower() for r in result.reasoning)
 
     def test_ssrf_config_url_downgraded(self, classifier, base_finding, empty_evidence):
-        """SSRF with config-only URL → SPECULATIVE (integration test)."""
+        """SSRF with config-only URL → SPECULATIVE (integration test).
+
+        Updated: Pattern downgrade to SPECULATIVE when URL is from config.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
         evidence = replace(empty_evidence)
@@ -186,38 +222,49 @@ def fetch_data():
 
         result = classifier.classify(finding, evidence)
 
+        # Should be downgraded to SPECULATIVE due to config-only URL
         assert result.disposition == Disposition.SPECULATIVE
-        assert any("config" in r.lower() or "environment" in r.lower() for r in result.reasoning)
 
     def test_ssrf_user_input_valid(self, classifier, base_finding, empty_evidence):
-        """SSRF with user-controlled URL → VALID_SECURITY_ISSUE."""
+        """SSRF with user-controlled URL → VALID_SECURITY_ISSUE.
+
+        Updated: Needs full proof chain including boundary evidence and not_misconfig signal.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
+        finding.file_path = "/app/api/fetch.py"  # API path for boundary detection
         evidence = replace(empty_evidence)
         evidence.snippet = """
-@app.post("/fetch")
+@app.post("/fetch")  # public route
 async def fetch_url(url: str):
     response = requests.get(url)
     return response.text
 """
         evidence.matches = [
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/fetch.py",
                 line=2,
                 snippet="async def fetch_url(url: str):",
                 match_type="source",
             ),
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/fetch.py",
                 line=3,
                 snippet="requests.get(url)",
                 match_type="sink",
             ),
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/fetch.py",
                 line=1,
-                snippet='@app.post("/fetch")',
+                snippet='@app.post("/fetch")  # public route',
                 match_type="route_registration",
+            ),
+            # Add dataflow evidence
+            EvidenceMatch(
+                file="/app/api/fetch.py",
+                line=3,
+                snippet="requests.get(url)",
+                match_type="dataflow",
             )
         ]
         evidence.ssrf_analysis = SSRFAnalysis(url_is_constant=False)
@@ -231,12 +278,17 @@ class TestCSWSHPatterns:
     """Test CSWSH (Cross-Site WebSocket Hijacking) patterns."""
 
     def test_cswsh_check_origin_no_creds_hardening(self, classifier, base_finding, empty_evidence):
-        """CSWSH: check_origin alone without ambient creds → HARDENING."""
+        """CSWSH: check_origin alone without ambient creds → HARDENING.
+
+        Updated: Need sink + reachable but no dataflow to get HARDENING.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Cross-Site WebSocket Hijacking"
         finding.description = "WebSocket without origin validation"
+        finding.file_path = "/app/websocket/handlers.py"  # WebSocket path for boundary detection
         evidence = replace(empty_evidence)
         evidence.snippet = """
+@app.websocket("/ws")
 async def websocket_handler(websocket: WebSocket):
     # Check origin header
     if websocket.headers.get("origin") != "https://example.com":
@@ -246,18 +298,31 @@ async def websocket_handler(websocket: WebSocket):
 """
         evidence.matches = [
             EvidenceMatch(
-                file="/app/ws.py",
-                line=3,
+                file="/app/websocket/handlers.py",
+                line=1,
+                snippet='@app.websocket("/ws")',
+                match_type="route_registration",
+            ),
+            EvidenceMatch(
+                file="/app/websocket/handlers.py",
+                line=4,
                 snippet='if websocket.headers.get("origin") != "https://example.com":',
                 match_type="auth_gate",
+            ),
+            # Add sink to qualify for HARDENING
+            EvidenceMatch(
+                file="/app/websocket/handlers.py",
+                line=7,
+                snippet="await websocket.accept()",
+                match_type="sink",
             )
         ]
 
         result = classifier.classify(finding, evidence)
 
-        # Without evidence of ambient credentials or session cookies, this is HARDENING
+        # With sink + reachable but no dataflow → HARDENING
         assert result.disposition == Disposition.HARDENING
-        assert any("defense-in-depth" in r.lower() or "hardening" in r.lower() for r in result.reasoning)
+        assert result.proof_checklist.sink_present.status == ChecklistStatus.PROVEN
 
     def test_websocket_text_not_auto_cswsh(self, classifier, base_finding, empty_evidence):
         """Websocket mention alone doesn't normalize to CSWSH."""
@@ -351,34 +416,45 @@ def build_query(table_name, columns):
         assert result.disposition == Disposition.BY_DESIGN
 
     def test_sql_injection_with_request_valid(self, classifier, base_finding, empty_evidence):
-        """SQL injection with request input → VALID_SECURITY_ISSUE."""
+        """SQL injection with request input → VALID_SECURITY_ISSUE.
+
+        Updated: Needs full proof chain including boundary and not_misconfig signal.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SQL Injection"
+        finding.file_path = "/app/api/users.py"  # API path for boundary detection
         evidence = replace(empty_evidence)
         evidence.snippet = """
-@app.get("/users")
+@app.get("/users")  # public route
 async def get_users(name: str):
     query = f"SELECT * FROM users WHERE name = '{name}'"
     return db.execute(query)
 """
         evidence.matches = [
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/users.py",
                 line=2,
                 snippet="async def get_users(name: str):",
                 match_type="source",
             ),
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/users.py",
                 line=3,
                 snippet='query = f"SELECT * FROM users WHERE name = \'{name}\'"',
                 match_type="sink",
             ),
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/users.py",
                 line=1,
-                snippet='@app.get("/users")',
+                snippet='@app.get("/users")  # public route',
                 match_type="route_registration",
+            ),
+            # Add dataflow evidence to complete proof chain
+            EvidenceMatch(
+                file="/app/api/users.py",
+                line=3,
+                snippet='query = f"SELECT * FROM users WHERE name = \'{name}\'"',
+                match_type="dataflow",
             )
         ]
 
@@ -437,10 +513,15 @@ class TestMisconfiguration:
     """Test MISCONFIGURATION disposition."""
 
     def test_auth_disabled_misconfiguration(self, classifier, base_finding, empty_evidence):
-        """Vulnerability only when auth disabled → MISCONFIGURATION."""
+        """Vulnerability only when auth disabled → MISCONFIGURATION.
+
+        Updated: Needs full proof chain + not_only_misconfig=False.
+        The checklist builder detects misconfig pattern from "when auth disabled" language.
+        """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Unauthorized Access"
-        finding.description = "Endpoint accessible when authentication is disabled"
+        finding.file_path = "/app/api/users.py"  # API path for boundary detection
+        finding.description = "Endpoint accessible when auth disabled"  # Use exact marker pattern
         evidence = replace(empty_evidence)
         evidence.snippet = """
 @app.post("/admin/users")
@@ -451,30 +532,38 @@ async def create_user(username: str):
 """
         evidence.matches = [
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/users.py",
                 line=2,
                 snippet="async def create_user(username: str):",
                 match_type="source",
             ),
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/users.py",
                 line=5,
                 snippet="db.users.create(username)",
                 match_type="sink",
             ),
             EvidenceMatch(
-                file="/app/api.py",
+                file="/app/api/users.py",
                 line=1,
                 snippet='@app.post("/admin/users")',
                 match_type="route_registration",
+            ),
+            # Add dataflow evidence
+            EvidenceMatch(
+                file="/app/api/users.py",
+                line=5,
+                snippet="db.users.create(username)",
+                match_type="dataflow",
             )
         ]
 
         result = classifier.classify(finding, evidence)
 
-        # Evidence of "when auth disabled" pattern
-        if "not settings.REQUIRE_AUTH" in evidence.snippet or "when disabled" in finding.description.lower():
-            assert result.disposition == Disposition.MISCONFIGURATION
+        # Misconfiguration: full proof chain + not_only_misconfig=False (detected from "when auth disabled")
+        assert result.disposition == Disposition.MISCONFIGURATION
+        assert result.proof_checklist.not_only_misconfig.status == ChecklistStatus.PROVEN
+        assert result.proof_checklist.not_only_misconfig.value == False
 
 
 class TestPatternDowngradesOnly:

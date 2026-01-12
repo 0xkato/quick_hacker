@@ -960,3 +960,71 @@ class ToolCore:
         )
 
         return {"node_id": node.id}
+
+    def get_validity_checklist(self, vulnerability_class: str) -> dict[str, Any]:
+        """Get validity checklist for a specific vulnerability class.
+
+        Returns the appropriate validity checklist markdown content to help
+        agents systematically validate suspected vulnerabilities and avoid
+        false positives.
+
+        Args:
+            vulnerability_class: The vulnerability class to get checklist for.
+                Valid values: sql_injection, command_execution, path_traversal,
+                ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure,
+                or "disprove" for the disprove-first self-critique checklist.
+
+        Returns:
+            Dictionary with:
+            - success: True if checklist found, False if error
+            - class: The vulnerability class requested
+            - content: Markdown content of the checklist (if success=True)
+            - error: Error message (if success=False)
+        """
+        # Map vulnerability class to filename
+        checklist_files = {
+            "sql_injection": "sql_injection.md",
+            "command_execution": "command_execution.md",
+            "path_traversal": "path_traversal.md",
+            "ssrf": "ssrf.md",
+            "xss": "xss.md",
+            "deserialization": "deserialization.md",
+            "auth_bypass": "auth_bypass.md",
+            "sensitive_data_exposure": "sensitive_data_exposure.md",
+            "disprove": "disprove_checklist.md",
+        }
+
+        # Validate vulnerability class
+        if vulnerability_class not in checklist_files:
+            valid_classes = ", ".join(sorted(checklist_files.keys()))
+            return {
+                "success": False,
+                "class": vulnerability_class,
+                "error": f"Unknown vulnerability class '{vulnerability_class}'. Valid classes: {valid_classes}"
+            }
+
+        # Build path to checklist file
+        # Assuming checklists are in backend/agents/validity_checklists/
+        backend_dir = Path(__file__).parent.parent
+        checklist_path = backend_dir / "agents" / "validity_checklists" / checklist_files[vulnerability_class]
+
+        # Read checklist content
+        try:
+            content = checklist_path.read_text(encoding="utf-8")
+            return {
+                "success": True,
+                "class": vulnerability_class,
+                "content": content
+            }
+        except FileNotFoundError:
+            return {
+                "success": False,
+                "class": vulnerability_class,
+                "error": f"Checklist file not found: {checklist_path}"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "class": vulnerability_class,
+                "error": f"Error reading checklist: {str(e)}"
+            }

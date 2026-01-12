@@ -62,10 +62,11 @@ def upsert_sink_signals(project_id: str, signals: List[Dict[str, Any]]) -> Dict[
     for signal in signals:
         fingerprint = _compute_signal_fingerprint(signal)
         if fingerprint not in existing_fingerprints:
-            # Add timestamp if not present
-            if "created_at" not in signal:
-                signal["created_at"] = datetime.utcnow().isoformat()
-            existing_signals.append(signal)
+            # Add timestamp if not present (use copy to avoid mutating input)
+            signal_with_timestamp = signal.copy()
+            if "created_at" not in signal_with_timestamp:
+                signal_with_timestamp["created_at"] = datetime.utcnow().isoformat()
+            existing_signals.append(signal_with_timestamp)
             existing_fingerprints.add(fingerprint)
             upserted_count += 1
         else:

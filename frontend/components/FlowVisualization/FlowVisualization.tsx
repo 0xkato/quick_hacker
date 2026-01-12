@@ -416,6 +416,7 @@ export function FlowVisualization({
   // Calculate which nodes to show based on collapse state
   const visibleNodes = useMemo(() => {
     const hidden = new Set<string>();
+    const matchSet = new Set(searchMatches);
     const hasSearch = searchQuery.trim().length > 0;
 
     // Mark descendants of collapsed nodes as hidden
@@ -428,7 +429,7 @@ export function FlowVisualization({
 
     // Update nodes with visibility, collapse data, and search highlighting
     return nodes.map(node => {
-      const isMatch = searchMatches.includes(node.id);
+      const isMatch = matchSet.has(node.id);
       const isVisible = !hasSearch || isMatch;
 
       return {

@@ -113,3 +113,45 @@ def test_finalize_finding_pending_not_allowed(tool_core):
 
     assert result["success"] is False
     assert "pending" in result["error"].lower()
+
+
+def test_finalize_finding_empty_answer_rejected(tool_core):
+    """Test that empty answer values are rejected."""
+    result = tool_core.finalize_finding(
+        signal_id="sig-1",
+        classification=CandidateStatus.VALIDATED_VULNERABILITY,
+        disprove_answers={
+            "q1": "",  # Empty string should be rejected
+            "q2": "yes",
+            "q3": "yes",
+            "q4": "no",
+            "q5": "yes",
+            "q6": "yes"
+        },
+        reasoning="Valid reasoning"
+    )
+
+    assert result["success"] is False
+    assert "non-empty" in result["error"].lower()
+    assert "q1" in result["error"]
+
+
+def test_finalize_finding_whitespace_answer_rejected(tool_core):
+    """Test that whitespace-only answer values are rejected."""
+    result = tool_core.finalize_finding(
+        signal_id="sig-1",
+        classification=CandidateStatus.VALIDATED_VULNERABILITY,
+        disprove_answers={
+            "q1": "yes",
+            "q2": "yes",
+            "q3": "   ",  # Whitespace-only should be rejected
+            "q4": "no",
+            "q5": "yes",
+            "q6": "yes"
+        },
+        reasoning="Valid reasoning"
+    )
+
+    assert result["success"] is False
+    assert "non-empty" in result["error"].lower()
+    assert "q3" in result["error"]

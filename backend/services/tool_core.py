@@ -1093,6 +1093,15 @@ class ToolCore:
                 "error": f"Must answer all 6 questions. {' '.join(error_parts)}"
             }
 
+        # Validate answer values are non-empty strings
+        for question_key in required_questions:
+            answer = disprove_answers[question_key]
+            if not isinstance(answer, str) or not answer.strip():
+                return {
+                    "success": False,
+                    "error": f"Answer for '{question_key}' must be a non-empty string. Disprove checklist requires substantive answers, not placeholders."
+                }
+
         # Validate reasoning is provided
         if not reasoning or not reasoning.strip():
             return {

@@ -58,6 +58,8 @@ NodeType = Literal[
     "call",
     "external",
     "auth_boundary",
+    # Triage system
+    "triage_gateway",
 ]
 
 NodeStatus = Literal["pending", "running", "completed", "failed"]

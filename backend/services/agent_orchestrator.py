@@ -32,6 +32,7 @@ from services.report_service import report_service
 from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
 from services.observability_service import observability_service
+from services.finding_triage_service import triage_service
 from prompting_loader import load_prompt, render_prompt
 
 
@@ -802,15 +803,85 @@ class AgentOrchestrator:
                     print(f"[Orchestrator] Failed to convert finding: {e}")
 
             # Use sdk_findings (broadcast in real-time) if available, else use result findings
-            all_findings = sdk_findings if sdk_findings else findings
-            agent.findings = all_findings
-            print(f"[Orchestrator] Total findings: {len(all_findings)}")
+            raw_findings = sdk_findings if sdk_findings else findings
+            print(f"[Orchestrator] Raw findings: {len(raw_findings)}")
+
+            # === Triage findings ===
+            triaged_findings = raw_findings
+            reportable_count = len(raw_findings)
+
+            if settings.triage_enabled and raw_findings:
+                try:
+                    print(f"[Orchestrator] Running triage on {len(raw_findings)} findings...")
+                    from models.schemas import BudgetConfig
+
+                    budgets = BudgetConfig(
+                        batch_ms=settings.triage_batch_budget_ms,
+                        per_finding_ms=settings.triage_per_finding_budget_ms,
+                        max_evidence_bytes=settings.triage_max_evidence_bytes,
+                        max_snippet_lines=settings.triage_max_snippet_lines
+                    )
+
+                    # Run triage in worker thread (evidence gathering + classification)
+                    triage_result = await asyncio.to_thread(
+                        triage_service.triage_findings,
+                        repo_root=agent.repo_path,
+                        findings=raw_findings,
+                        policy_version=settings.triage_policy_version,
+                        budgets=budgets
+                    )
+
+                    # Assert no findings dropped
+                    assert triage_result.triaged_count == len(raw_findings), \
+                        f"Triage dropped findings: {len(raw_findings)} input vs {triage_result.triaged_count} output"
+
+                    print(f"[Orchestrator] Triage complete: {triage_result.metrics.reportable_count}/{triage_result.metrics.triaged_count} reportable")
+                    print(f"[Orchestrator] By disposition: {triage_result.metrics.by_disposition}")
+
+                    # Use triaged findings
+                    triaged_findings = triage_result.triaged_findings
+                    reportable_count = triage_result.metrics.reportable_count
+
+                    # Track triage gateway in flow (back on main thread)
+                    if hasattr(agent, '_tool_core') and agent._tool_core:
+                        try:
+                            finding_refs = [
+                                (f.id, f.disposition.value if f.disposition else "unknown")
+                                for f in triaged_findings[:50]
+                            ]
+                            await agent._tool_core.track_triage_gate(
+                                batch_id=triage_result.batch_id,
+                                raw_count=triage_result.metrics.raw_count,
+                                triaged_count=triage_result.metrics.triaged_count,
+                                reportable_count=triage_result.metrics.reportable_count,
+                                by_disposition=triage_result.metrics.by_disposition,
+                                policy_version=settings.triage_policy_version,
+                                finding_refs=finding_refs
+                            )
+                            print(f"[Orchestrator] Tracked triage gateway node in flow")
+                        except Exception as flow_err:
+                            print(f"[Orchestrator] Failed to track triage gateway: {flow_err}")
+
+                except Exception as triage_err:
+                    print(f"[Orchestrator] Triage failed, using raw findings: {triage_err}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fallback to raw findings on error
+                    triaged_findings = raw_findings
+                    reportable_count = len(raw_findings)
+
+            agent.findings = triaged_findings
+            print(f"[Orchestrator] Total findings: {len(triaged_findings)} ({reportable_count} reportable)")
 
             # === Add completion node to flow ===
             completion_status = "completed" if result.get("success", True) else "failed"
             flow_service.add_node(
                 agent.id, "analysis", f"Audit {completion_status.title()}",
-                {"findings_count": len(all_findings), "elapsed_s": result.get("elapsed_s", 0)}
+                {
+                    "findings_count": reportable_count,  # Show reportable count
+                    "total_findings": len(triaged_findings),  # Total including filtered
+                    "elapsed_s": result.get("elapsed_s", 0)
+                }
             )
 
             # Broadcast final flow update
@@ -835,15 +906,16 @@ class AgentOrchestrator:
                         data={
                             "agent_id": agent.id,
                             "repo_id": agent.repo_id,
-                            "findings_count": len(all_findings),
+                            "findings_count": reportable_count,
+                            "total_findings": len(triaged_findings),
                             "severity_summary": {
-                                "critical": sum(1 for f in all_findings if f.severity.value == "critical"),
-                                "high": sum(1 for f in all_findings if f.severity.value == "high"),
-                                "medium": sum(1 for f in all_findings if f.severity.value == "medium"),
-                                "low": sum(1 for f in all_findings if f.severity.value == "low"),
-                                "info": sum(1 for f in all_findings if f.severity.value == "info"),
+                                "critical": sum(1 for f in triaged_findings if f.severity.value == "critical"),
+                                "high": sum(1 for f in triaged_findings if f.severity.value == "high"),
+                                "medium": sum(1 for f in triaged_findings if f.severity.value == "medium"),
+                                "low": sum(1 for f in triaged_findings if f.severity.value == "low"),
+                                "info": sum(1 for f in triaged_findings if f.severity.value == "info"),
                             },
-                            "message": f"Security audit complete. Found {len(all_findings)} findings.",
+                            "message": f"Security audit complete. Found {reportable_count} reportable findings ({len(triaged_findings)} total).",
                         }
                     ))
                     print(f"[Orchestrator] Broadcast REPORT_READY for SDK agent {agent.id}")

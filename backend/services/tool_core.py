@@ -901,3 +901,62 @@ class ToolCore:
         )
 
         return {"node_id": node.id}
+
+    async def track_triage_gate(
+        self,
+        batch_id: str,
+        raw_count: int,
+        triaged_count: int,
+        reportable_count: int,
+        by_disposition: dict[str, int],
+        policy_version: str,
+        finding_refs: list[tuple[str, str]]
+    ) -> dict[str, Any]:
+        """Track triage gateway in flow tree.
+
+        Args:
+            batch_id: Unique batch identifier
+            raw_count: Number of raw findings input
+            triaged_count: Number of findings triaged (should equal raw_count)
+            reportable_count: Number of reportable findings (VALID/BUG)
+            by_disposition: Count by disposition
+            policy_version: Triage policy version used
+            finding_refs: List of (finding_id, disposition) tuples (capped at 50)
+
+        Returns:
+            Dictionary with node_id
+        """
+        from services.flow_service import flow_service
+
+        if not self.agent_id:
+            return {"node_id": None}
+
+        # Build label
+        filtered_count = raw_count - reportable_count
+        label = f"🔍 Triage Gateway: {reportable_count}/{raw_count} reportable ({filtered_count} filtered)"
+
+        # Prepare finding refs for data (limit to 50)
+        finding_data = [
+            {"id": fid, "disposition": disp}
+            for fid, disp in finding_refs[:50]
+        ]
+
+        node = flow_service.add_node(
+            self.agent_id,
+            node_type="triage_gateway",
+            label=label,
+            data={
+                "batch_id": batch_id,
+                "raw_count": raw_count,
+                "triaged_count": triaged_count,
+                "reportable_count": reportable_count,
+                "filtered_count": filtered_count,
+                "by_disposition": by_disposition,
+                "policy_version": policy_version,
+                "finding_refs": finding_data,
+                "total_findings": triaged_count
+            },
+            auto_parent=True
+        )
+
+        return {"node_id": node.id}

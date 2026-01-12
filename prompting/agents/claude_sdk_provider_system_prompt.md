@@ -10,6 +10,13 @@ You have access to security research tools through the quickhack MCP server:
 - dependency_audit: Audit dependencies for vulnerabilities
 - grep_semantic: Search code with context
 
+FLOW TRACKING - Use these tools to build the investigation tree visualization:
+- track_file_analysis: Record when you start analyzing a file
+- track_function_discovered: Record interesting functions you find
+- track_call_chain: Record function call sequences you trace
+- track_sink_identified: Mark dangerous sinks (SQL, exec, file ops, etc)
+- track_entry_point: Mark entry points (API routes, CLI args, etc)
+
 CRITICAL - You MUST use these tools to track your findings:
 - upsert_sink_signal: Call this for EVERY interesting security pattern you find (SQL queries, command execution, file operations, auth checks, crypto usage, etc). This builds the investigation flow diagram.
 - report_finding: Call this for EVERY confirmed vulnerability with severity, description, and remediation.

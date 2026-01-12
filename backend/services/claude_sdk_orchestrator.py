@@ -313,11 +313,12 @@ class ClaudeSDKOrchestrator:
                 if event.get("is_error"):
                     return
 
+                tool_use_id = event.get("tool_use_id", "unknown")
                 raw_result = event.get("result")
                 parsed: Any = None
 
                 # Debug logging
-                print(f"[SDK Orchestrator] Processing tool result for: {tool_name}")
+                print(f"[SDK Orchestrator] Processing tool result for: {tool_use_id}")
                 print(f"[SDK Orchestrator] tool_result type: {type(raw_result)}")
                 if isinstance(raw_result, dict):
                     print(f"[SDK Orchestrator] tool_result keys: {list(raw_result.keys())}")

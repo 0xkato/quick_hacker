@@ -419,6 +419,29 @@ class ClaudeSDKProvider:
                 else:
                     logger.debug(f"Unknown block type in AssistantMessage: {block_type}")
 
+        elif msg_type == "UserMessage":
+            # UserMessage contains tool results from tool execution
+            # UserMessage.content is list of ToolResultBlock
+            content_blocks = getattr(msg, "content", [])
+            for block in content_blocks:
+                block_type = block.__class__.__name__
+                fallback_type: str | None = getattr(block, "type", None)
+                if isinstance(fallback_type, str):
+                    fallback_type = fallback_type.lower()
+                else:
+                    fallback_type = None
+
+                if block_type == "ToolResultBlock" or fallback_type == "tool_result":
+                    # ToolResultBlock has .tool_use_id, .content, .is_error attributes
+                    tool_result_content = getattr(block, "content", "")
+                    print(f"[ClaudeSDKProvider] ToolResultBlock: tool_use_id={getattr(block, 'tool_use_id', 'unknown')}, is_error={getattr(block, 'is_error', False)}")
+                    events.append({
+                        "type": "tool_result",
+                        "tool_use_id": getattr(block, "tool_use_id", ""),
+                        "result": tool_result_content,
+                        "is_error": getattr(block, "is_error", False),
+                    })
+
         else:
             # Unknown message type - log and skip
             logger.debug(f"Unknown SDK message type: {msg_type}")

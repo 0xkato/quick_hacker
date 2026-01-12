@@ -24,6 +24,10 @@ class ToolCache:
     - Git HEAD (repo state)
 
     This ensures cache invalidation when repo changes.
+
+    Note: This implementation is thread-safe for single-threaded use.
+    For concurrent async operations, consider adding asyncio.Lock protection
+    (see Task 6: Async Cache Wrapper).
     """
 
     def __init__(self, max_size: int = 1000, ttl_seconds: int = 3600):

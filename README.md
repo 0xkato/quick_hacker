@@ -69,28 +69,28 @@ This system distinguishes **leads** from **reported vulnerabilities**:
 │  ┌─────────────────────────────────────┴──────────────────────────────────┐  │
 │  │                          Agent Orchestrator                             │  │
 │  │                                                                         │  │
-│  │   ┌─────────────┐    ┌─────────────────────────────────────────────┐   │  │
-│  │   │  ReAct Loop │───▶│              Tool Executor                  │   │  │
-│  │   │ (Deep Audit)│    │                                             │   │  │
-│  │   └─────────────┘    │  ┌───────────────────────────────────────┐  │   │  │
-│  │                      │  │         Security Scanners             │  │   │  │
-│  │                      │  │  • scan_repo_for_secrets              │  │   │  │
-│  │                      │  │  • dependency_audit                   │  │   │  │
-│  │                      │  │  • grep_semantic                      │  │   │  │
-│  │                      │  │  • generate_security_report           │  │   │  │
-│  │                      │  └───────────────────────────────────────┘  │   │  │
-│  │                      │  ┌───────────────────────────────────────┐  │   │  │
-│  │                      │  │         Code Analysis Tools           │  │   │  │
-│  │                      │  │  • read_file / search_code            │  │   │  │
-│  │                      │  │  • list_files / get_file_tree         │  │   │  │
-│  │                      │  │  • analyze_ast / trace_dataflow       │  │   │  │
-│  │                      │  └───────────────────────────────────────┘  │   │  │
-│  │                      │  ┌───────────────────────────────────────┐  │   │  │
-│  │                      │  │         Execution Tools               │  │   │  │
-│  │                      │  │  • run_command (sandboxed)            │  │   │  │
-│  │                      │  │  • run_tests                          │  │   │  │
-│  │                      │  └───────────────────────────────────────┘  │   │  │
-│  │                      └─────────────────────────────────────────────┘   │  │
+│  │   ┌──────────────────────┐    ┌────────────────────────────────────┐   │  │
+│  │   │ DeepAuditSupervisor  │───▶│         Tool Executor              │   │  │
+│  │   │  (LangGraph)         │    │                                    │   │  │
+│  │   │  • StateGraph flow   │    │  ┌──────────────────────────────┐  │   │  │
+│  │   │  • Worker subagents  │    │  │    Security Scanners         │  │   │  │
+│  │   │  • Auditor subagent  │    │  │  • scan_repo_for_secrets     │  │   │  │
+│  │   └──────────────────────┘    │  │  • dependency_audit          │  │   │  │
+│  │                               │  │  • grep_semantic             │  │   │  │
+│  │   ┌──────────────────────┐    │  │  • generate_security_report  │  │   │  │
+│  │   │ ReActSecurityAgent   │    │  └──────────────────────────────┘  │   │  │
+│  │   │  (Custom invests.)   │    │  ┌──────────────────────────────┐  │   │  │
+│  │   └──────────────────────┘    │  │    Code Analysis Tools       │  │   │  │
+│  │                               │  │  • read_file / search_code   │  │   │  │
+│  │                               │  │  • list_files / get_file_tree│  │   │  │
+│  │                               │  │  • analyze_ast / trace_data  │  │   │  │
+│  │                               │  └──────────────────────────────┘  │   │  │
+│  │                               │  ┌──────────────────────────────┐  │   │  │
+│  │                               │  │    Execution Tools           │  │   │  │
+│  │                               │  │  • run_command (sandboxed)   │  │   │  │
+│  │                               │  │  • run_tests                 │  │   │  │
+│  │                               │  └──────────────────────────────┘  │   │  │
+│  │                               └────────────────────────────────────┘   │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐   │
@@ -131,15 +131,92 @@ security_scanners/
 - `ScanLimits` provides: time budgets, cancellation callbacks, resource caps (max files/matches)
 - Secrets are always redacted in output using `redact_secret()` with fingerprinting for deduplication
 
-### Agent Tool Execution Flow
+### Deep Agents Architecture (Primary)
+
+Deep audit types (`DEEP_AUDIT`, `STRICT_ANALYSIS`, `ULTRA_STRICT`) use a **segmented multi-agent architecture** powered by LangChain's Deep Agents + LangGraph orchestration.
+
+**Key Design:**
+- **Supervisor** orchestrates workflow via LangGraph StateGraph (explicit graph nodes + conditional routing)
+- **Worker subagents** gather context in isolation and emit *signals* (leads/hotspots) - NOT findings
+- **Auditor subagent** verifies signals using targeted verification and promotes to findings
+- **Project Filesystem** provides dual namespaces:
+  - `/repo/` - Read-only view of repository code
+  - `/memories/` - Persistent writable storage for intermediate artifacts (scope summaries, signals, case files)
+
+**Workflow Graph:**
 
 ```
-User Request (e.g., "start medium scan")
+                        ┌────────────────┐
+                        │   init_state   │
+                        └────────┬───────┘
+                                 ▼
+                        ┌────────────────┐
+                        │  build_scopes  │  # Partition repo into analyzable scopes
+                        └────────┬───────┘
+                                 ▼
+                    ┌────────────────────┐
+                    │ dispatch_workers   │  # Dispatch RepoProfiler, ScopeMapper,
+                    └────────┬───────────┘  # SinkHunter, EntrypointHunter subagents
+                             ▼
+                    ┌────────────────────┐
+                    │  merge_signals     │  # Consolidate signals from workers
+                    └────────┬───────────┘
+                             ▼
+                    ┌────────────────────┐
+                    │ prioritize_cases   │  # Build case files for top signals
+                    └────────┬───────────┘
+                             ▼
+                    ┌────────────────────┐
+                    │ dispatch_auditor   │  # Auditor verifies signals
+                    └────────┬───────────┘
+                             ▼
+                    ┌────────────────────┐
+                    │  check_budget      │  # Continue or finalize?
+                    └─────┬──────────┬───┘
+                          │          │
+                   continue│          │finalize
+                          │          ▼
+                          │   ┌────────────┐
+                          │   │  finalize  │
+                          │   └────────────┘
+                          │
+                          └──────▶ (loop back to dispatch_workers)
+```
+
+**Context Isolation:**
+- Workers read code via `/repo/`, write summaries/signals to `/memories/`
+- Prevents context overflow by offloading intermediate data to filesystem
+- Auditor reads compact case files (signal + 2-6 code excerpts) rather than full scope context
+
+**Signal → Finding Pipeline:**
+- Workers emit signals (file/line, sink type, confidence, next steps)
+- Supervisor prioritizes signals by confidence + relevance
+- Auditor receives case file with verification questions
+- Only Auditor can promote signal → Finding
+
+**Files:**
+```
+agents/deep_audit/
+├── __init__.py          # Module exports
+├── supervisor.py        # DeepAuditSupervisor (LangGraph orchestration)
+├── filesystem.py        # ProjectFilesystem (/repo + /memories namespaces)
+├── state.py             # SupervisorState (LangGraph shared state)
+├── nodes.py             # Graph node implementations (8 workflow steps)
+├── tools.py             # Custom tools (upsert_sink_signals, promote_finding)
+├── case_builder.py      # Build compact case files for Auditor
+└── subagents.py         # Prompt templates for worker + auditor subagents
+```
+
+### ReAct Loop (Legacy/Custom)
+
+Custom agent type (`CUSTOM`) still uses the original ReAct loop for flexible ad-hoc investigations:
+
+```
+User Request (custom investigation)
          │
          ▼
 ┌─────────────────────┐
 │  Agent Orchestrator │
-│  (time budget: 15m) │
 └──────────┬──────────┘
            │
            ▼
@@ -336,9 +413,18 @@ quick_hack/
 ├── backend/
 │   ├── main.py                 # FastAPI app + router wiring
 │   ├── agents/
-│   │   ├── react_agent.py      # ReAct-based audit agent (legacy loop)
+│   │   ├── deep_audit/         # LangGraph-based segmented audit system
+│   │   │   ├── supervisor.py   # DeepAuditSupervisor (StateGraph orchestration)
+│   │   │   ├── filesystem.py   # ProjectFilesystem (/repo + /memories namespaces)
+│   │   │   ├── state.py        # SupervisorState (LangGraph shared state)
+│   │   │   ├── nodes.py        # Workflow graph nodes (8 steps)
+│   │   │   ├── tools.py        # Custom tools (upsert_sink_signals, promote_finding)
+│   │   │   ├── case_builder.py # Compact case file generation for Auditor
+│   │   │   └── subagents.py    # Prompt templates for worker/auditor subagents
+│   │   ├── react_agent.py      # ReAct-based audit agent (for CUSTOM agent type)
 │   │   ├── tools.py            # ToolExecutor + tool definitions
-│   │   └── base_agent.py       # Shared agent base + finding helpers
+│   │   ├── base_agent.py       # Shared agent base + finding helpers
+│   │   └── quick_audit_agent.py # Quick surface-level audit agent
 │   ├── routers/                # /api/* HTTP endpoints + /ws
 │   ├── services/
 │   │   ├── security_scanners/  # Security analysis tools

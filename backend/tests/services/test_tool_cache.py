@@ -94,3 +94,49 @@ class TestCacheOperations:
     def test_invalid_ttl_raises_error(self):
         with pytest.raises(ValueError, match="ttl_seconds must be positive"):
             ToolCache(max_size=100, ttl_seconds=-1)
+
+
+class TestLRUEviction:
+    def test_exceeding_max_size_evicts_oldest(self):
+        cache = ToolCache(max_size=3, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key3", "value3")
+        cache.set("key4", "value4")  # Should evict key1
+
+        assert cache.get("key1") is None  # Evicted
+        assert cache.get("key2") == "value2"
+        assert cache.get("key3") == "value3"
+        assert cache.get("key4") == "value4"
+
+    def test_get_updates_lru_order(self):
+        cache = ToolCache(max_size=3, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key3", "value3")
+
+        # Access key1 (should mark as recently used)
+        cache.get("key1")
+
+        # Add key4 (should evict key2, not key1)
+        cache.set("key4", "value4")
+
+        assert cache.get("key1") == "value1"  # Not evicted (was accessed)
+        assert cache.get("key2") is None  # Evicted (oldest unused)
+        assert cache.get("key3") == "value3"
+        assert cache.get("key4") == "value4"
+
+    def test_set_updates_lru_order(self):
+        cache = ToolCache(max_size=3, ttl_seconds=3600)
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key3", "value3")
+
+        # Update key1 (should mark as recently used)
+        cache.set("key1", "value1_updated")
+
+        # Add key4 (should evict key2, not key1)
+        cache.set("key4", "value4")
+
+        assert cache.get("key1") == "value1_updated"  # Not evicted
+        assert cache.get("key2") is None  # Evicted

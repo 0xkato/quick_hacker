@@ -1,5 +1,6 @@
 # backend/services/tool_cache.py
 """Tool output caching for performance optimization."""
+from collections import OrderedDict
 import hashlib
 import json
 import time
@@ -39,7 +40,8 @@ class ToolCache:
 
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self._cache: Dict[str, CacheEntry] = {}  # Storage implementation in future tasks
+        # OrderedDict maintains insertion order for LRU
+        self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
 
     def generate_key(
         self,
@@ -95,15 +97,28 @@ class ToolCache:
             del self._cache[key]
             return None
 
+        # Move to end (mark as recently used)
+        self._cache.move_to_end(key)
+
         return entry.value
 
     def set(self, key: str, value: Any) -> None:
-        """Store value in cache with TTL.
+        """Store value in cache with TTL and LRU eviction.
 
         Args:
             key: Cache key (SHA-256 hex string)
             value: Value to cache (any JSON-serializable object)
         """
         expires_at = time.time() + self.ttl_seconds
-        # TODO: Implement LRU eviction when cache size exceeds max_size (Task 3)
+
+        # If key exists, remove it first (will re-add at end)
+        if key in self._cache:
+            del self._cache[key]
+
+        # Add new entry at end (most recently used)
         self._cache[key] = CacheEntry(value=value, expires_at=expires_at)
+
+        # Evict oldest entry if over max_size
+        if len(self._cache) > self.max_size:
+            # popitem(last=False) removes oldest (FIFO)
+            self._cache.popitem(last=False)

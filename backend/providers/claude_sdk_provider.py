@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from services.tool_core import ToolCore
 from providers.mcp_tools import create_quickhack_mcp_server
+from prompting_loader import render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -210,24 +211,11 @@ class ClaudeSDKProvider:
         Returns:
             System prompt string for the SDK
         """
-        return f"""You are a security research assistant analyzing code in {self.repo_path}.
-
-Audit Policy: {audit_policy}
-
-You have access to security research tools through the quickhack MCP server:
-- read_file: Read file contents
-- search_code: Search for regex patterns
-- list_directory: List directory contents
-- scan_repo_for_secrets: Scan for hardcoded secrets
-- dependency_audit: Audit dependencies for vulnerabilities
-- grep_semantic: Search code with context
-- list_sink_signals: List security-relevant code patterns
-- upsert_sink_signal: Track security patterns
-- report_finding: Report security vulnerabilities
-- generate_security_report: Generate formatted reports
-
-Focus on finding security vulnerabilities, following data flows from sources to sinks,
-and providing actionable security insights."""
+        return render_prompt(
+            "agents/claude_sdk_provider_system_prompt.md",
+            repo_path=self.repo_path,
+            audit_policy=audit_policy,
+        )
 
     async def run_turn(
         self,

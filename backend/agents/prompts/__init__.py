@@ -1,6 +1,6 @@
 """Agent prompts for dual-model analysis."""
 
-from .scanner_prompt import SCANNER_SYSTEM_PROMPT
-from .analyzer_prompt import ANALYZER_SYSTEM_PROMPT
+from .scanner_prompt import format_scanner_prompt
+from .analyzer_prompt import format_analyzer_prompt
 
-__all__ = ["SCANNER_SYSTEM_PROMPT", "ANALYZER_SYSTEM_PROMPT"]
+__all__ = ["format_scanner_prompt", "format_analyzer_prompt"]

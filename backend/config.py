@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # API Keys (optional - can be provided per-request)
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
+    anthropic_auth_token: Optional[str] = None
     ollama_base_url: str = "http://localhost:11434"
 
     # Agent settings

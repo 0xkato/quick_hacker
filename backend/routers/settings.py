@@ -14,6 +14,7 @@ from services.settings_service import (
     ModelConfig,
 )
 from middleware.auth import require_auth
+from prompting_loader import load_prompt
 
 # All settings endpoints require authentication
 router = APIRouter(
@@ -110,6 +111,7 @@ async def update_provider(provider: str, request: UpdateProviderRequest):
 async def test_provider(provider: str):
     """Test provider connection with current settings."""
     settings = await settings_service.get_settings()
+    smoke_test_prompt = load_prompt("providers/smoke_test_user_prompt.md")
 
     if provider not in settings.providers:
         raise HTTPException(404, f"Provider not found: {provider}")
@@ -133,7 +135,7 @@ async def test_provider(provider: str):
                 max_tokens=16,
             )
             p = OpenAIProvider(config)
-            await p.generate([Message(role="user", content="Say 'OK'")])
+            await p.generate([Message(role="user", content=smoke_test_prompt)])
             return {"status": "success", "message": "Connected to OpenAI"}
 
         elif provider == "anthropic":
@@ -145,7 +147,7 @@ async def test_provider(provider: str):
                 max_tokens=10,
             )
             p = AnthropicProvider(config)
-            await p.generate([Message(role="user", content="Say 'OK'")])
+            await p.generate([Message(role="user", content=smoke_test_prompt)])
             return {"status": "success", "message": "Connected to Anthropic"}
 
         elif provider == "ollama":

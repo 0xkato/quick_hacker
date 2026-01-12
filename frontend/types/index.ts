@@ -187,7 +187,6 @@ export type WSMessageType =
   | 'progress'
   | 'error'
   | 'log'
-  | 'pipeline_stage'
   | 'llm_request'
   | 'llm_response'
   | 'tool_detail'

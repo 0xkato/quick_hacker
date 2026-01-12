@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from database.models import User
 from services.auth_service import auth_service
+from prompting_loader import load_prompt
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
@@ -295,7 +296,8 @@ async def validate_api_key(
     try:
         provider = get_provider(config)
         # Make actual API call to validate the key
-        await provider.generate([Message(role="user", content="Hi")])
+        smoke_test_prompt = load_prompt("providers/smoke_test_user_prompt.md")
+        await provider.generate([Message(role="user", content=smoke_test_prompt)])
         return {"valid": True, "provider": request.provider}
     except ValueError as e:
         return {"valid": False, "provider": request.provider, "error": str(e)}

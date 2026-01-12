@@ -1,0 +1,1 @@
+The audit cannot complete yet. Minimum investigation time not met ({{floor_remaining_s}}s remaining). Please continue analyzing the codebase for security issues. Consider: authentication flows, input validation, data exposure, and dependency risks.

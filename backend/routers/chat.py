@@ -10,6 +10,7 @@ import asyncio
 from services.settings_service import settings_service
 from providers import Message, get_provider
 from models.schemas import ProviderType, ProviderConfig
+from prompting_loader import load_prompt
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -35,59 +36,24 @@ class ChatResponse(BaseModel):
     usage: Optional[dict] = None
 
 
-# System prompts for different contexts
-CHAT_SYSTEM_PROMPTS = {
-    "general": """You are an expert security researcher assistant helping with code auditing.
-You have deep knowledge of:
-- Web application security (OWASP Top 10)
-- Binary exploitation and reverse engineering
-- Cryptographic vulnerabilities
-- Network security
-- Secure coding practices
-
-Be concise but thorough. When analyzing code, point out specific line numbers and explain the vulnerability clearly.
-If asked to write exploits or PoCs, provide them for educational/defensive purposes.""",
-
-    "code_review": """You are reviewing code for security vulnerabilities.
-Focus on:
-1. Input validation and sanitization
-2. Authentication and authorization flaws
-3. Injection vulnerabilities (SQL, command, XSS)
-4. Cryptographic issues
-5. Business logic flaws
-6. Race conditions
-7. Information disclosure
-
-For each issue found, provide:
-- Severity (CRITICAL/HIGH/MEDIUM/LOW)
-- Line number(s)
-- Description
-- Attack scenario
-- Recommended fix""",
-
-    "exploit_dev": """You are helping develop proof-of-concept exploits for identified vulnerabilities.
-This is for authorized security testing and educational purposes.
-
-For each exploit:
-1. Explain the vulnerability being exploited
-2. Show the exact payload
-3. Explain how it bypasses protections
-4. Describe the expected impact
-5. Suggest mitigations""",
-
-    "findings_analysis": """You are analyzing security findings from an automated scan.
-Help the user:
-1. Understand the severity and impact
-2. Verify if findings are true positives
-3. Prioritize remediation efforts
-4. Develop fixes
-5. Write security advisories""",
+CHAT_SYSTEM_PROMPT_FILES = {
+    "general": "chat/general.md",
+    "code_review": "chat/code_review.md",
+    "exploit_dev": "chat/exploit_dev.md",
+    "findings_analysis": "chat/findings_analysis.md",
 }
+
+
+def _get_chat_system_prompt(name: str) -> str:
+    relative_path = CHAT_SYSTEM_PROMPT_FILES.get(name)
+    if not relative_path:
+        raise ValueError(f"Unknown chat system prompt: {name}")
+    return load_prompt(relative_path)
 
 
 def get_system_prompt(context: Optional[dict]) -> str:
     """Generate system prompt based on context."""
-    base_prompt = CHAT_SYSTEM_PROMPTS["general"]
+    base_prompt = _get_chat_system_prompt("general")
 
     if not context:
         return base_prompt
@@ -96,7 +62,7 @@ def get_system_prompt(context: Optional[dict]) -> str:
     prompt_parts = [base_prompt]
 
     if context.get("type") == "code_review":
-        prompt_parts.append(CHAT_SYSTEM_PROMPTS["code_review"])
+        prompt_parts.append(_get_chat_system_prompt("code_review"))
 
     if context.get("current_file"):
         prompt_parts.append(f"\nCurrently viewing file: {context['current_file']}")
@@ -237,6 +203,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
 async def get_chat_prompts():
     """Get available chat system prompts."""
     return {
-        name: prompt[:200] + "..." if len(prompt) > 200 else prompt
-        for name, prompt in CHAT_SYSTEM_PROMPTS.items()
+        name: (
+            prompt[:200] + "..."
+            if len(prompt := _get_chat_system_prompt(name)) > 200
+            else prompt
+        )
+        for name in CHAT_SYSTEM_PROMPT_FILES
     }

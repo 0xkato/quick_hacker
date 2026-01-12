@@ -109,6 +109,43 @@ class FlowService:
         """Get flow for an agent."""
         return self._flows.get(agent_id)
 
+    def restore_flow(
+        self,
+        agent_id: str,
+        *,
+        nodes: list[dict],
+        edges: list[dict],
+        current_node_id: Optional[str] = None,
+    ) -> InvestigationFlow:
+        """Restore a flow from a persisted snapshot payload."""
+        flow = InvestigationFlow(session_id=agent_id)
+
+        restored_nodes: list[FlowNode] = []
+        for raw in nodes or []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                restored_nodes.append(FlowNode(**raw))
+            except Exception:
+                continue
+
+        restored_edges: list[FlowEdge] = []
+        for raw in edges or []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                restored_edges.append(FlowEdge(**raw))
+            except Exception:
+                continue
+
+        flow.nodes = restored_nodes
+        flow.edges = restored_edges
+        flow.current_node_id = current_node_id
+
+        self._flows[agent_id] = flow
+        self._notify_subscribers(agent_id, flow)
+        return flow
+
     def update_context(
         self,
         agent_id: str,

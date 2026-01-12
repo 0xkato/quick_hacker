@@ -32,6 +32,7 @@ from services.report_service import report_service
 from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
 from services.observability_service import observability_service
+from prompting_loader import load_prompt, render_prompt
 
 
 # Agent type to class mapping
@@ -386,13 +387,14 @@ class AgentOrchestrator:
         current_tool_calls: list[dict] = []
         current_request_id: str | None = None
         current_tool_node_id: str | None = None
+        session_policy_template: str | None = None
         # Track findings as they're reported (for real-time broadcast)
         sdk_findings: list[Finding] = []
         finding_counter = [0]  # Use list to allow mutation in nested function
 
         def on_sdk_event(event: dict) -> None:
             """Broadcast SDK events as WebSocket messages with flow + observability integration."""
-            nonlocal current_tool_calls, current_request_id, current_tool_node_id, sdk_findings
+            nonlocal current_tool_calls, current_request_id, current_tool_node_id, sdk_findings, session_policy_template
 
             event_type_str = event.get("type", "sdk_event")
 
@@ -436,25 +438,53 @@ class AgentOrchestrator:
                 turn = event.get("turn", 0)
                 phase = event.get("phase", "scanner")
 
-                # Log to observability service
+                requested_policy_template = (
+                    "agents/claude_sdk_orchestrator_analyzer_policy.md"
+                    if phase == "analyzer"
+                    else "agents/claude_sdk_orchestrator_scanner_policy.md"
+                )
+
+                # Claude SDK system prompt is fixed at session start; track the policy template used
+                # for that initial session so observability reflects what the model actually sees.
+                if session_policy_template is None:
+                    session_policy_template = requested_policy_template
+
+                policy_text = load_prompt(session_policy_template)
+                system_prompt = render_prompt(
+                    "agents/claude_sdk_provider_system_prompt.md",
+                    repo_path=agent.repo_path,
+                    audit_policy=policy_text,
+                )
+
+                prompt_template = (
+                    "agents/agent_orchestrator_initial_prompt.md" if turn == 1 else "(unknown)"
+                )
+
+                meta_lines = [
+                    f"turn: {turn}",
+                    f"phase: {phase}",
+                    f"prompt_template: {prompt_template}",
+                    "system_template: agents/claude_sdk_provider_system_prompt.md",
+                    f"session_policy_template: {session_policy_template}",
+                ]
+                if requested_policy_template != session_policy_template:
+                    meta_lines.append(f"requested_policy_template: {requested_policy_template}")
+                    meta_lines.append("note: SDK system prompt is fixed at session start; policy does not change mid-session.")
+                meta = "\n".join(meta_lines)
+
                 current_request_id = observability_service.log_llm_request(
                     agent_id=agent_id,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[
+                        {"role": "meta", "content": meta},
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
                     tools_available=None,  # SDK manages tools internally
                     model="claude-sdk",
                     provider="claude_sdk",
                 )
 
-                ws_data = {
-                    "id": current_request_id,
-                    "agent_id": agent_id,
-                    "interaction_type": "request",
-                    "timestamp": timestamp,
-                    "summary": f"Turn {turn} ({phase}): {prompt[:100]}..." if len(prompt) > 100 else f"Turn {turn} ({phase}): {prompt}",
-                    "full_content": prompt,
-                    "model": "claude-sdk",
-                    "provider": "claude_sdk",
-                }
+                return
 
             elif event_type_str == "agent_text":
                 text = event.get("text", "")
@@ -470,17 +500,12 @@ class AgentOrchestrator:
                         provider="claude_sdk",
                     )
                     current_tool_calls = []  # Reset for next response
+                return
 
-                ws_data = {
-                    "id": str(uuid_mod.uuid4()),
-                    "agent_id": agent_id,
-                    "interaction_type": "response",
-                    "timestamp": timestamp,
-                    "summary": text[:200] + "..." if len(text) > 200 else text,
-                    "full_content": text,
-                    "model": "claude-sdk",
-                    "provider": "claude_sdk",
-                }
+            elif event_type_str == "agent_thinking":
+                # Don't emit raw SDK thinking blocks to the UI as LLM interactions; they don't match
+                # the LLMInteraction schema and are not user-facing by default.
+                return
 
             elif event_type_str == "tool_call":
                 tool_id = event.get("id", "") or str(uuid_mod.uuid4())
@@ -529,17 +554,7 @@ class AgentOrchestrator:
                         agent_id=agent_id,
                         data={"type": "flow_update", "flow": flow.to_dict()}
                     ))
-
-                ws_data = {
-                    "id": tool_id,
-                    "tool_name": tool_name,
-                    "tool_call_id": tool_id,
-                    "arguments": tool_args,
-                    "arguments_summary": str(tool_args)[:100],
-                    "timestamp": timestamp,
-                    "success": True,
-                    "duration_ms": 0,
-                }
+                return
 
             elif event_type_str == "tool_result":
                 tool_use_id = event.get("tool_use_id", "") or str(uuid_mod.uuid4())
@@ -575,11 +590,58 @@ class AgentOrchestrator:
                     # === Add finding/signal nodes if applicable ===
                     if tool_name == "report_finding" and not is_error:
                         try:
-                            finding_data = json.loads(result) if isinstance(result, str) else result
+                            # Debug: Log the raw result for diagnosis
+                            print(f"[Orchestrator] report_finding result type: {type(result)}")
+                            if isinstance(result, dict):
+                                print(f"[Orchestrator] result keys: {list(result.keys())}")
+                            elif isinstance(result, str):
+                                print(f"[Orchestrator] result preview: {result[:200]}")
+
+                            # Strategy 1: Check if result is a dict with top-level "finding" key
+                            # (This is what our improved MCP tool returns)
+                            finding_data = None
+                            if isinstance(result, dict) and "finding" in result:
+                                print("[Orchestrator] Found 'finding' at top level (Strategy 1)")
+                                finding_data = result
+                            # Strategy 2: Check if result is SDK response format with content array
+                            elif isinstance(result, dict) and "content" in result:
+                                print("[Orchestrator] Trying to extract from SDK content format (Strategy 2)")
+                                content = result.get("content", [])
+                                if isinstance(content, list):
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get("type") == "text":
+                                            text = item.get("text", "")
+                                            if text.strip().startswith("{"):
+                                                try:
+                                                    parsed = json.loads(text)
+                                                    if isinstance(parsed, dict) and "finding" in parsed:
+                                                        finding_data = parsed
+                                                        print("[Orchestrator] Extracted finding from content text")
+                                                        break
+                                                except json.JSONDecodeError as jde:
+                                                    print(f"[Orchestrator] JSON parse failed: {jde}")
+                            # Strategy 3: Try parsing result as JSON string
+                            elif isinstance(result, str):
+                                print("[Orchestrator] Trying to parse result as JSON string (Strategy 3)")
+                                try:
+                                    parsed = json.loads(result)
+                                    if isinstance(parsed, dict) and "finding" in parsed:
+                                        finding_data = parsed
+                                        print("[Orchestrator] Parsed finding from JSON string")
+                                except json.JSONDecodeError as jde:
+                                    print(f"[Orchestrator] JSON parse failed: {jde}")
+                            # Strategy 4: If result is already a dict, try using it directly
+                            elif isinstance(result, dict):
+                                print("[Orchestrator] Using result dict directly (Strategy 4)")
+                                finding_data = result
+
+                            # Extract the finding
                             if isinstance(finding_data, dict) and "finding" in finding_data:
                                 raw_finding = finding_data["finding"]
                                 severity_str = raw_finding.get("severity", "medium")
                                 title = raw_finding.get("title", "Finding")
+
+                                print(f"[Orchestrator] Successfully extracted finding: {title} ({severity_str})")
 
                                 # Add finding node to flow
                                 finding_node = flow_service.add_node(
@@ -632,11 +694,17 @@ class AgentOrchestrator:
                                         agent_id=agent_id,
                                         data=finding_obj.model_dump(mode='json'),
                                     ))
-                                    print(f"[Orchestrator] Broadcast finding: {title} ({severity_str})")
+                                    print(f"[Orchestrator] ✓ Successfully broadcast finding to UI: {title} ({severity_str})")
                                 except Exception as finding_err:
-                                    print(f"[Orchestrator] Failed to create/broadcast finding: {finding_err}")
+                                    print(f"[Orchestrator] ✗ Failed to create/broadcast finding: {finding_err}")
+                                    import traceback
+                                    traceback.print_exc()
+                            else:
+                                print(f"[Orchestrator] ✗ Could not extract finding from result. finding_data type: {type(finding_data)}, has 'finding': {isinstance(finding_data, dict) and 'finding' in finding_data if finding_data else False}")
                         except Exception as e:
-                            print(f"[Orchestrator] Failed to add finding node: {e}")
+                            print(f"[Orchestrator] ✗ Failed to process finding: {e}")
+                            import traceback
+                            traceback.print_exc()
 
                     elif tool_name == "upsert_sink_signal" and not is_error:
                         try:
@@ -664,17 +732,7 @@ class AgentOrchestrator:
                             agent_id=agent_id,
                             data={"type": "flow_update", "flow": flow.to_dict()}
                         ))
-
-                ws_data = {
-                    "id": tool_use_id,
-                    "tool_name": tool_name,
-                    "tool_call_id": tool_use_id,
-                    "result": result,
-                    "result_summary": str(result)[:200],
-                    "success": not is_error,
-                    "timestamp": timestamp,
-                    "duration_ms": 0,
-                }
+                return
 
             self._broadcast_message(
                 WSMessage(type=ws_type, agent_id=agent_id, data=ws_data)
@@ -812,26 +870,27 @@ class AgentOrchestrator:
         Returns:
             Initial prompt string for the audit
         """
-        prompt_parts = [
-            f"Perform a security audit of the repository at {agent.repo_path}.",
-            "Focus on identifying vulnerabilities, security misconfigurations, and potential attack vectors.",
-        ]
+        custom_instructions = ""
+        if hasattr(agent.request, "custom_prompt") and agent.request.custom_prompt:
+            custom_instructions = f" Additional instructions: {agent.request.custom_prompt}"
 
-        # Add custom prompt if provided
-        if hasattr(agent.request, 'custom_prompt') and agent.request.custom_prompt:
-            prompt_parts.append(f"Additional instructions: {agent.request.custom_prompt}")
-
-        # Add focus areas if provided
-        if hasattr(agent.request, 'focus_areas') and agent.request.focus_areas:
+        focus_areas = ""
+        if hasattr(agent.request, "focus_areas") and agent.request.focus_areas:
             focus_str = ", ".join(agent.request.focus_areas)
-            prompt_parts.append(f"Focus particularly on: {focus_str}")
+            focus_areas = f" Focus particularly on: {focus_str}"
 
-        # Add target files if provided
-        if hasattr(agent.request, 'target_files') and agent.request.target_files:
+        target_files = ""
+        if hasattr(agent.request, "target_files") and agent.request.target_files:
             files_str = ", ".join(agent.request.target_files)
-            prompt_parts.append(f"Prioritize analyzing these files: {files_str}")
+            target_files = f" Prioritize analyzing these files: {files_str}"
 
-        return " ".join(prompt_parts)
+        return render_prompt(
+            "agents/agent_orchestrator_initial_prompt.md",
+            repo_path=agent.repo_path,
+            custom_instructions=custom_instructions,
+            focus_areas=focus_areas,
+            target_files=target_files,
+        )
 
     async def pause_agent(self, agent_id: str) -> Agent:
         """Pause a running agent."""

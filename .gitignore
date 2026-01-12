@@ -37,6 +37,7 @@ htmlcov/
 
 # Runtime data
 backend/data/
+data/
 
 # Generated test fixture repos
 backend/tests/fixtures/generated_fastapi_repo/

@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, List, Dict
 
+from prompting_loader import load_prompt, render_prompt
+
 
 # Time budgets per scan tier (in seconds)
 SCAN_TIER_BUDGETS = {
@@ -314,13 +316,42 @@ class ClaudeSDKOrchestrator:
                 raw_result = event.get("result")
                 parsed: Any = None
 
+                # Debug logging
+                print(f"[SDK Orchestrator] tool_result type: {type(raw_result)}")
+
+                # Strategy 1: Check if result is a dict with top-level "finding" key
                 if isinstance(raw_result, dict):
-                    parsed = raw_result
+                    if "finding" in raw_result:
+                        print("[SDK Orchestrator] Found 'finding' at top level (Strategy 1)")
+                        parsed = raw_result
+                    # Strategy 2: Check if result has SDK response format with content array
+                    elif "content" in raw_result:
+                        print("[SDK Orchestrator] Trying SDK content format (Strategy 2)")
+                        content = raw_result.get("content", [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get("type") == "text":
+                                    text = item.get("text", "")
+                                    if text.strip().startswith("{"):
+                                        try:
+                                            parsed = json.loads(text)
+                                            if isinstance(parsed, dict) and "finding" in parsed:
+                                                print("[SDK Orchestrator] Extracted finding from content")
+                                                break
+                                        except json.JSONDecodeError:
+                                            pass
+                    else:
+                        # Strategy 3: Use dict directly
+                        print("[SDK Orchestrator] Using dict directly (Strategy 3)")
+                        parsed = raw_result
                 else:
+                    # Strategy 4: Parse string or list
                     text: str | None = None
                     if isinstance(raw_result, str):
+                        print("[SDK Orchestrator] Parsing string result (Strategy 4)")
                         text = raw_result
                     elif isinstance(raw_result, list):
+                        print("[SDK Orchestrator] Extracting text from list (Strategy 5)")
                         parts: list[str] = []
                         for item in raw_result:
                             if not isinstance(item, dict):
@@ -338,14 +369,28 @@ class ClaudeSDKOrchestrator:
                         if candidate.startswith("{") or candidate.startswith("["):
                             try:
                                 parsed = json.loads(text)
-                            except json.JSONDecodeError:
+                                print("[SDK Orchestrator] Parsed JSON from text")
+                            except json.JSONDecodeError as jde:
+                                print(f"[SDK Orchestrator] JSON parse failed: {jde}")
                                 parsed = None
 
                 # Recognize our ToolCore.report_finding output.
                 if isinstance(parsed, dict) and isinstance(parsed.get("finding"), dict):
-                    self._findings.append(parsed["finding"])
+                    finding = parsed["finding"]
+                    self._findings.append(finding)
+                    print(f"[SDK Orchestrator] ✓ Extracted finding: {finding.get('title', 'unknown')}")
+                    # Broadcast finding in real-time
+                    self._emit_event("finding", finding)
+                else:
+                    print(f"[SDK Orchestrator] No finding extracted. parsed type: {type(parsed)}, has 'finding': {isinstance(parsed, dict) and 'finding' in parsed if parsed else False}")
 
         try:
+            # Emit request event (the prompt being sent to Claude)
+            self._emit_event("llm_request", {
+                "prompt": prompt,
+                "turn": self._turn_count,
+                "phase": self.phase,
+            })
             # Run turn with event callback
             await self.provider.run_turn(prompt, on_event=on_event)
         except Exception as e:
@@ -455,62 +500,36 @@ class ClaudeSDKOrchestrator:
     def _build_continue_prompt(self) -> str:
         """Build prompt to continue the current phase."""
         remaining_mins = self.remaining_s() / 60
-        return (
-            f"Continue your security analysis. "
-            f"You have approximately {remaining_mins:.1f} minutes remaining. "
-            f"Focus on high-priority findings and unexplored areas."
+        return render_prompt(
+            "agents/claude_sdk_orchestrator_continue_prompt.md",
+            remaining_mins=f"{remaining_mins:.1f}",
         )
 
     def _build_steering_prompt(self) -> str:
         """Build prompt to steer Claude back to work when trying to complete early."""
         floor_remaining = self.time_floor_s - self.elapsed_s()
         if floor_remaining > 0:
-            return (
-                f"The audit cannot complete yet. "
-                f"Minimum investigation time not met ({floor_remaining:.0f}s remaining). "
-                f"Please continue analyzing the codebase for security issues. "
-                f"Consider: authentication flows, input validation, data exposure, and dependency risks."
+            return render_prompt(
+                "agents/claude_sdk_orchestrator_steering_prompt_before_floor.md",
+                floor_remaining_s=f"{floor_remaining:.0f}",
             )
-        else:
-            return (
-                f"Please continue the analysis. "
-                f"Ensure you've thoroughly investigated all critical areas before completing. "
-                f"Remaining budget: {self.remaining_s():.0f}s."
-            )
+        return render_prompt(
+            "agents/claude_sdk_orchestrator_steering_prompt_after_floor.md",
+            remaining_s=f"{self.remaining_s():.0f}",
+        )
 
     def _build_analyzer_prompt(self) -> str:
         """Build prompt for transitioning to analyzer phase."""
         finding_count = len(self._findings)
-        return (
-            f"Transitioning to deep analysis phase. "
-            f"You have {finding_count} findings to analyze in depth. "
-            f"For each finding, verify its validity, assess exploitability, "
-            f"and provide detailed remediation guidance. "
-            f"Prioritize critical and high severity findings."
+        return render_prompt(
+            "agents/claude_sdk_orchestrator_analyzer_prompt.md",
+            finding_count=str(finding_count),
         )
 
     def _get_scanner_policy(self) -> str:
         """Get the system policy for scanner phase."""
-        return (
-            "You are a security scanner focused on discovering vulnerabilities. "
-            "Systematically scan the codebase for: "
-            "1. Hardcoded secrets and credentials "
-            "2. Injection vulnerabilities (SQL, command, XSS) "
-            "3. Authentication and authorization flaws "
-            "4. Insecure cryptographic usage "
-            "5. Dangerous dependencies "
-            "Report each finding with severity, location, and brief description."
-        )
+        return load_prompt("agents/claude_sdk_orchestrator_scanner_policy.md")
 
     def _get_analyzer_policy(self) -> str:
         """Get the system policy for analyzer phase."""
-        return (
-            "You are a security analyst performing deep analysis of findings. "
-            "For each finding: "
-            "1. Verify the vulnerability is real (not a false positive) "
-            "2. Assess exploitability and impact "
-            "3. Trace data flows to understand attack surface "
-            "4. Provide specific remediation steps "
-            "5. Rate confidence in the finding "
-            "Be thorough but efficient with remaining time."
-        )
+        return load_prompt("agents/claude_sdk_orchestrator_analyzer_policy.md")

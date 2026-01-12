@@ -17,6 +17,7 @@ from cass.tools.framework_parsers import FrameworkParsers
 from cass.tools.security_detectors import SecurityDetectors
 from providers import BaseProvider, Message
 from prompts.attack_surface_triage import ATTACK_SURFACE_TRIAGE_SYSTEM_PROMPT
+from prompting_loader import render_prompt
 from services.observability_service import observability_service
 
 
@@ -155,34 +156,10 @@ def _candidate_to_prompt_obj(candidate: AttackSurfaceCandidate) -> dict[str, Any
 
 
 def _build_triage_prompt(threat_model: ThreatModel, candidates: list[AttackSurfaceCandidate]) -> str:
-    return (
-        "Decide which items warrant deeper investigation.\n\n"
-        f"Threat model: {threat_model}\n\n"
-        "Return ONLY JSON with this schema:\n"
-        "{\n"
-        '  "items": [\n'
-        "    {\n"
-        '      "candidate_id": string,\n'
-        '      "verdict": "investigate" | "drop" | "needs_context",\n'
-        '      "confidence_score": number (0.0-1.0),\n'
-        '      "exposure": "A" | "B" | "C" | "unknown",\n'
-        '      "reasoning": string,\n'
-        '      "context_request": {\n'
-        '        "path": string,\n'
-        '        "start_line": number,\n'
-        '        "end_line": number,\n'
-        '        "reason": string\n'
-        "      } | null\n"
-        "    }\n"
-        "  ]\n"
-        "}\n\n"
-        "Rules:\n"
-        "- Be skeptical; it is OK if everything is dropped.\n"
-        "- Only use evidence in metadata/code_context.\n"
-        "- You may set verdict='needs_context' for AT MOST 2 items total.\n"
-        "- If verdict!='needs_context', set context_request=null.\n\n"
-        "Candidates (JSON array):\n"
-        + json.dumps([_candidate_to_prompt_obj(c) for c in candidates], ensure_ascii=False)
+    return render_prompt(
+        "agents/attack_surface_triage_user_prompt.md",
+        threat_model=threat_model,
+        candidates_json=json.dumps([_candidate_to_prompt_obj(c) for c in candidates], ensure_ascii=False),
     )
 
 
@@ -200,23 +177,10 @@ def _build_followup_prompt(
             }
         )
 
-    return (
-        "You requested additional context for some items. Make a FINAL decision.\n\n"
-        f"Threat model: {threat_model}\n\n"
-        "Return ONLY JSON with this schema:\n"
-        "{\n"
-        '  "items": [\n'
-        "    {\n"
-        '      "candidate_id": string,\n'
-        '      "verdict": "investigate" | "drop",\n'
-        '      "confidence_score": number (0.0-1.0),\n'
-        '      "exposure": "A" | "B" | "C" | "unknown",\n'
-        '      "reasoning": string\n'
-        "    }\n"
-        "  ]\n"
-        "}\n\n"
-        "Candidates (JSON array):\n"
-        + json.dumps(candidate_objs, ensure_ascii=False)
+    return render_prompt(
+        "agents/attack_surface_triage_followup_user_prompt.md",
+        threat_model=threat_model,
+        candidates_json=json.dumps(candidate_objs, ensure_ascii=False),
     )
 
 
@@ -480,4 +444,3 @@ class AttackSurfaceService:
 
 
 attack_surface_service = AttackSurfaceService()
-

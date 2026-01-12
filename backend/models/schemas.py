@@ -303,7 +303,6 @@ class WSMessageType(str, Enum):
     PROGRESS = "progress"
     ERROR = "error"
     LOG = "log"
-    PIPELINE_STAGE = "pipeline_stage"  # Multi-stage prompt pipeline events
     PHASE_HANDOFF = "phase_handoff"  # Scanner -> Analyzer transition
     # Observability message types
     LLM_REQUEST = "llm_request"  # Prompt being sent to LLM

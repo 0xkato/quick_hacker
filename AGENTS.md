@@ -4,7 +4,7 @@
 - `backend/`: FastAPI service (`backend/main.py`) exposing REST under `/api/*` and WebSockets under `/ws`.
   - `backend/routers/`: request/response layer (keep endpoints thin).
   - `backend/services/`: business logic, persistence, integrations.
-  - `backend/agents/`, `backend/pipelines/`, `backend/prompts/`, `backend/providers/`: agent + LLM orchestration.
+  - `backend/agents/`, `backend/prompts/`, `backend/providers/`: agent + LLM orchestration.
   - `backend/data/`, `backend/repos/`: runtime state (SQLite, cloned repos). Avoid committing generated files.
 - `frontend/`: Next.js (App Router) UI.
   - `frontend/app/`: routes/layouts, plus `frontend/components/`, `frontend/hooks/`, `frontend/lib/`, `frontend/types/`.

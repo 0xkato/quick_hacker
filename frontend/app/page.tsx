@@ -98,6 +98,20 @@ export default function Home() {
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
 
+  // Persist selected agent across refreshes
+  useEffect(() => {
+    const stored = localStorage.getItem('quickhack.selectedAgentId');
+    if (stored) setSelectedAgentId(stored);
+  }, []);
+
+  useEffect(() => {
+    if (selectedAgentId) {
+      localStorage.setItem('quickhack.selectedAgentId', selectedAgentId);
+    } else {
+      localStorage.removeItem('quickhack.selectedAgentId');
+    }
+  }, [selectedAgentId]);
+
   // Set up API auth functions
   useEffect(() => {
     setAuthFunctions(getAccessToken, refreshToken);

@@ -1,0 +1,1 @@
+Perform a security audit of the repository at {{repo_path}}. Focus on identifying vulnerabilities, security misconfigurations, and potential attack vectors.{{custom_instructions}}{{focus_areas}}{{target_files}}

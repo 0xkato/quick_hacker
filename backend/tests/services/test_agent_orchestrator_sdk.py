@@ -210,6 +210,40 @@ class TestAgentOrchestratorSDKIntegration:
             MockToolCore.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_run_sdk_agent_resolves_api_key_from_settings(self):
+        """_run_sdk_agent should re-resolve missing/masked API key from Settings."""
+        mock_agent = self._create_mock_agent()
+        mock_agent.request.provider_config.api_key = None
+
+        mock_settings = MagicMock()
+        mock_settings.providers = {"anthropic": MagicMock(api_key="settings-key")}
+
+        with patch('services.agent_orchestrator.settings_service.get_settings', new=AsyncMock(return_value=mock_settings)), \
+             patch('services.agent_orchestrator.ToolCore') as MockToolCore, \
+             patch('services.agent_orchestrator.ClaudeSDKProvider') as MockProvider, \
+             patch('services.agent_orchestrator.ClaudeSDKOrchestrator') as MockOrchestrator:
+
+            mock_sdk_orchestrator = MagicMock()
+            mock_sdk_orchestrator.make_fresh_limits = Mock(return_value=Mock())
+            mock_sdk_orchestrator.run_audit = AsyncMock(return_value={
+                'findings': [],
+                'success': True,
+            })
+            MockOrchestrator.return_value = mock_sdk_orchestrator
+
+            mock_provider_instance = MagicMock()
+            mock_provider_instance.close = AsyncMock()
+            MockProvider.return_value = mock_provider_instance
+
+            from services.agent_orchestrator import AgentOrchestrator
+            orchestrator = AgentOrchestrator()
+
+            await orchestrator._run_sdk_agent(mock_agent)
+
+            _, kwargs = MockProvider.call_args
+            assert kwargs["config"]["api_key"] == "settings-key"
+
+    @pytest.mark.asyncio
     async def test_run_sdk_agent_creates_provider(self):
         """_run_sdk_agent should create ClaudeSDKProvider."""
         mock_agent = self._create_mock_agent()

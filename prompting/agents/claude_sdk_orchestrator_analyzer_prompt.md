@@ -1,0 +1,1 @@
+Transitioning to deep analysis phase. You have {{finding_count}} findings to analyze in depth. For each finding, verify its validity, assess exploitability, and provide detailed remediation guidance. Prioritize critical and high severity findings.

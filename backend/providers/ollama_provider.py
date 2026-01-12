@@ -8,6 +8,7 @@ import httpx
 from config import settings
 from models.schemas import ProviderConfig
 from .base_provider import BaseProvider, Message, StreamChunk, estimate_tokens
+from prompting_loader import render_prompt
 
 
 class OllamaProvider(BaseProvider):
@@ -197,11 +198,16 @@ class OllamaProvider(BaseProvider):
         except Exception as e:
             # Fallback: prompt-based tool use
             # Add tool descriptions to system prompt
-            tool_desc = "Available tools:\n" + "\n".join([
-                f"- {t['function']['name']}: {t['function']['description']}"
-                for t in ollama_tools
-            ])
-            tool_desc += "\n\nTo use a tool, respond with: TOOL_CALL: tool_name({\"arg\": \"value\"})"
+            tools_block = "\n".join(
+                [
+                    f"- {t['function']['name']}: {t['function']['description']}"
+                    for t in ollama_tools
+                ]
+            )
+            tool_desc = render_prompt(
+                "providers/ollama_tool_fallback_system_prompt.md",
+                tools_block=tools_block,
+            )
 
             fallback_messages = [{"role": "system", "content": tool_desc}] + ollama_messages
 

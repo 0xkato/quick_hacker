@@ -122,6 +122,10 @@ class AgentStateSnapshot(BaseModel):
     # LLM conversation history for resumption
     conversation_history: list[dict[str, Any]]
 
+    # Observability history (for refresh/restart resilience)
+    llm_interactions: list[dict[str, Any]] = Field(default_factory=list)
+    tool_details: list[dict[str, Any]] = Field(default_factory=list)
+
     # Flow visualization state
     flow_nodes: list[dict[str, Any]]
     flow_edges: list[dict[str, Any]]

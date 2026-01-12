@@ -623,3 +623,66 @@ async def test_track_function_discovered(tool_core, mock_flow_service):
 
     # Verify context updated
     assert flow.context.current_function == "handleUpload"
+
+
+@pytest.mark.asyncio
+async def test_track_call_chain(tool_core, mock_flow_service):
+    """Test tracking call chain creates call nodes."""
+    mock_flow_service.initialize_flow(tool_core.agent_id)
+
+    # Setup: track file and function
+    await tool_core.track_file_analysis("api/routes.py")
+    await tool_core.track_function_discovered("handleUpload", "api/routes.py", 45)
+
+    # Track call chain
+    result = await tool_core.track_call_chain(
+        from_function="handleUpload",
+        calls=[
+            {"target": "validateFile", "file": "validators.py"},
+            {"target": "saveToS3", "file": "storage.py"}
+        ]
+    )
+
+    assert "call_nodes" in result
+    assert len(result["call_nodes"]) == 2
+
+    # Verify call nodes created
+    flow = mock_flow_service.get_flow(tool_core.agent_id)
+    call_nodes = [n for n in flow.nodes if n.type == "call"]
+    assert len(call_nodes) == 2
+    assert call_nodes[0].label == "→ validateFile"
+    assert call_nodes[0].data["target_file"] == "validators.py"
+    assert call_nodes[1].label == "→ saveToS3"
+
+
+@pytest.mark.asyncio
+async def test_track_call_chain_respects_depth(tool_core, mock_flow_service):
+    """Test call chain respects max_call_depth limit."""
+    mock_flow_service.initialize_flow(tool_core.agent_id)
+
+    # Set max depth to 2
+    mock_flow_service.update_context(
+        tool_core.agent_id,
+        max_call_depth=2,
+        call_depth=0
+    )
+
+    await tool_core.track_file_analysis("test.py")
+    await tool_core.track_function_discovered("foo", "test.py", 1)
+
+    # First call (depth 1) - should succeed
+    result1 = await tool_core.track_call_chain("foo", [{"target": "bar"}])
+    assert len(result1["call_nodes"]) == 1
+
+    # Second call (depth 2) - should succeed
+    result2 = await tool_core.track_call_chain("bar", [{"target": "baz"}])
+    assert len(result2["call_nodes"]) == 1
+
+    # Third call (depth 3) - should be skipped
+    result3 = await tool_core.track_call_chain("baz", [{"target": "qux"}])
+    assert len(result3["call_nodes"]) == 0
+
+    # Verify only 2 call nodes created
+    flow = mock_flow_service.get_flow(tool_core.agent_id)
+    call_nodes = [n for n in flow.nodes if n.type == "call"]
+    assert len(call_nodes) == 2

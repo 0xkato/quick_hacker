@@ -202,6 +202,29 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["function_name", "file_path", "line_number"]
         }
+    },
+    {
+        "name": "track_call_chain",
+        "description": "Record a sequence of function calls discovered during tracing",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_function": {"type": "string", "description": "Function making the calls"},
+                "calls": {
+                    "type": "array",
+                    "description": "List of function calls",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "target": {"type": "string", "description": "Function being called"},
+                            "file": {"type": "string", "description": "File containing target (optional)"}
+                        },
+                        "required": ["target"]
+                    }
+                }
+            },
+            "required": ["from_function", "calls"]
+        }
     }
 ]
 
@@ -499,6 +522,20 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         except Exception as e:
             return _make_error_response(e)
 
+    @tool("track_call_chain", "Record a sequence of function calls", {
+        "from_function": str,
+        "calls": list,
+    })
+    async def track_call_chain(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = await tool_core.track_call_chain(
+                from_function=args["from_function"],
+                calls=args["calls"]
+            )
+            return _make_response(json.dumps(result, indent=2))
+        except Exception as e:
+            return _make_error_response(e)
+
     # Create SDK MCP server with all tools
     sdk_tools = [
         read_file,
@@ -513,6 +550,7 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         generate_security_report,
         track_file_analysis,
         track_function_discovered,
+        track_call_chain,
     ]
 
     mcp_server = create_sdk_mcp_server(

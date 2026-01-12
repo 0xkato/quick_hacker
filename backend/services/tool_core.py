@@ -756,3 +756,61 @@ class ToolCore:
         )
 
         return {"node_id": node.id}
+
+    async def track_call_chain(
+        self,
+        from_function: str,
+        calls: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        """Track function call chain in flow tree.
+
+        Args:
+            from_function: Function making the calls
+            calls: List of calls with 'target' and optional 'file'
+
+        Returns:
+            dict with call_nodes list
+        """
+        from services.flow_service import flow_service
+
+        if not self.agent_id:
+            return {"call_nodes": []}
+
+        flow = flow_service.get_flow(self.agent_id)
+        if not flow:
+            return {"call_nodes": []}
+
+        context = flow.context
+        call_node_ids = []
+
+        for call in calls:
+            target = call["target"]
+            target_file = call.get("file")
+
+            # Increment call depth
+            new_depth = context.call_depth + 1
+
+            # Respect max_call_depth
+            if new_depth > context.max_call_depth:
+                continue
+
+            # Update context with new depth
+            flow_service.update_context(self.agent_id, call_depth=new_depth)
+
+            # Create call node
+            node = flow_service.add_node(
+                self.agent_id,
+                node_type="call",
+                label=f"→ {target}",
+                data={
+                    "target_function": target,
+                    "target_file": target_file,
+                    "from_function": from_function,
+                    "call_depth": new_depth
+                },
+                auto_parent=True
+            )
+
+            call_node_ids.append(node.id)
+
+        return {"call_nodes": call_node_ids}

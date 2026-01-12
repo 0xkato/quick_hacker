@@ -513,6 +513,67 @@ class StrictClassifier:
 
         return (False, "No exec/eval/compile sink detected")
 
+    def _feature_intent_proven(self, finding: Finding, evidence: EvidenceResult) -> Tuple[bool, str]:
+        """
+        Determine if exec/eval is a proven product feature.
+
+        Requires 2+ strong signals:
+        - Signal A: Path match (pipelines, executor, kernel, etl, workflow, dag, notebooks)
+        - Signal B: Symbol match (class/function name suggests execution)
+        - Signal C: Documentation match (comments/docstrings about execution)
+
+        Logic: (A + B) OR (A + C) = PROVEN
+
+        Returns:
+            (proven, reason) - reason explains which signals matched
+        """
+        signals = []
+
+        # Signal A: Path match
+        path = finding.file_path.lower()
+        path_keywords = ['/pipelines/', '/executor/', '/kernel/', '/etl/',
+                         '/workflow/', '/dag/', '/notebooks/', '/blocks/']
+        path_match = any(kw in path for kw in path_keywords)
+
+        # Also check package structure: .../data_preparation/.../block/...
+        if '/data_preparation/' in path and '/block' in path:
+            path_match = True
+
+        if path_match:
+            signals.append(f"path={finding.file_path}")
+
+        # Signal B: Symbol match
+        symbol_name = ""
+        if evidence.symbol_info:
+            symbol_name = evidence.symbol_info.name.lower()
+
+        symbol_keywords = ['executor', 'pipeline', 'kernel', 'runner', 'block',
+                           'execute_', 'run_', 'eval_', 'process_block', 'run_kernel']
+        symbol_match = any(kw in symbol_name for kw in symbol_keywords)
+
+        if symbol_match:
+            signals.append(f"symbol={evidence.symbol_info.name}")
+
+        # Signal C: Documentation match
+        snippet = evidence.snippet or finding.code_snippet or ""
+        doc_keywords = ['execute user code', 'run pipeline', 'notebook kernel',
+                        'block execution', 'pipeline runtime', 'run user block',
+                        'execute block', 'kernel execution', 'run notebook',
+                        'notebook cell', 'execute notebook', 'run block', 'execute cell']
+        doc_match = any(kw in snippet.lower() for kw in doc_keywords)
+
+        if doc_match:
+            signals.append("doc_match")
+
+        # Evaluate: need 2+ signals, including path
+        if len(signals) >= 2 and path_match:
+            return (True, f"Feature intent PROVEN: {' + '.join(signals)}")
+
+        if len(signals) == 1:
+            return (False, f"Feature intent UNKNOWN: only weak signal ({signals[0]})")
+
+        return (False, "Feature intent UNKNOWN: no strong signals found")
+
     def _apply_rules(
         self,
         checklist: ProofChecklist,

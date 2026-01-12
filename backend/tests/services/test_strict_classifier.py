@@ -939,5 +939,125 @@ class TestStrictExecEvalFiltering:
         assert "exec" in reason.lower()
 
 
+    def test_feature_intent_proven_with_path_and_symbol(self, classifier):
+        """Prove feature intent with path + symbol match."""
+        from models.schemas import Finding, VulnerabilityCategory, Severity
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-feature-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Pipeline executor",
+            vulnerability_type="Code Injection",
+            severity=Severity.HIGH,
+            file_path="/app/pipelines/executor.py",
+            line_start=42,
+            code_snippet="exec(block_code)",
+            description="Executes block",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet="class PipelineExecutor:\n    def run_block(self, code):\n        exec(code)",
+            symbol_info=SymbolInfo(
+                name="PipelineExecutor.run_block",
+                qualified_name="PipelineExecutor.run_block",
+                type="method",
+                line_start=41,
+                line_end=43,
+                file_path="/app/pipelines/executor.py"
+            ),
+            framework=None,
+            matches=[]
+        )
+
+        proven, reason = classifier._feature_intent_proven(finding, evidence)
+
+        assert proven is True
+        assert "path=/app/pipelines/" in reason or "path" in reason.lower()
+        assert "PipelineExecutor" in reason
+
+    def test_feature_intent_not_proven_with_path_only(self, classifier):
+        """Do not prove feature intent with path match only."""
+        from models.schemas import Finding, Severity
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-feature-002",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Pipeline helper",
+            vulnerability_type="Code Injection",
+            severity=Severity.HIGH,
+            file_path="/app/pipelines/helper.py",
+            line_start=42,
+            code_snippet="exec(code)",
+            description="Helper",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet="def process_data(code):\n    exec(code)",
+            symbol_info=SymbolInfo(
+                name="process_data",
+                qualified_name="process_data",
+                type="function",
+                line_start=41,
+                line_end=42,
+                file_path="/app/pipelines/helper.py"
+            ),
+            framework=None,
+            matches=[]
+        )
+
+        proven, reason = classifier._feature_intent_proven(finding, evidence)
+
+        assert proven is False
+        assert "insufficient signals" in reason.lower() or "weak signal" in reason.lower()
+
+    def test_feature_intent_proven_with_path_and_doc(self, classifier):
+        """Prove feature intent with path + doc match."""
+        from models.schemas import Finding, Severity
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo
+
+        finding = Finding(
+            id="test-feature-003",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Kernel processor",
+            vulnerability_type="Code Injection",
+            severity=Severity.HIGH,
+            file_path="/app/kernel/processor.py",
+            line_start=42,
+            code_snippet="exec(cell_code)",
+            description="Processes cell",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet='def process(cell_code):\n    """Execute notebook cell code."""\n    exec(cell_code)',
+            symbol_info=SymbolInfo(
+                name="process",
+                qualified_name="process",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/kernel/processor.py"
+            ),
+            framework=None,
+            matches=[]
+        )
+
+        proven, reason = classifier._feature_intent_proven(finding, evidence)
+
+        assert proven is True
+        assert "path" in reason.lower() or "kernel" in reason.lower()
+        assert "doc_match" in reason.lower()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

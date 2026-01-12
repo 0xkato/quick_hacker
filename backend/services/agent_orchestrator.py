@@ -810,7 +810,11 @@ class AgentOrchestrator:
             triaged_findings = raw_findings
             reportable_count = len(raw_findings)
 
-            if settings.triage_enabled and raw_findings:
+            # Check both config setting AND schema availability
+            from database.schema_checker import is_triage_available
+            triage_ready = settings.triage_enabled and is_triage_available()
+
+            if triage_ready and raw_findings:
                 try:
                     print(f"[Orchestrator] Running triage on {len(raw_findings)} findings...")
                     from models.schemas import BudgetConfig

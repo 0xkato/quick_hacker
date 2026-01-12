@@ -1,11 +1,12 @@
 # backend/services/tool_cache.py
 """Tool output caching for performance optimization."""
 from collections import OrderedDict
+from functools import wraps
 import hashlib
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 @dataclass
@@ -152,3 +153,49 @@ class ToolCache:
             "hit_rate": hit_rate,
             "size": len(self._cache),
         }
+
+    def cached_async(
+        self,
+        tool_name: str,
+        args_extractor: Callable[[Dict[str, Any]], Dict[str, Any]],
+        git_head: str
+    ):
+        """Decorator for caching async tool functions.
+
+        Args:
+            tool_name: Name of the tool being cached
+            args_extractor: Function to extract cacheable args from kwargs
+            git_head: Current git HEAD hash
+
+        Returns:
+            Decorator function
+
+        Example:
+            @cache.cached_async("read_file", lambda args: {"path": args["path"]}, "abc123")
+            async def read_file(path: str) -> str:
+                ...
+        """
+        def decorator(func):
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                # Extract cacheable args
+                cache_args = args_extractor(kwargs)
+
+                # Generate cache key
+                key = self.generate_key(tool_name, cache_args, git_head)
+
+                # Check cache
+                cached_result = self.get(key)
+                if cached_result is not None:
+                    return cached_result
+
+                # Cache miss - call function
+                result = await func(*args, **kwargs)
+
+                # Store in cache
+                self.set(key, result)
+
+                return result
+
+            return wrapper
+        return decorator

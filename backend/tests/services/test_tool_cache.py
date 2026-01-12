@@ -1,6 +1,7 @@
 # backend/tests/services/test_tool_cache.py
 import pytest
 import time
+import asyncio
 from services.tool_cache import ToolCache
 
 
@@ -201,3 +202,64 @@ class TestCacheMetrics:
         cache.set("key3", "value3")  # Evicts key1
         metrics = cache.get_metrics()
         assert metrics["size"] == 2
+
+
+class TestAsyncCaching:
+    @pytest.mark.asyncio
+    async def test_async_cached_function_hit(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+
+        call_count = 0
+
+        @cache.cached_async("test_tool", lambda args: args["param"], "abc123")
+        async def test_function(param: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            await asyncio.sleep(0.01)  # Simulate I/O
+            return f"result_{param}"
+
+        # First call - cache miss
+        result1 = await test_function(param="value1")
+        assert result1 == "result_value1"
+        assert call_count == 1
+
+        # Second call with same param - cache hit
+        result2 = await test_function(param="value1")
+        assert result2 == "result_value1"
+        assert call_count == 1  # Function not called again
+
+    @pytest.mark.asyncio
+    async def test_async_cached_function_miss(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+
+        call_count = 0
+
+        @cache.cached_async("test_tool", lambda args: args["param"], "abc123")
+        async def test_function(param: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return f"result_{param}"
+
+        # Two calls with different params - both misses
+        result1 = await test_function(param="value1")
+        result2 = await test_function(param="value2")
+
+        assert result1 == "result_value1"
+        assert result2 == "result_value2"
+        assert call_count == 2  # Function called twice
+
+    @pytest.mark.asyncio
+    async def test_async_cached_function_updates_metrics(self):
+        cache = ToolCache(max_size=100, ttl_seconds=3600)
+
+        @cache.cached_async("test_tool", lambda args: args["param"], "abc123")
+        async def test_function(param: str) -> str:
+            return f"result_{param}"
+
+        await test_function(param="value1")  # miss
+        await test_function(param="value1")  # hit
+        await test_function(param="value2")  # miss
+
+        metrics = cache.get_metrics()
+        assert metrics["hits"] == 1
+        assert metrics["misses"] == 2

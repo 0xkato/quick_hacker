@@ -158,6 +158,16 @@ class TestCacheMetrics:
         assert metrics["misses"] == 1
         assert metrics["hits"] == 0
 
+    def test_expired_entry_increments_misses(self):
+        cache = ToolCache(max_size=100, ttl_seconds=1)  # 1 second TTL
+        cache.set("key1", "value1")
+        time.sleep(1.1)  # Wait for expiration
+        result = cache.get("key1")
+        assert result is None
+        metrics = cache.get_metrics()
+        assert metrics["misses"] == 1
+        assert metrics["hits"] == 0
+
     def test_get_hit_increments_hits(self):
         cache = ToolCache(max_size=100, ttl_seconds=3600)
         cache.set("key1", "value1")

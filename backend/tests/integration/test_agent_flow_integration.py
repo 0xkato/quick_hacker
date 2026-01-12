@@ -390,5 +390,8 @@ class RequestHandler {
     assert functions[0]["name"] == "handleRequest"
     assert functions[0]["language"] == "typescript"
     assert functions[1]["name"] == "processData"
+    assert functions[1]["language"] == "typescript"
     assert functions[2]["name"] == "validateInput"
+    assert functions[2]["language"] == "typescript"
     assert functions[3]["name"] == "getInstance"
+    assert functions[3]["language"] == "typescript"

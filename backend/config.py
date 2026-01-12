@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     agent_timeout_seconds: int = 300
     max_context_tokens: int = 128000
 
+    # Tool output caching
+    tool_cache_enabled: bool = Field(
+        default=True,
+        description="Enable tool output caching for performance"
+    )
+    tool_cache_max_size: int = Field(
+        default=1000,
+        description="Maximum number of cached tool outputs (LRU eviction)"
+    )
+    tool_cache_ttl_seconds: int = Field(
+        default=3600,
+        description="Time-to-live for cached entries in seconds (default 1 hour)"
+    )
+
     # Triage system configuration
     triage_enabled: bool = Field(
         default=True,

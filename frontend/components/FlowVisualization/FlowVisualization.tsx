@@ -382,23 +382,17 @@ export function FlowVisualization({
       }
     });
 
-    // Update nodes with visibility and collapse data
-    return nodes.map(node => {
-      const descendantCount = getDescendantCount(node.id, edges);
-      const isCollapsed = collapsedNodes[node.id] || false;
-
-      return {
-        ...node,
-        hidden: hidden.has(node.id),
-        data: {
-          ...node.data,
-          isCollapsed,
-          descendantCount,
-          onToggle: toggleCollapse,
-        },
-      };
-    });
-  }, [nodes, edges, collapsedNodes, getDescendants, getDescendantCount, toggleCollapse]);
+    // Update nodes with visibility and toggle callback
+    // Note: isCollapsed and descendantCount are already computed in useEffect
+    return nodes.map(node => ({
+      ...node,
+      hidden: hidden.has(node.id),
+      data: {
+        ...node.data,  // Already contains isCollapsed and descendantCount from useEffect
+        onToggle: toggleCollapse,
+      },
+    }));
+  }, [nodes, edges, collapsedNodes, getDescendants, toggleCollapse]);
 
   // Stats
   type InvestigationStats = {

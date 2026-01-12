@@ -13,8 +13,8 @@ services:
     volumes:
       - ./backend:/app
       - ./prompting:/prompting:ro
-      - repos_data:/app/repos
-      - settings_data:/app/data
+      - ./repos:/app/repos
+      - ./data:/app/data
       - claude_auth_data:/home/appuser/.claude
       - /var/run/docker.sock:/var/run/docker.sock  # For sandbox
     environment:
@@ -131,10 +131,6 @@ services:
       - quick_hack
 
 volumes:
-  repos_data:
-    driver: local
-  settings_data:
-    driver: local
   claude_auth_data:
     driver: local
   ollama_data:

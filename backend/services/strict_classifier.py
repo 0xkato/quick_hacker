@@ -902,6 +902,19 @@ class StrictClassifier:
         """Generate 2-4 reasoning bullets explaining the disposition."""
         bullets = []
 
+        # Add exec-specific reasoning at start (if present)
+        if checklist.exec_sink_reason:
+            bullets.append(checklist.exec_sink_reason)
+            if checklist.feature_intent_reason:
+                bullets.append(checklist.feature_intent_reason)
+            if checklist.auth_bypass_reason:
+                bullets.append(checklist.auth_bypass_reason)
+
+            # If exec reasoning is complete (3 bullets), we can truncate
+            if len(bullets) >= 3:
+                return bullets[:4]  # Keep 3-4 bullets for clarity
+
+        # Continue with standard checklist reasoning...
         if disposition == Disposition.VALID_SECURITY_ISSUE:
             bullets.append("All six proof items verified: source, sink, dataflow, reachable, boundary, and exploitable in default config")
             if category:
@@ -944,4 +957,4 @@ class StrictClassifier:
         if evidence.symbol_info:
             bullets.append(f"Symbol: {evidence.symbol_info.name} ({evidence.symbol_info.type})")
 
-        return bullets[:4]  # Limit to 4 bullets
+        return bullets[:5]  # Limit to 5 bullets total

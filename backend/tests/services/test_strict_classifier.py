@@ -1393,6 +1393,53 @@ class TestStrictExecEvalFiltering:
         # Should return unchanged (not downgraded by patterns)
         assert result == Disposition.VALID_SECURITY_ISSUE
 
+    def test_reasoning_includes_exec_details(self, classifier):
+        """Ensure reasoning bullets include exec-specific details."""
+        from models.schemas import Finding, VulnerabilityCategory
+        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
+
+        finding = Finding(
+            id="test-reasoning-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code execution",
+            vulnerability_type="Code Injection",
+            severity="high",
+            file_path="/app/api.py",
+            line_start=42,
+            code_snippet="exec(code)",
+            description="Exec",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info=SymbolInfo(
+                name="run_code",
+                qualified_name="run_code",
+                type="function",
+                line_start=41,
+                line_end=43,
+                file_path="/app/api.py"
+            ),
+            framework=None,
+            matches=[
+                EvidenceMatch(
+                    file="/app/api.py",
+                    line=41,
+                    snippet='@app.post("/execute")',
+                    match_type="route_registration"
+                )
+            ]
+        )
+
+        result = classifier.classify(finding, evidence)
+
+        # Should include exec-specific reasoning
+        assert any("exec" in bullet.lower() for bullet in result.reasoning)
+        assert any("feature intent" in bullet.lower() for bullet in result.reasoning)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

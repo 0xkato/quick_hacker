@@ -8,6 +8,34 @@ export type AgentType = 'quick_audit' | 'custom' | 'strict_analysis' | 'ultra_st
 export type ScanTier = 'quick' | 'medium' | 'advanced' | 'pro' | 'ultra' | 'evil' | 'custom';
 export type ProviderType = 'openai' | 'anthropic' | 'ollama';
 
+// === Triage System ===
+
+export type Disposition =
+  | 'VALID_SECURITY_ISSUE'
+  | 'BUG'
+  | 'HARDENING'
+  | 'MISCONFIGURATION'
+  | 'BY_DESIGN'
+  | 'SPECULATIVE';
+
+export type ChecklistStatus = 'PROVEN' | 'DISPROVEN' | 'UNKNOWN';
+
+export interface ChecklistItem {
+  value: boolean;
+  status: ChecklistStatus;
+  reason: string;
+}
+
+export interface ProofChecklist {
+  source_controlled_input: ChecklistItem;
+  sink_present: ChecklistItem;
+  dataflow_evidenced: ChecklistItem;
+  reachable: ChecklistItem;
+  boundary_crossed: ChecklistItem;
+  not_only_misconfig: ChecklistItem;
+  security_control_bypassed?: ChecklistItem;
+}
+
 // === Repository ===
 
 export interface RepoInfo {
@@ -156,7 +184,7 @@ export interface Finding {
   id: string;
   agent_id: string;
   repo_id: string;
-  severity: Severity;
+  severity: Severity | null;  // May be null for non-reportable findings
   title: string;
   description: string;
   file_path: string;
@@ -177,6 +205,16 @@ export interface Finding {
   contradiction_present?: boolean;
   fix_type?: FixType;
   classification_reasoning?: string;
+  // Triage system fields
+  batch_id?: string;
+  disposition?: Disposition;
+  classification_confidence?: number;
+  exploit_confidence?: number;
+  proof_checklist?: ProofChecklist;
+  reasoning?: string[];
+  triage_policy_version?: string;
+  triaged_at?: string;
+  category?: string;
 }
 
 // === WebSocket ===

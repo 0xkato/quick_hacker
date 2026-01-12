@@ -46,3 +46,24 @@ def test_init_state_creates_memories_structure():
     # Verify state was returned and deadline was set
     assert result.project_id == "test_proj"
     assert result.deadline > 0  # Deadline should be set
+
+
+def test_supervisor_can_be_instantiated():
+    """Test DeepAuditSupervisor can be created."""
+    from agents.deep_audit.supervisor import DeepAuditSupervisor
+    from models.schemas import AgentCreateRequest, AgentType
+
+    request = AgentCreateRequest(
+        repo_id="test_proj",
+        agent_type=AgentType.DEEP_AUDIT,
+        scan_tier="quick",
+    )
+
+    supervisor = DeepAuditSupervisor(
+        request=request,
+        repo_path="/tmp/test_repo",
+        on_message=lambda msg: None,
+    )
+
+    assert supervisor.id is not None
+    assert supervisor.repo_id == "test_proj"

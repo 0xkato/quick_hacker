@@ -254,6 +254,62 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["entry_type", "file_path", "line_number"]
         }
+    },
+    {
+        "name": "get_validity_checklist",
+        "description": "Get validity checklist for a specific vulnerability class to systematically validate findings and avoid false positives. Supports 8 vulnerability classes (sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure) plus 'disprove' for the general disprove-first self-critique checklist.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "vulnerability_class": {
+                    "type": "string",
+                    "description": "The vulnerability class to get checklist for. Valid values: sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure, or 'disprove' for the disprove-first self-critique checklist."
+                }
+            },
+            "required": ["vulnerability_class"]
+        }
+    },
+    {
+        "name": "finalize_finding",
+        "description": "Finalize a vulnerability finding with the disprove-first self-critique checklist. Enforces the zero-FP protocol by requiring all 6 disprove questions to be answered before accepting a VALIDATED_VULNERABILITY classification. Returns success/error based on validation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "signal_id": {
+                    "type": "string",
+                    "description": "The SinkSignal ID being finalized"
+                },
+                "classification": {
+                    "type": "string",
+                    "description": "Final classification outcome. Must be one of: validated_vulnerability, needs_human_review, hardening_opportunity, not_a_vulnerability, or duplicate. Cannot be pending.",
+                    "enum": [
+                        "validated_vulnerability",
+                        "needs_human_review",
+                        "hardening_opportunity",
+                        "not_a_vulnerability",
+                        "duplicate"
+                    ]
+                },
+                "disprove_answers": {
+                    "type": "object",
+                    "description": "Answers to the 6 disprove questions. Must have keys: q1, q2, q3, q4, q5, q6. Each answer must be a non-empty string explaining your reasoning.",
+                    "properties": {
+                        "q1": {"type": "string", "description": "Is the sink actually reachable from the source?"},
+                        "q2": {"type": "string", "description": "Is the input truly attacker-controlled?"},
+                        "q3": {"type": "string", "description": "Is the suspicious code actually executed?"},
+                        "q4": {"type": "string", "description": "Does the framework provide automatic protection?"},
+                        "q5": {"type": "string", "description": "Is the sanitizer/validator actually effective?"},
+                        "q6": {"type": "string", "description": "Is there a safer interpretation?"}
+                    },
+                    "required": ["q1", "q2", "q3", "q4", "q5", "q6"]
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Detailed reasoning for the classification decision, including evidence summary"
+                }
+            },
+            "required": ["signal_id", "classification", "disprove_answers", "reasoning"]
+        }
     }
 ]
 
@@ -603,6 +659,79 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         except Exception as e:
             return _make_error_response(e)
 
+    @tool(
+        "get_validity_checklist",
+        "Get validity checklist for a specific vulnerability class to systematically validate findings and avoid false positives. Supports 8 vulnerability classes (sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure) plus 'disprove' for the general disprove-first self-critique checklist.",
+        {
+            "vulnerability_class": "The vulnerability class to get checklist for. Valid values: sql_injection, command_execution, path_traversal, ssrf, xss, deserialization, auth_bypass, sensitive_data_exposure, or 'disprove' for the disprove-first self-critique checklist."
+        }
+    )
+    async def get_validity_checklist(args: dict[str, Any]) -> dict[str, Any]:
+        """Get validity checklist for a vulnerability class."""
+        try:
+            # Note: tool_core method is sync, not async
+            result = tool_core.get_validity_checklist(
+                vulnerability_class=args["vulnerability_class"]
+            )
+
+            # If successful, format the response
+            if result.get("success"):
+                response_text = f"# Validity Checklist: {result['class']}\n\n{result['content']}"
+                return _make_response(_truncate_output(response_text))
+            else:
+                # Return error from tool_core
+                return _make_error_response(Exception(result.get("error", "Unknown error")))
+
+        except Exception as e:
+            return _make_error_response(e)
+
+    @tool(
+        "finalize_finding",
+        "Finalize a vulnerability finding with the disprove-first self-critique checklist. Enforces the zero-FP protocol by requiring all 6 disprove questions to be answered before accepting a VALIDATED_VULNERABILITY classification.",
+        {
+            "signal_id": "The SinkSignal ID being finalized",
+            "classification": "Final classification outcome (validated_vulnerability, needs_human_review, hardening_opportunity, not_a_vulnerability, or duplicate). Cannot be pending.",
+            "disprove_answers": "Answers to the 6 disprove questions (q1-q6). Each must be a non-empty string explaining your reasoning.",
+            "reasoning": "Detailed reasoning for the classification decision, including evidence summary"
+        }
+    )
+    async def finalize_finding(args: dict[str, Any]) -> dict[str, Any]:
+        """Finalize a finding with disprove-first checklist."""
+        try:
+            # Note: tool_core method is sync, not async
+            result = tool_core.finalize_finding(
+                signal_id=args["signal_id"],
+                classification=args["classification"],
+                disprove_answers=args["disprove_answers"],
+                reasoning=args["reasoning"]
+            )
+
+            # Format response based on success/failure
+            if result.get("success"):
+                response_text = f"""# Finding Finalized
+
+**Signal ID**: {result['signal_id']}
+**Classification**: {result['classification'].value}
+
+## Disprove Checklist Answers
+
+{chr(10).join(f"**{k}**: {v}" for k, v in result['disprove_answers'].items())}
+
+## Reasoning
+
+{result['reasoning']}
+
+---
+✅ Finding accepted under zero-FP protocol
+"""
+                return _make_response(_truncate_output(response_text))
+            else:
+                # Return validation error
+                return _make_error_response(Exception(result.get("error", "Validation failed")))
+
+        except Exception as e:
+            return _make_error_response(e)
+
     # Create SDK MCP server with all tools
     sdk_tools = [
         read_file,
@@ -620,6 +749,8 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         track_call_chain,
         track_sink_identified,
         track_entry_point,
+        get_validity_checklist,
+        finalize_finding,
     ]
 
     mcp_server = create_sdk_mcp_server(

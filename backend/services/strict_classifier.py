@@ -794,9 +794,17 @@ class StrictClassifier:
         checklist: ProofChecklist,
         category: Optional[VulnerabilityCategory]
     ) -> Disposition:
-        """Apply pattern-based downgrades (ONLY downgrades, never upgrades)."""
+        """
+        Apply pattern-based downgrades for specific categories.
+
+        SKIP CODE_INJECTION - handled entirely by strict exec filter.
+        """
         # Pattern rules can ONLY return: SPECULATIVE, HARDENING, MISCONFIGURATION, BY_DESIGN
         # They MUST NEVER return: VALID_SECURITY_ISSUE or BUG
+
+        # SKIP CODE_INJECTION - exec filter owns this category
+        if category == VulnerabilityCategory.CODE_INJECTION:
+            return disposition
 
         # SSRF with constant URL
         if category == VulnerabilityCategory.SSRF and evidence.ssrf_analysis:

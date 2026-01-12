@@ -1349,6 +1349,50 @@ class TestStrictExecEvalFiltering:
         assert result.proof_checklist.sink_present.status == ChecklistStatus.PROVEN
         assert result.proof_checklist.sink_present.value is True
 
+    def test_pattern_downgrades_skip_code_injection(self, classifier):
+        """Ensure pattern downgrades skip CODE_INJECTION category."""
+        from models.schemas import Finding, VulnerabilityCategory
+        from services.evidence_gatherer import EvidenceResult
+
+        # This test verifies that CODE_INJECTION findings bypass pattern downgrades
+        # The exec filter should handle CODE_INJECTION entirely
+
+        finding = Finding(
+            id="test-pattern-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Code injection",
+            vulnerability_type="Code Injection",
+            severity="high",
+            file_path="/app/api.py",
+            line_start=42,
+            code_snippet="exec(code)",
+            description="Code injection",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        evidence = EvidenceResult(
+            snippet="exec(code)",
+            symbol_info=None,
+            framework=None,
+            matches=[],
+            ssrf_analysis=None,
+            timed_out=False
+        )
+
+        # Call _apply_pattern_downgrades directly
+        disposition = Disposition.VALID_SECURITY_ISSUE  # Start with VALID
+
+        # Need to build checklist and get normalized category first
+        checklist = classifier._build_checklist(finding, evidence)
+        category = classifier._normalize_category(finding)
+
+        result = classifier._apply_pattern_downgrades(disposition, finding, evidence, checklist, category)
+
+        # Should return unchanged (not downgraded by patterns)
+        assert result == Disposition.VALID_SECURITY_ISSUE
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

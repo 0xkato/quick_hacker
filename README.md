@@ -1,487 +1,554 @@
 # quick_hack
 
-Browser-based security auditing IDE powered by LLM agents.
+AI-powered security auditing browser IDE with evidence-based triage system.
 
-`quick_hack` focuses on long-running, **time-budgeted** investigations that keep going past “I’m done” by steering the model toward uncovered hotspots and deeper file coverage.
+`quick_hack` is a comprehensive platform that combines LLM agents, static code analysis, and a strict vulnerability triage system to identify and validate security issues in codebases.
 
-## Key Concepts
+## Key Features
 
-### Projects
+### 🤖 Multiple Agent Types
 
-A **Project** is a single cloned repository plus its persistent state (threat model, sink signals, snapshots).
+**Three specialized agents for different audit needs:**
 
-- Projects are isolated: signals/findings from one codebase do not bleed into another.
-- The UI uses `project_id` as the primary identifier for file browsing + audits.
+| Agent Type | Purpose | Speed | Depth |
+|-----------|---------|-------|-------|
+| **QuickAudit** | Fast pattern-based scanning | ~1-2 min | Surface-level |
+| **ReAct** | Targeted investigation with reasoning loops | ~5-10 min | Deep dives |
+| **DeepAudit** | Comprehensive systematic audit (LangGraph) | ~15-30 min | Multi-pass thorough |
 
-### Agents + Scan Tiers (Time Budgets)
+### 🎯 Strict Triage System
 
-Agents run audits against a project. For non-custom scans, the UI creates a `deep_audit` agent and supplies a `scan_tier` (time budget).
+**Zero false positive philosophy** with evidence-based classification:
 
-| Scan tier | Budget | What it’s for |
-|----------:|-------:|---------------|
-| `quick` | 5 min | Fast initial orientation + obvious hotspots |
-| `medium` | 15 min | Better coverage and first-pass deep dives |
-| `advanced` | 45 min | Sustained tracing + multiple leads |
-| `pro` | 90 min | Broad coverage + higher-confidence verification |
-| `ultra` | 4 hours | Large repos, repeated deep passes |
-| `evil` | 24 hours | “All day” auditing / soak mode |
-| `custom` | n/a | Send a custom prompt (no preset time tier) |
+- **Tri-State Proof Checklist:** PROVEN_TRUE / PROVEN_FALSE / UNKNOWN (not boolean flags)
+- **Code-Only Evidence:** Never trusts scanner descriptions, only verifies from source code
+- **Six Dispositions:**
+  - `VALID_SECURITY_ISSUE` - Exploitable vulnerability (REPORT)
+  - `BUG` - Security control bypassed (REPORT)
+  - `HARDENING` - Risky but mitigated (Optional)
+  - `MISCONFIGURATION` - Exploitable only when security disabled (Optional)
+  - `BY_DESIGN` - Intentional product feature (FILTER)
+  - `SPECULATIVE` - High-risk but unproven (FILTER)
 
-Notes:
-- The backend enforces a time floor before accepting “audit complete” signals from the LLM for time-tiered scans.
-- A single file may be reviewed multiple times as new context emerges.
+**Conservative Feature Intent Detection:** Requires 2+ strong signals (path + symbol/documentation) to classify exec/eval as BY_DESIGN, dramatically reducing false positives from code execution findings.
 
-### Sink Signals vs Findings
+### 🛠️ Rich Tool Ecosystem
 
-This system distinguishes **leads** from **reported vulnerabilities**:
+**13 specialized tools** for comprehensive code analysis:
 
-- **Sink signals** are investigation leads (entry points, sinks, hotspots). They are *not* findings.
-  - Persist per project at `data/projects/<project_id>/sink_signals.json`.
-  - Can be queued/promoted/dismissed over time as the audit progresses.
-- **Findings** are what the agent reports as potential vulnerabilities (severity, file/line, evidence, suggested fix).
+- **Code Analysis:** ReadFile, Ripgrep, AST parsing, symbol search
+- **Execution:** Bash (Docker sandboxed), test runners
+- **Code Understanding:** Call graph, data flow tracing, route discovery
+- **File Operations:** List files, file tree generation
+- **Security:** Auth gate detection, config analysis
 
-## Architecture
+### 📊 Interactive IDE
 
-### System Overview
+- **Monaco Editor:** VS Code-like editing with syntax highlighting
+- **File Explorer:** Hierarchical tree view with search
+- **Chat Interface:** Query agents about findings with streaming responses
+- **Flow Visualization:** See agent execution timeline and tool calls
+- **Findings Panel:** Filter, group, and export vulnerability reports
+- **Code Graph:** Interactive call graph exploration with relevance scoring
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                           Frontend (Next.js / React)                         │
-│                                                                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Project   │  │    Agent    │  │  Findings   │  │    Flow Diagram     │  │
-│  │  Selector   │  │   Panel     │  │   Panel     │  │ (Investigation Tree)│  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-│  ┌─────────────────────────────┐  ┌─────────────────────────────────────────┐│
-│  │      Monaco Code Editor     │  │         Call Tree + Code Graph          ││
-│  └─────────────────────────────┘  └─────────────────────────────────────────┘│
-└───────────────────────────────────────┬──────────────────────────────────────┘
-                                        │ REST `/api/*` + WebSocket `/ws`
-                                        ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                               Backend (FastAPI)                              │
-│                                                                              │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                              API Layer                                  │  │
-│  │  /api/auth/*     /api/projects/*    /api/agents/*    /ws (WebSocket)   │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-│                                        │                                      │
-│  ┌─────────────────────────────────────┴──────────────────────────────────┐  │
-│  │                          Agent Orchestrator                             │  │
-│  │                                                                         │  │
-│  │   ┌──────────────────────┐    ┌────────────────────────────────────┐   │  │
-│  │   │ DeepAuditSupervisor  │───▶│         Tool Executor              │   │  │
-│  │   │  (LangGraph)         │    │                                    │   │  │
-│  │   │  • StateGraph flow   │    │  ┌──────────────────────────────┐  │   │  │
-│  │   │  • Worker subagents  │    │  │    Security Scanners         │  │   │  │
-│  │   │  • Auditor subagent  │    │  │  • scan_repo_for_secrets     │  │   │  │
-│  │   └──────────────────────┘    │  │  • dependency_audit          │  │   │  │
-│  │                               │  │  • grep_semantic             │  │   │  │
-│  │   ┌──────────────────────┐    │  │  • generate_security_report  │  │   │  │
-│  │   │ ReActSecurityAgent   │    │  └──────────────────────────────┘  │   │  │
-│  │   │  (Custom invests.)   │    │  ┌──────────────────────────────┐  │   │  │
-│  │   └──────────────────────┘    │  │    Code Analysis Tools       │  │   │  │
-│  │                               │  │  • read_file / search_code   │  │   │  │
-│  │                               │  │  • list_files / get_file_tree│  │   │  │
-│  │                               │  │  • analyze_ast / trace_data  │  │   │  │
-│  │                               │  └──────────────────────────────┘  │   │  │
-│  │                               │  ┌──────────────────────────────┐  │   │  │
-│  │                               │  │    Execution Tools           │  │   │  │
-│  │                               │  │  • run_command (sandboxed)   │  │   │  │
-│  │                               │  │  • run_tests                 │  │   │  │
-│  │                               │  └──────────────────────────────┘  │   │  │
-│  │                               └────────────────────────────────────┘   │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-│                                                                              │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐   │
-│  │  Sink Signals    │  │    Findings      │  │   Flow Graph Service     │   │
-│  │  (Leads/Hotspots)│  │   (Reported)     │  │  (Investigation Tree)    │   │
-│  └──────────────────┘  └──────────────────┘  └──────────────────────────┘   │
-└───────────────┬───────────────────────────┬───────────────────────────┬──────┘
-                │                           │                           │
-                ▼                           ▼                           ▼
-         Postgres (users, keys)      Redis (optional cache)     LLM providers
-                                                           (Anthropic / OpenAI / Ollama)
-```
-
-### Security Scanners Module
-
-The `backend/services/security_scanners/` module provides four specialized security analysis tools:
+## Architecture Overview
 
 ```
-security_scanners/
-├── base.py          # Core types: ScanFinding, ScanResult, WorkspacePolicy, ScanLimits
-├── secrets.py       # Pattern + entropy-based secret detection
-├── dependencies.py  # Lockfile parsing + vulnerability database lookup
-├── grep.py          # Regex code search with context lines
-├── report.py        # Report generation (Markdown, JSON, SARIF)
-└── data/
-    └── advisory_db.json  # Bundled vulnerability database
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      Frontend (Next.js 14 + React 18)                    │
+│                                                                          │
+│  ┌───────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
+│  │  Monaco   │  │   File   │  │  Agent   │  │ Findings │  │  Flow   │ │
+│  │  Editor   │  │ Explorer │  │ Manager  │  │  Panel   │  │  Graph  │ │
+│  └───────────┘  └──────────┘  └──────────┘  └──────────┘  └─────────┘ │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             │ HTTP/REST + WebSocket
+┌────────────────────────────┴─────────────────────────────────────────────┐
+│                      Backend (FastAPI + Python 3.11+)                    │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │                      Agent Orchestrator                          │   │
+│  │                                                                  │   │
+│  │   ┌─────────────┐    ┌─────────────┐    ┌──────────────┐       │   │
+│  │   │ QuickAudit  │    │    ReAct    │    │  DeepAudit   │       │   │
+│  │   │   Agent     │    │    Agent    │    │  (LangGraph) │       │   │
+│  │   └─────────────┘    └─────────────┘    └──────────────┘       │   │
+│  │                                                                  │   │
+│  │   ┌──────────────────────────────────────────────────────────┐  │   │
+│  │   │               Tool Execution (13 tools)                  │  │   │
+│  │   │  • ReadFile  • Ripgrep  • Bash (sandboxed)              │  │   │
+│  │   │  • CallGraph • FindSymbol • GetRoutes                   │  │   │
+│  │   └──────────────────────────────────────────────────────────┘  │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │                      Triage System                               │   │
+│  │                                                                  │   │
+│  │   ┌─────────────────┐    ┌──────────────────────────────────┐   │   │
+│  │   │   Evidence      │ ─▶ │   Strict Classifier              │   │   │
+│  │   │   Gatherer      │    │   • Tri-state proof checklist    │   │   │
+│  │   │                 │    │   • Disposition rules            │   │   │
+│  │   │ • Code snippets │    │   • Conservative feature detect  │   │   │
+│  │   │ • Route info    │    │   • Code-only evidence          │   │   │
+│  │   │ • Auth gates    │    │   • Exec/eval filtering         │   │   │
+│  │   └─────────────────┘    └──────────────────────────────────┘   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐  │
+│  │  Project   │  │  Session   │  │    Flow    │  │   Code Graph     │  │
+│  │  Service   │  │  Service   │  │  Tracker   │  │   Service        │  │
+│  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘  │
+└───────────────────────┬──────────────────────────────────────────────────┘
+                        │
+┌───────────────────────┴──────────────────────────────────────────────────┐
+│                    PostgreSQL / SQLite Database                          │
+│  Users, Projects, Sessions, Messages, Findings, Evidence                │
+└──────────────────────────────────────────────────────────────────────────┘
+                        │
+┌───────────────────────┴──────────────────────────────────────────────────┐
+│                        LLM Providers                                     │
+│  • Anthropic (Claude Opus/Sonnet/Haiku)                                 │
+│  • OpenAI (GPT-4/GPT-3.5)                                                │
+│  • Ollama (Local models)                                                 │
+│  • Claude SDK (MCP-based)                                                │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
-
-| Tool | Description | Key Features |
-|------|-------------|--------------|
-| `scan_repo_for_secrets` | Detect hardcoded secrets | Pattern matching (AWS, GitHub, JWT), entropy analysis, fingerprint deduplication |
-| `dependency_audit` | Check dependencies for CVEs | Parses npm, yarn, pnpm, pip lockfiles; checks against advisory DB |
-| `grep_semantic` | Regex search with context | ReDoS protection, configurable context lines, file glob filtering |
-| `generate_security_report` | Aggregate findings | Markdown (human), JSON (machine), SARIF (CI/CD integration) |
-
-**Security Boundaries:**
-- `WorkspacePolicy` enforces: path validation, excluded directories, file size limits, symlink rejection
-- `ScanLimits` provides: time budgets, cancellation callbacks, resource caps (max files/matches)
-- Secrets are always redacted in output using `redact_secret()` with fingerprinting for deduplication
-
-### Deep Agents Architecture (Primary)
-
-Deep audit types (`DEEP_AUDIT`, `STRICT_ANALYSIS`, `ULTRA_STRICT`) use a **segmented multi-agent architecture** powered by LangChain's Deep Agents + LangGraph orchestration.
-
-**Key Design:**
-- **Supervisor** orchestrates workflow via LangGraph StateGraph (explicit graph nodes + conditional routing)
-- **Worker subagents** gather context in isolation and emit *signals* (leads/hotspots) - NOT findings
-- **Auditor subagent** verifies signals using targeted verification and promotes to findings
-- **Project Filesystem** provides dual namespaces:
-  - `/repo/` - Read-only view of repository code
-  - `/memories/` - Persistent writable storage for intermediate artifacts (scope summaries, signals, case files)
-
-**Workflow Graph:**
-
-```
-                        ┌────────────────┐
-                        │   init_state   │
-                        └────────┬───────┘
-                                 ▼
-                        ┌────────────────┐
-                        │  build_scopes  │  # Partition repo into analyzable scopes
-                        └────────┬───────┘
-                                 ▼
-                    ┌────────────────────┐
-                    │ dispatch_workers   │  # Dispatch RepoProfiler, ScopeMapper,
-                    └────────┬───────────┘  # SinkHunter, EntrypointHunter subagents
-                             ▼
-                    ┌────────────────────┐
-                    │  merge_signals     │  # Consolidate signals from workers
-                    └────────┬───────────┘
-                             ▼
-                    ┌────────────────────┐
-                    │ prioritize_cases   │  # Build case files for top signals
-                    └────────┬───────────┘
-                             ▼
-                    ┌────────────────────┐
-                    │ dispatch_auditor   │  # Auditor verifies signals
-                    └────────┬───────────┘
-                             ▼
-                    ┌────────────────────┐
-                    │  check_budget      │  # Continue or finalize?
-                    └─────┬──────────┬───┘
-                          │          │
-                   continue│          │finalize
-                          │          ▼
-                          │   ┌────────────┐
-                          │   │  finalize  │
-                          │   └────────────┘
-                          │
-                          └──────▶ (loop back to dispatch_workers)
-```
-
-**Context Isolation:**
-- Workers read code via `/repo/`, write summaries/signals to `/memories/`
-- Prevents context overflow by offloading intermediate data to filesystem
-- Auditor reads compact case files (signal + 2-6 code excerpts) rather than full scope context
-
-**Signal → Finding Pipeline:**
-- Workers emit signals (file/line, sink type, confidence, next steps)
-- Supervisor prioritizes signals by confidence + relevance
-- Auditor receives case file with verification questions
-- Only Auditor can promote signal → Finding
-
-**Files:**
-```
-agents/deep_audit/
-├── __init__.py          # Module exports
-├── supervisor.py        # DeepAuditSupervisor (LangGraph orchestration)
-├── filesystem.py        # ProjectFilesystem (/repo + /memories namespaces)
-├── state.py             # SupervisorState (LangGraph shared state)
-├── nodes.py             # Graph node implementations (8 workflow steps)
-├── tools.py             # Custom tools (upsert_sink_signals, promote_finding)
-├── case_builder.py      # Build compact case files for Auditor
-└── subagents.py         # Prompt templates for worker + auditor subagents
-```
-
-### ReAct Loop (Legacy/Custom)
-
-Custom agent type (`CUSTOM`) still uses the original ReAct loop for flexible ad-hoc investigations:
-
-```
-User Request (custom investigation)
-         │
-         ▼
-┌─────────────────────┐
-│  Agent Orchestrator │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        ReAct Loop                                │
-│                                                                  │
-│   1. Observe: Read current state, findings, coverage            │
-│   2. Think: Decide next investigation step                      │
-│   3. Act: Call tool (e.g., scan_repo_for_secrets)               │
-│   4. Repeat until budget exhausted or audit complete            │
-│                                                                  │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │                    Tool Executor                         │   │
-│   │                                                          │   │
-│   │   • Validates tool name + parameters                     │   │
-│   │   • Creates WorkspacePolicy for repo                     │   │
-│   │   • Creates ScanLimits with fraction of remaining budget │   │
-│   │   • Executes tool async                                  │   │
-│   │   • Accumulates findings (deduped, capped at 500)        │   │
-│   │   • Returns structured ToolResult                        │   │
-│   └─────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   Findings + Report │
-│   (Markdown/SARIF)  │
-└─────────────────────┘
-```
-
-### Data Flow
-
-```
-                     ┌─────────────────────────────────────────┐
-                     │              Repository                 │
-                     │  (cloned to data/projects/<id>/repo/)   │
-                     └───────────────────┬─────────────────────┘
-                                         │
-         ┌───────────────────────────────┼───────────────────────────────┐
-         │                               │                               │
-         ▼                               ▼                               ▼
-┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
-│ Secrets Scanner │           │ Dependency Audit│           │  Grep Semantic  │
-│                 │           │                 │           │                 │
-│ • Scan all text │           │ • Find lockfiles│           │ • Pattern search│
-│ • Pattern match │           │ • Parse deps    │           │ • Context lines │
-│ • Entropy check │           │ • Check CVEs    │           │ • File filtering│
-└────────┬────────┘           └────────┬────────┘           └────────┬────────┘
-         │                             │                             │
-         └─────────────────────────────┼─────────────────────────────┘
-                                       │
-                                       ▼
-                            ┌─────────────────────┐
-                            │   ScanFinding[]     │
-                            │                     │
-                            │ • tool, severity    │
-                            │ • file_path, lines  │
-                            │ • snippet, details  │
-                            │ • confidence        │
-                            └──────────┬──────────┘
-                                       │
-                    ┌──────────────────┼──────────────────┐
-                    │                  │                  │
-                    ▼                  ▼                  ▼
-          ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-          │    Markdown     │ │      JSON       │ │      SARIF      │
-          │    Report       │ │     Export      │ │  (CI/CD tools)  │
-          └─────────────────┘ └─────────────────┘ └─────────────────┘
-```
-
-### Key Design Decisions
-
-1. **Time-Budgeted Scans**: Agents operate within explicit time budgets (5m to 24h). Each tool gets a fraction of remaining budget via `ScanLimits.deadline`.
-
-2. **Signals vs Findings**: Raw scanner output produces "signals" (leads). The agent promotes verified signals to "findings" after investigation.
-
-3. **Finding Accumulation**: Findings are deduplicated by fingerprint and capped at 500 per session. Priority eviction keeps highest-severity findings.
-
-4. **Async by Default**: All scanners use `asyncio.to_thread()` to avoid blocking the event loop during file I/O and regex operations.
-
-5. **Offline-First Scanning**: Security scanners work without network access. Vulnerability databases are bundled locally.
 
 ## Quick Start
 
-### Option A: Docker Compose (recommended)
+### Option A: Docker Compose (Recommended)
 
-This starts the full stack (backend + frontend + Postgres + Redis + Ollama).
+**Prerequisites:**
+- Docker & Docker Compose
+- 8GB+ RAM recommended
 
 ```bash
+# Clone repository
+git clone https://github.com/yourusername/quick_hack.git
+cd quick_hack
+
+# Configure environment
 cp .env.example .env
+# Edit .env and set at minimum:
+#   - ANTHROPIC_API_KEY or OPENAI_API_KEY
+#   - JWT_SECRET_KEY (change default!)
+
+# Start all services
 docker compose up --build
+
+# Access the application
+# Frontend: http://localhost:3000
+# Backend API: http://localhost:8000
+# API Docs: http://localhost:8000/docs
 ```
 
-- Frontend: `http://localhost:3000`
-- Backend: `http://localhost:8000`
+**Docker Services:**
+- `backend` - FastAPI server (port 8000)
+- `frontend` - Next.js application (port 3000)
+- `db` - PostgreSQL database (port 5432)
 
-### Claude Code / ACP (Claude Agent SDK)
+### Option B: Local Development
 
-The backend can run audits through Claude Code via `claude-agent-sdk` (which uses Agent Client Protocol internally).
-
-- Docker: the backend image installs both `claude-agent-sdk` (Python) and `@anthropic-ai/claude-code` (Node).
-- Local dev: install Python deps in `backend/` and `npm i -g @anthropic-ai/claude-code`.
-- Enable per agent with `use_claude_sdk: true` (provider stays `anthropic`).
-- Auth: either set `ANTHROPIC_API_KEY` (API key) or `ANTHROPIC_AUTH_TOKEN` (OAuth token) (env or Settings UI), or authenticate Claude Code via `claude setup-token` in the same environment (Docker has its own `$HOME`).
-  - In Docker (once): `docker compose exec -it backend claude setup-token`
-  - Compose mounts a persistent volume at `/home/appuser/.claude` so Claude Code auth survives container rebuilds.
-
-### Option B: Local Development (no Docker)
-
-Prereqs:
-- Python 3.10+
+**Prerequisites:**
+- Python 3.11+
 - Node.js 18+
-- Postgres (required for auth)
+- PostgreSQL (or use SQLite for development)
 
-Backend:
+**Backend:**
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+# Configure database
+export DATABASE_URL="postgresql://user:pass@localhost/quickhack"
+# Or use SQLite: export DATABASE_URL="sqlite:///./data/quickhack.db"
+
+# Set required environment variables
+export JWT_SECRET_KEY="your-secret-key-change-in-production"
+export ANTHROPIC_API_KEY="sk-ant-..."  # or OPENAI_API_KEY
+
+# Run backend
 uvicorn main:app --reload --port 8000
 ```
 
-Frontend:
+**Frontend:**
 ```bash
 cd frontend
-npm ci
+npm install
+
+# Configure API endpoints
+export NEXT_PUBLIC_API_URL="http://localhost:8000"
+export NEXT_PUBLIC_WS_URL="ws://localhost:8000/ws"
+
+# Run frontend
 npm run dev
 ```
 
 ## Authentication
 
-- HTTP API: `Authorization: Bearer <access_token>`
-- WebSocket: `ws://localhost:8000/ws?token=<access_token>`
-- Tokens are stored by the frontend in `localStorage`:
-  - `quick_hack_access_token`
-  - `quick_hack_refresh_token`
+**JWT-based authentication** with access and refresh tokens:
 
-## API Examples
+- **Access Token:** 24-hour lifetime, used for API requests
+- **Refresh Token:** 30-day lifetime, used to obtain new access tokens
+- **Storage:** Tokens stored in `localStorage` by frontend
+- **WebSocket:** Authenticated via initial auth message with Bearer token
 
-### Login (JWT)
-
+**Create Account:**
 ```bash
-curl -X POST http://localhost:8000/api/auth/login \
+curl -X POST http://localhost:8000/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"username":"you@example.com","password":"yourpassword"}'
-```
-
-### Quick-clone a repo into a new Project
-
-```bash
-curl -X POST http://localhost:8000/api/projects/quick-clone \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"url":"https://github.com/user/repo.git"}'
-```
-
-### Start a time-tiered deep audit
-
-```bash
-curl -X POST http://localhost:8000/api/agents \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "repo_id": "'"$PROJECT_ID"'",
-    "agent_type": "deep_audit",
-    "scan_tier": "medium",
-    "use_claude_sdk": true,
-    "provider_config": { "provider": "anthropic", "model": "claude-sonnet-4-20250514" }
+    "email": "user@example.com",
+    "username": "your_username",
+    "password": "secure_password"
   }'
 ```
 
-Notes:
-- `use_claude_sdk: true` runs the audit via Claude Code (Claude Agent SDK) using the `quickhack` in-process MCP server (`mcp__quickhack__*` tools).
-- If you omit `use_claude_sdk` (or set it to `false`), the backend uses the legacy ReAct loop.
-
-Then:
+**Login:**
 ```bash
-curl -X POST http://localhost:8000/api/agents/$AGENT_ID/start \
-  -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "secure_password"
+  }'
 ```
 
-### List sink signals for a project
+## API Examples
+
+### Create Project
 
 ```bash
-curl http://localhost:8000/api/projects/$PROJECT_ID/sink-signals \
-  -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:8000/api/projects \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Project",
+    "repo_url": "https://github.com/user/repo.git"
+  }'
 ```
 
-## Repo Layout
+### Start Agent Audit
+
+```bash
+# Start QuickAudit (fast scan)
+curl -X POST http://localhost:8000/api/agents/execute \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "project-id-here",
+    "agent_type": "QUICK_AUDIT",
+    "prompt": "Perform security audit"
+  }'
+
+# Start DeepAudit (comprehensive)
+curl -X POST http://localhost:8000/api/agents/execute \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "project-id-here",
+    "agent_type": "DEEP_AUDIT",
+    "prompt": "Comprehensive security analysis"
+  }'
+```
+
+### Get Findings
+
+```bash
+# Get all findings for a project
+curl http://localhost:8000/api/findings/$PROJECT_ID \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Get only reportable findings
+curl "http://localhost:8000/api/findings/$PROJECT_ID?disposition=VALID_SECURITY_ISSUE,BUG" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Filter by category
+curl "http://localhost:8000/api/findings/$PROJECT_ID?category=CODE_INJECTION" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+## Configuration
+
+Key environment variables (see `.env.example` for complete list):
+
+### Application
+```bash
+APP_NAME=quick_hack
+DEBUG=false  # Set true for development
+```
+
+### Authentication
+```bash
+JWT_SECRET_KEY=your-secret-key-64-chars-minimum  # REQUIRED - CHANGE IN PRODUCTION
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440  # 24 hours
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=30
+```
+
+### Database
+```bash
+# PostgreSQL (production)
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/quickhack
+
+# SQLite (development)
+DATABASE_URL=sqlite+aiosqlite:///./data/quickhack.db
+```
+
+### LLM Providers
+```bash
+# Anthropic (recommended for best results)
+ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI
+OPENAI_API_KEY=sk-...
+
+# Ollama (local models)
+OLLAMA_BASE_URL=http://localhost:11434
+
+# Claude SDK
+ANTHROPIC_AUTH_TOKEN=...  # OAuth token for Claude SDK
+```
+
+### Agent Settings
+```bash
+MAX_CONCURRENT_AGENTS=10     # Max parallel agent executions
+AGENT_TIMEOUT_SECONDS=300    # 5 minutes (increase for DeepAudit)
+MAX_CONTEXT_TOKENS=128000    # Context window size
+```
+
+### Triage System
+```bash
+TRIAGE_ENABLED=true
+TRIAGE_BATCH_BUDGET_MS=15000          # 15 seconds total
+TRIAGE_PER_FINDING_BUDGET_MS=300      # 300ms per finding
+TRIAGE_ENABLE_REDACTION=true          # Redact secrets in evidence
+TRIAGE_SHOW_FILTERED_BY_DEFAULT=false # Hide non-reportable findings
+```
+
+### Sandbox (Security)
+```bash
+SANDBOX_ENABLED=true              # Enable Docker sandboxing
+SANDBOX_TIMEOUT_SECONDS=30        # Command timeout
+SANDBOX_MEMORY_LIMIT=256m         # Memory limit
+SANDBOX_NETWORK_DISABLED=true     # Disable network in sandbox
+```
+
+### CORS
+```bash
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
+
+## Project Structure
 
 ```
 quick_hack/
 ├── backend/
-│   ├── main.py                 # FastAPI app + router wiring
+│   ├── main.py                      # FastAPI application entry point
+│   ├── config.py                    # Centralized configuration
 │   ├── agents/
-│   │   ├── deep_audit/         # LangGraph-based segmented audit system
-│   │   │   ├── supervisor.py   # DeepAuditSupervisor (StateGraph orchestration)
-│   │   │   ├── filesystem.py   # ProjectFilesystem (/repo + /memories namespaces)
-│   │   │   ├── state.py        # SupervisorState (LangGraph shared state)
-│   │   │   ├── nodes.py        # Workflow graph nodes (8 steps)
-│   │   │   ├── tools.py        # Custom tools (upsert_sink_signals, promote_finding)
-│   │   │   ├── case_builder.py # Compact case file generation for Auditor
-│   │   │   └── subagents.py    # Prompt templates for worker/auditor subagents
-│   │   ├── react_agent.py      # ReAct-based audit agent (for CUSTOM agent type)
-│   │   ├── tools.py            # ToolExecutor + tool definitions
-│   │   ├── base_agent.py       # Shared agent base + finding helpers
-│   │   └── quick_audit_agent.py # Quick surface-level audit agent
-│   ├── routers/                # /api/* HTTP endpoints + /ws
-│   ├── services/
-│   │   ├── security_scanners/  # Security analysis tools
-│   │   │   ├── base.py         # Core types (ScanFinding, ScanResult, etc.)
-│   │   │   ├── secrets.py      # Secret detection (patterns + entropy)
-│   │   │   ├── dependencies.py # Dependency vulnerability audit
-│   │   │   ├── grep.py         # Semantic code search
-│   │   │   ├── report.py       # Report generation (MD/JSON/SARIF)
-│   │   │   └── data/           # Bundled vulnerability database
-│   │   ├── agent_orchestrator.py      # Agent lifecycle management
-│   │   ├── claude_sdk_orchestrator.py # Time-tier governor (Claude SDK mode)
-│   │   ├── tool_core.py               # MCP tool implementations (Claude SDK mode)
-│   │   ├── sink_signal_service.py     # Lead/hotspot tracking (project-local)
-│   │   └── flow_service.py            # Investigation graph service
-│   ├── providers/
-│   │   ├── claude_sdk_provider.py     # Claude Code / Agent SDK provider
-│   │   └── mcp_tools.py               # In-process MCP server (`quickhack`)
-│   ├── database/               # SQLAlchemy models + connection
-│   ├── prompts/                # Prompt templates / policies
-│   └── tests/
-│       ├── services/security_scanners/  # Scanner unit tests (201 tests)
-│       └── agents/             # Tool integration tests
+│   │   ├── base_agent.py            # Abstract agent base class
+│   │   ├── quick_audit_agent.py     # Fast pattern-based scanning
+│   │   ├── react_agent.py           # ReAct reasoning loop
+│   │   ├── deep_audit_agent.py      # LangGraph state machine
+│   │   ├── orchestrator.py          # Agent lifecycle management
+│   │   ├── claude_sdk_orchestrator.py  # Time-governed execution
+│   │   ├── tools/                   # 13 tool implementations
+│   │   └── validity_checklists/     # Per-vulnerability-type checklists
+│   ├── routers/                     # 13 API endpoint modules
+│   │   ├── agents.py                # Agent execution endpoints
+│   │   ├── auth.py                  # Authentication (signup/login/refresh)
+│   │   ├── projects.py              # Project management
+│   │   ├── files.py                 # File operations
+│   │   ├── findings.py              # Findings CRUD
+│   │   ├── websocket.py             # Real-time updates
+│   │   └── ... (7 more routers)
+│   ├── services/                    # Business logic (31 files)
+│   │   ├── agent_service.py         # Agent management
+│   │   ├── evidence_gatherer.py     # Triage evidence collection
+│   │   ├── strict_classifier.py     # Vulnerability classification
+│   │   ├── code_graph_service.py    # Call graph construction
+│   │   ├── flow_tracker.py          # Agent execution tracking
+│   │   └── ... (26 more services)
+│   ├── database/                    # SQLAlchemy models
+│   │   ├── models.py                # 6 core models (User, Project, Finding, etc.)
+│   │   ├── connection.py            # Async engine setup
+│   │   └── schema_checker.py        # Schema validation
+│   ├── providers/                   # LLM provider integrations
+│   │   ├── anthropic_provider.py    # Claude integration
+│   │   ├── openai_provider.py       # GPT integration
+│   │   ├── ollama_provider.py       # Local models
+│   │   └── claude_sdk_provider.py   # Claude SDK/MCP
+│   ├── middleware/
+│   │   └── auth.py                  # JWT validation
+│   └── tests/                       # Pytest test suite
+│       └── services/
+│           └── test_strict_classifier.py  # 41 triage tests
 ├── frontend/
-│   ├── app/                    # Next.js App Router
-│   ├── components/             # Panels, diagrams, modals
-│   ├── hooks/                  # WebSocket + UI hooks
-│   ├── contexts/               # AuthContext (JWT + tokens)
-│   └── lib/                    # API client
-├── data/                       # Runtime state (settings, projects, sink signals)
-├── repos/                      # Runtime clones (legacy git service)
-└── docker-compose.yml
+│   ├── app/                         # Next.js App Router pages
+│   │   ├── page.tsx                 # Landing page
+│   │   ├── login/                   # Auth pages
+│   │   ├── projects/                # Project workspace
+│   │   └── layout.tsx               # Root layout with providers
+│   ├── components/                  # React components
+│   │   ├── Editor/                  # Monaco editor wrapper
+│   │   ├── FileExplorer/            # File tree browser
+│   │   ├── Agent/                   # Agent manager
+│   │   ├── Chat/                    # Chat interface
+│   │   ├── Findings/                # Findings panel
+│   │   ├── Flow/                    # Flow visualization
+│   │   └── ... (15 component dirs)
+│   ├── contexts/                    # React Context providers
+│   │   └── AuthContext.tsx          # Global auth state
+│   ├── hooks/                       # Custom React hooks
+│   │   ├── useAuth.ts
+│   │   ├── useWebSocket.ts
+│   │   └── ... (10+ hooks)
+│   └── lib/
+│       ├── api.ts                   # API client with auth
+│       └── types.ts                 # TypeScript interfaces
+├── docs/
+│   ├── triage-system.md             # Triage documentation
+│   └── plans/                       # Design documents
+│       ├── 2026-01-12-architecture-reference.md       # Complete architecture
+│       ├── 2026-01-12-strict-exec-eval-filtering-design.md
+│       └── 2026-01-12-strict-exec-eval-filtering-implementation.md
+├── docker-compose.yml               # Docker services definition
+├── .env.example                     # Environment variables template
+└── README.md                        # This file
 ```
 
-## Running Tests
+## Testing
 
 ```bash
 cd backend
+
+# Install test dependencies
 pip install -r requirements-dev.txt
-pytest -q
+
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=. --cov-report=html
+
+# Run specific test file
+pytest tests/services/test_strict_classifier.py -v
+
+# Run tests matching pattern
+pytest -k "test_exec" -v
 ```
 
-## Configuration (.env)
+**Test Coverage:**
+- Triage system: 41 tests (exec/eval filtering, disposition rules, evidence gathering)
+- Total backend tests: 100+ tests
 
-See `.env.example` for the full list. Common knobs:
+## Key Architectural Decisions
 
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_API_URL` | Backend base URL for the frontend |
-| `NEXT_PUBLIC_WS_URL` | WebSocket URL (usually `ws://localhost:8000/ws`) |
-| `DATABASE_URL` | Postgres connection string |
-| `REDIS_URL` | Redis connection string |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | Provider credentials (fallback; UI settings override) |
-| `SETTINGS_SECRET` | Used to obfuscate stored settings |
-| `JWT_SECRET_KEY` | JWT signing secret (change in production) |
-| `SANDBOX_ENABLED` | Enables Docker-based sandbox execution |
+### 1. Tri-State Proof Checklist
+Uses PROVEN_TRUE / PROVEN_FALSE / UNKNOWN instead of booleans to distinguish "proven safe" from "insufficient evidence", dramatically reducing false negatives.
 
-## Security Notes
+### 2. Code-Only Evidence Analysis
+Triage classifier never trusts finding descriptions from scanners, only verifies from actual source code to prevent manipulation.
 
-- Do not expose this stack to untrusted networks without hardening (auth, CORS, secrets, sandboxing).
-- The backend can mount `docker.sock` for sandboxed execution; treat this as production-sensitive.
+### 3. Conservative Feature Intent Detection
+Requires 2+ strong signals (path + symbol/doc) to classify exec/eval as BY_DESIGN, preventing false positives from legitimate code execution features.
+
+### 4. LangGraph for Complex Workflows
+DeepAudit uses state machine for deterministic multi-step workflow with clear progress tracking and pause/resume capability.
+
+### 5. Sandboxed Tool Execution
+Bash commands run in Docker containers with read-only filesystem, no network, and resource limits for security.
+
+### 6. WebSocket for Real-Time Updates
+Agents broadcast progress via WebSocket instead of polling for low-latency user feedback.
+
+### 7. Provider Abstraction Layer
+Unified interface for 4 LLM providers enables easy switching and cost optimization.
+
+### 8. Disposition-First Triage
+Six nuanced dispositions (not binary "vulnerable/safe") provide clear audit trail and different actions per classification.
+
+See [docs/plans/2026-01-12-architecture-reference.md](docs/plans/2026-01-12-architecture-reference.md) for complete architectural documentation (4,300+ lines covering every major component).
+
+## Security Considerations
+
+### Production Deployment Checklist
+
+- [ ] **Change JWT_SECRET_KEY** - Use 64+ random characters
+- [ ] **Enable HTTPS** - Use reverse proxy (nginx/caddy) with TLS
+- [ ] **Restrict CORS_ORIGINS** - Only allow your frontend domain
+- [ ] **Enable SANDBOX_ENABLED** - Always sandbox bash commands
+- [ ] **Disable DEBUG mode** - Set `DEBUG=false`
+- [ ] **Use PostgreSQL** - SQLite not recommended for production
+- [ ] **Secure API keys** - Store provider keys in environment variables
+- [ ] **Set AUTH_BOOTSTRAP_ALLOW_REMOTE=false** - Restrict signup to localhost
+- [ ] **Review file permissions** - Ensure repos_dir and data_dir are secure
+- [ ] **Enable rate limiting** - Add rate limiting middleware
+- [ ] **Monitor logs** - Setup logging aggregation and alerting
+
+### Sandbox Security
+
+When `SANDBOX_ENABLED=true`, bash commands execute in isolated Docker containers:
+- **Read-only filesystem** - Project files mounted as read-only
+- **No network access** - Network disabled unless explicitly needed
+- **Resource limits** - Memory and CPU caps enforced
+- **Timeout enforcement** - Commands killed after timeout
+
+**Never disable sandboxing** when auditing untrusted repositories.
+
+## Common Issues & Solutions
+
+### "Database connection failed"
+- **Solution:** Ensure PostgreSQL is running and `DATABASE_URL` is correct
+- **Dev:** Use SQLite with `DATABASE_URL=sqlite+aiosqlite:///./data/quickhack.db`
+
+### "Unauthorized" on API requests
+- **Solution:** Login to get access token, include in `Authorization: Bearer <token>` header
+- **Frontend:** Token stored automatically in localStorage after login
+
+### "Agent execution timeout"
+- **Solution:** Increase `AGENT_TIMEOUT_SECONDS` for DeepAudit (default: 300s)
+- **Recommendation:** 600s (10 min) for DeepAudit, 1200s (20 min) for large repos
+
+### "WebSocket connection failed"
+- **Solution:** Check `NEXT_PUBLIC_WS_URL` is set correctly
+- **CORS:** Ensure WebSocket URL is in `CORS_ORIGINS`
+
+### "Docker sandbox not available"
+- **Solution:** Ensure Docker daemon is running
+- **Disable:** Set `SANDBOX_ENABLED=false` (dev only, not for production)
+
+### "LLM API key invalid"
+- **Solution:** Verify API key is correct and has sufficient credits
+- **Per-user keys:** Can also configure API keys per user in Settings UI
+
+## Documentation
+
+- **[Architecture Reference](docs/plans/2026-01-12-architecture-reference.md)** - Complete system documentation (4,300+ lines)
+- **[Triage System](docs/triage-system.md)** - Evidence-based classification guide
+- **[API Documentation](http://localhost:8000/docs)** - Interactive Swagger UI (when backend running)
+
+## Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure all tests pass (`pytest`)
+5. Update documentation if needed
+6. Submit a pull request
+
+## License
+
+[Your License Here]
+
+## Support
+
+For issues, questions, or feature requests:
+- **GitHub Issues:** [Create an issue](https://github.com/yourusername/quick_hack/issues)
+- **Documentation:** See [docs/](docs/) directory
+- **Architecture:** Read [architecture reference](docs/plans/2026-01-12-architecture-reference.md)

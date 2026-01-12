@@ -34,6 +34,7 @@ import {
 import clsx from 'clsx';
 import { FlowNodePopover } from './FlowNodePopover';
 import { CollapseButton } from './CollapseButton';
+import { SearchToolbar } from './SearchToolbar';
 
 // Types matching backend
 interface FlowNode {
@@ -225,6 +226,11 @@ export function FlowVisualization({
   // Collapsed nodes state
   const [collapsedNodes, setCollapsedNodes] = useState<CollapsedState>({});
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<string[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+
   // Toggle collapse for a node
   const toggleCollapse = useCallback((nodeId: string) => {
     setCollapsedNodes(prev => ({
@@ -232,6 +238,23 @@ export function FlowVisualization({
       [nodeId]: !prev[nodeId]
     }));
   }, []);
+
+  // Search handlers
+  const handleSearch = useCallback((query: string) => {
+    setSearchQuery(query);
+    setCurrentMatchIndex(0);
+    // Search logic will be added in next task
+  }, []);
+
+  const handleNavigate = useCallback((direction: 'up' | 'down') => {
+    setCurrentMatchIndex(prev => {
+      if (direction === 'up') {
+        return prev > 0 ? prev - 1 : searchMatches.length - 1;
+      } else {
+        return prev < searchMatches.length - 1 ? prev + 1 : 0;
+      }
+    });
+  }, [searchMatches.length]);
 
   // Get all descendants of a node
   const getDescendants = useCallback((nodeId: string, edges: Edge[]): string[] => {
@@ -460,6 +483,12 @@ export function FlowVisualization({
 
   return (
     <div className="h-full w-full relative" ref={containerRef}>
+      <SearchToolbar
+        onSearch={handleSearch}
+        resultCount={searchMatches.length}
+        currentIndex={currentMatchIndex}
+        onNavigate={handleNavigate}
+      />
       <ReactFlow
         nodes={visibleNodes}
         edges={edges}

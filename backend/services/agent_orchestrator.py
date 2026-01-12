@@ -21,6 +21,7 @@ from models.schemas import (
 from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
 from agents.react_agent import ReActSecurityAgent
+from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import ClaudeSDKProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
 from services.tool_core import ToolCore
@@ -38,11 +39,11 @@ from prompting_loader import load_prompt, render_prompt
 
 # Agent type to class mapping
 AGENT_CLASSES = {
-    AgentType.QUICK_AUDIT: QuickAuditAgent,       # Pattern matching
-    AgentType.CUSTOM: ReActSecurityAgent,         # ReAct for custom investigation
-    AgentType.STRICT_ANALYSIS: ReActSecurityAgent,# ReAct for strict mode
-    AgentType.ULTRA_STRICT: ReActSecurityAgent,   # ReAct for ultra strict
-    AgentType.DEEP_AUDIT: ReActSecurityAgent,     # ReAct w/ deeper profile
+    AgentType.QUICK_AUDIT: QuickAuditAgent,          # Pattern matching
+    AgentType.CUSTOM: ReActSecurityAgent,            # ReAct for custom investigation
+    AgentType.STRICT_ANALYSIS: DeepAuditSupervisor,  # Deep Agents architecture
+    AgentType.ULTRA_STRICT: DeepAuditSupervisor,     # Deep Agents architecture
+    AgentType.DEEP_AUDIT: DeepAuditSupervisor,       # Deep Agents architecture
 }
 
 

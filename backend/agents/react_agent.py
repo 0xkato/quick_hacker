@@ -38,6 +38,7 @@ from models.schemas import (
     HandoffMode,
     ProviderConfig,
 )
+from models.turn_plan import TurnPlan, Hypothesis, HypothesisActivity, FocusGap
 from agents.tools import ToolExecutor, AGENT_TOOLS, ToolResult
 from agents.dual_model_config import DEFAULT_SCANNER_MODELS, resolve_dual_model_config, get_handoff_mode
 from agents.prompts.scanner_prompt import format_scanner_prompt
@@ -52,7 +53,9 @@ from services.observability_service import observability_service
 from services.code_graph_service import code_graph_service
 from services.project_service import project_service
 from services.sink_signal_service import sink_signal_service
+from services.span_service import span_service
 from models.sink_signals import SinkSignal, SinkSignalKind, SinkSignalStatus
+from models.investigation_trace import SpanType, SpanState
 
 
 # Security: Maximum length for custom prompts
@@ -153,6 +156,10 @@ class ReActSecurityAgent:
         self._max_duplicate_calls = 2  # Max times same call can be made
         self._consecutive_duplicates = 0  # Track consecutive duplicate iterations
         self._max_consecutive_duplicates = 3  # Force move on after this many
+
+        # Turn planning and hypothesis tracking
+        self._turn_counter = 0
+        self._active_hypotheses: dict[str, Hypothesis] = {}
 
         # Control
         self._paused = asyncio.Event()
@@ -965,6 +972,85 @@ class ReActSecurityAgent:
         self._active_investigation_candidate_node_id = None
         self._active_investigation_root_node_id = None
         self._broadcast_flow_update()
+
+    def _emit_turn_plan_for_hypothesis(
+        self,
+        hypothesis_id: str,
+        hypothesis_label: str,
+        turn_id: str,
+        focus_gap: str = "other",
+        parent_hypothesis_id: Optional[str] = None
+    ) -> str:
+        """Emit a turn plan for the given hypothesis.
+
+        Creates or reuses spans, builds turn plan, and emits to FlowService.
+
+        Args:
+            hypothesis_id: Unique identifier for this hypothesis
+            hypothesis_label: Human-readable description
+            turn_id: Current turn identifier
+            focus_gap: Type of evidence gap (default: "other")
+            parent_hypothesis_id: Optional parent hypothesis ID
+
+        Returns:
+            span_id: The span ID for this hypothesis
+        """
+        # Check if hypothesis already exists
+        existing_hypothesis = self._active_hypotheses.get(hypothesis_id)
+
+        if existing_hypothesis:
+            # Continuing existing hypothesis
+            activity = HypothesisActivity.CONTINUING
+            span_id = existing_hypothesis.span_id
+            parent_span_id = existing_hypothesis.parent_span_id
+        else:
+            # New hypothesis - create span
+            activity = HypothesisActivity.NEW
+            span_id = f"span_{hypothesis_id}"
+            parent_span_id = None
+
+            # Create span in SpanService
+            span_service.create_span(
+                agent_id=self.id,
+                span_id=span_id,
+                span_type=SpanType.HYPOTHESIS,
+                hypothesis_id=hypothesis_id,
+                label=hypothesis_label,
+                state=SpanState.OPEN,
+                parent_span_id=parent_span_id,
+                focus_gap=FocusGap(focus_gap) if focus_gap else None,
+                created_turn_id=int(turn_id) if turn_id.isdigit() else 0
+            )
+
+        # Create Hypothesis object
+        hypothesis = Hypothesis(
+            hypothesis_id=hypothesis_id,
+            label=hypothesis_label,
+            state="active",
+            activity=activity,
+            created_turn_id=turn_id,
+            focus_gap=FocusGap(focus_gap) if focus_gap else FocusGap.OTHER,
+            parent_hypothesis_id=parent_hypothesis_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id
+        )
+
+        # Store in active hypotheses
+        self._active_hypotheses[hypothesis_id] = hypothesis
+
+        # Create TurnPlan with single hypothesis
+        turn_plan = TurnPlan(
+            turn_id=turn_id,
+            goal=f"Investigate: {hypothesis_label}",
+            hypotheses=[hypothesis],
+            selected_hypothesis_id=hypothesis_id,
+            selected_span_id=span_id
+        )
+
+        # Emit turn plan to FlowService
+        flow_service.emit_turn_plan(self.id, turn_plan)
+
+        return span_id
 
     async def _investigation_loop(self):
         """Main investigation loop."""
@@ -1880,7 +1966,7 @@ class ReActSecurityAgent:
 
     def restore_from_snapshot(self, snapshot: "AgentStateSnapshot") -> None:
         """Restore agent state from a snapshot."""
-        from models.observability import AgentStateSnapshot
+        from models.observability import AgentStateSnapshot, LLMInteraction, ToolDetail
 
         # Restore conversation history
         self.messages = snapshot.conversation_history.copy()
@@ -1897,6 +1983,24 @@ class ReActSecurityAgent:
             except Exception as e:
                 print(f"[{self.id}] Failed to restore finding: {e}")
 
+        # Restore LLM interactions to observability service
+        if snapshot.llm_interactions:
+            for interaction_data in snapshot.llm_interactions:
+                try:
+                    interaction = LLMInteraction(**interaction_data)
+                    observability_service._interactions[self.id].append(interaction)
+                except Exception as e:
+                    print(f"[{self.id}] Failed to restore LLM interaction: {e}")
+
+        # Restore tool details to observability service
+        if snapshot.tool_details:
+            for tool_data in snapshot.tool_details:
+                try:
+                    tool_detail = ToolDetail(**tool_data)
+                    observability_service._tool_details[self.id].append(tool_detail)
+                except Exception as e:
+                    print(f"[{self.id}] Failed to restore tool detail: {e}")
+
         # Restore flow visualization
         if snapshot.flow_nodes or snapshot.flow_edges:
             flow_service.restore_flow(
@@ -1906,7 +2010,7 @@ class ReActSecurityAgent:
                 current_node_id=snapshot.current_flow_node_id,
             )
 
-        self._log(f"Restored from snapshot: {len(self.files_examined)} files, {len(self.findings)} findings")
+        self._log(f"Restored from snapshot: {len(self.files_examined)} files, {len(self.findings)} findings, {len(snapshot.llm_interactions or [])} interactions")
 
     def _extract_functions_from_code(self, code: str) -> list[dict]:
         """Extract function definitions from code.

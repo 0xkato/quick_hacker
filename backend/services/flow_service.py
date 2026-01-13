@@ -60,6 +60,8 @@ NodeType = Literal[
     "auth_boundary",
     # Triage system
     "triage_gateway",
+    # Turn planning
+    "turn_plan",
 ]
 
 NodeStatus = Literal["pending", "running", "completed", "failed"]
@@ -448,6 +450,54 @@ class FlowService:
                 callback(flow.to_dict())
             except Exception:
                 pass
+
+    def emit_turn_plan(self, agent_id: str, turn_plan: "TurnPlan") -> FlowNode:
+        """Emit a turn plan node for declarative routing.
+
+        Creates a turn_plan node with full hypothesis metadata and updates
+        flow context to route subsequent actions to the selected span.
+
+        Args:
+            agent_id: Agent identifier
+            turn_plan: TurnPlan instance with hypotheses and selection
+
+        Returns:
+            FlowNode representing the turn plan
+        """
+        flow = self._flows.get(agent_id)
+        if not flow:
+            flow = self.initialize_flow(agent_id)
+
+        # Create truncated label from goal (40 chars max)
+        goal_preview = turn_plan.goal[:40] + "..." if len(turn_plan.goal) > 40 else turn_plan.goal
+        label = f"Turn {turn_plan.turn_id}: {goal_preview}"
+
+        # Serialize turn plan data using the to_dict method
+        node_data = turn_plan.to_dict()
+
+        # Create node
+        # Note: turn_id field accepts string despite int type hint for compatibility
+        node = FlowNode(
+            id=str(uuid.uuid4())[:8],
+            type="turn_plan",
+            label=label,
+            status="completed",
+            data=node_data,
+            span_id=turn_plan.selected_span_id,
+            hypothesis_id=turn_plan.selected_hypothesis_id,
+            turn_id=turn_plan.turn_id,  # type: ignore
+        )
+
+        flow.nodes.append(node)
+
+        # Update flow context with selected_span_id for authoritative routing
+        if turn_plan.selected_span_id:
+            flow.context.current_candidate_node_id = turn_plan.selected_span_id
+
+        # Notify subscribers
+        self._notify_subscribers(agent_id, flow)
+
+        return node
 
     def get_flow_stats(self, agent_id: str) -> Optional[dict]:
         """Get summary statistics for a flow."""

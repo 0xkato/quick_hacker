@@ -69,6 +69,23 @@ class AgentOrchestrator:
         self._message_callbacks: list[Callable[[WSMessage], None]] = []
         self._lock = asyncio.Lock()
 
+        # Shared cache for all agents (created once, reused across all agents)
+        self._shared_cache: Optional[ToolCache] = None
+        if settings.tool_cache_enabled:
+            try:
+                self._shared_cache = ToolCache(
+                    max_size=settings.tool_cache_max_size,
+                    ttl_seconds=settings.tool_cache_ttl_seconds,
+                )
+                logger.info(
+                    "Initialized shared tool cache: max_size=%d, ttl=%ds",
+                    settings.tool_cache_max_size,
+                    settings.tool_cache_ttl_seconds
+                )
+            except ValueError as e:
+                logger.error("Failed to initialize shared cache: %s", e)
+                self._shared_cache = None
+
     def add_message_callback(self, callback: Callable[[WSMessage], None]):
         """Add a callback for agent messages (WebSocket broadcast)."""
         self._message_callbacks.append(callback)
@@ -199,23 +216,8 @@ class AgentOrchestrator:
         if use_claude_sdk:
             print("[Orchestrator] Using Claude SDK mode")
 
-        # Create cache if enabled
-        cache = None
-        if settings.tool_cache_enabled:
-            try:
-                cache = ToolCache(
-                    max_size=settings.tool_cache_max_size,
-                    ttl_seconds=settings.tool_cache_ttl_seconds,
-                )
-            except ValueError as e:
-                logger.error(
-                    "Failed to initialize tool cache with max_size=%d, ttl_seconds=%d: %s",
-                    settings.tool_cache_max_size,
-                    settings.tool_cache_ttl_seconds,
-                    str(e)
-                )
-                # Continue without cache rather than failing agent creation
-                cache = None
+        # Use shared cache (all agents share the same cache instance)
+        cache = self._shared_cache
 
         # Create agent instance
         agent_class = AGENT_CLASSES.get(request.agent_type)
@@ -1364,32 +1366,31 @@ class AgentOrchestrator:
         }
 
     async def get_cache_metrics(self) -> dict[str, int]:
-        """Aggregate cache metrics from all active agents.
+        """Get metrics from shared cache used by all agents.
 
         Returns:
             Dictionary with total_hits, total_misses, total_size, cache_count
         """
-        total_hits = 0
-        total_misses = 0
-        total_size = 0
-        cache_count = 0
+        # All agents share the same cache, so just return its metrics
+        if self._shared_cache is None:
+            return {
+                "total_hits": 0,
+                "total_misses": 0,
+                "total_size": 0,
+                "cache_count": 0,
+            }
 
+        metrics = self._shared_cache.get_metrics()
+
+        # Count how many agents are using the cache
         async with self._lock:
-            for agent in self._agents.values():
-                # Check for cache stored on agent (all agent types)
-                if hasattr(agent, '_tool_cache') and agent._tool_cache is not None:
-                    cache = agent._tool_cache
-                    metrics = cache.get_metrics()
-                    total_hits += metrics["hits"]
-                    total_misses += metrics["misses"]
-                    total_size += metrics["size"]
-                    cache_count += 1
+            agent_count = len([a for a in self._agents.values() if hasattr(a, '_tool_cache')])
 
         return {
-            "total_hits": total_hits,
-            "total_misses": total_misses,
-            "total_size": total_size,
-            "cache_count": cache_count,
+            "total_hits": metrics["hits"],
+            "total_misses": metrics["misses"],
+            "total_size": metrics["size"],
+            "cache_count": agent_count if agent_count > 0 else 1,  # Show 1 if cache exists
         }
 
 

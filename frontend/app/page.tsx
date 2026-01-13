@@ -25,13 +25,16 @@ import { ChatPanel } from '@/components/ChatPanel/ChatPanel';
 import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
 import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
 import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualization';
+import { TreeLayout } from '@/components/InvestigationFlow';
 import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
 import { ReportModal } from '@/components/ReportPanel';
-import { AuthModal } from '@/components/Auth';
+import { AuthModal, AuthScreen } from '@/components/Auth';
 import { SessionControls } from '@/components/SessionControls';
 import { ResumeDialog } from '@/components/ResumeDialog';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '@/hooks/useAuth';
+import { useInvestigationFlow } from '@/hooks/useInvestigationFlow';
+import { featureFlags, FeatureFlag } from '@/lib/featureFlags';
 import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, session as sessionApi, initializeAuth, setAuthFunctions, type Project } from '@/lib/api';
 import type {
   FileNode,
@@ -66,6 +69,7 @@ export default function Home() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [agentProgress, setAgentProgress] = useState<Record<string, AgentProgress>>({});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedFindingsAgentId, setSelectedFindingsAgentId] = useState<string | null>(null);
   const [agentFlow, setAgentFlow] = useState<InvestigationFlow | null>(null);
   const [diagramMode, setDiagramMode] = useState<'investigation' | 'calltree'>('investigation');
   const [callTreeRoutes, setCallTreeRoutes] = useState<CallTreeRoute[]>([]);
@@ -97,6 +101,44 @@ export default function Home() {
 
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
+
+  // Feature flag state
+  const [useSpanBasedFlow, setUseSpanBasedFlow] = useState(false);
+
+  // Span-based flow reconstruction (only when feature enabled)
+  const flowEvents = agentFlow?.nodes || [];
+  const { spans, edges: spanEdges, isLoading: isReconstructing } = useInvestigationFlow(
+    selectedAgentId || '',
+    useSpanBasedFlow ? flowEvents : []
+  );
+
+  // Fetch feature flags on mount
+  useEffect(() => {
+    if (user) {
+      featureFlags.fetchFlags(user.id).then(() => {
+        const enabled = featureFlags.isEnabled(FeatureFlag.SPAN_BASED_FLOW);
+        setUseSpanBasedFlow(enabled);
+      }).catch(error => {
+        console.error('Failed to fetch feature flags:', error);
+        // Default to false on error
+        setUseSpanBasedFlow(false);
+      });
+    }
+  }, [user]);
+
+  // Auto-select agent for findings view
+  useEffect(() => {
+    if (activeView === 'findings' && agents.length > 0) {
+      // If already have an agent selected from another view, use that
+      if (selectedAgentId && !selectedFindingsAgentId) {
+        setSelectedFindingsAgentId(selectedAgentId);
+      }
+      // Otherwise select first agent if nothing selected
+      else if (!selectedFindingsAgentId && !selectedAgentId) {
+        setSelectedFindingsAgentId(agents[0].id);
+      }
+    }
+  }, [activeView, agents, selectedFindingsAgentId, selectedAgentId]);
 
   // Persist selected agent across refreshes
   useEffect(() => {
@@ -210,6 +252,7 @@ export default function Home() {
       }
     };
 
+    // Load flow and observability data
     loadFlow();
     loadObservability();
 
@@ -562,6 +605,20 @@ export default function Home() {
   );
 
   // Show loading while checking project status
+  // Auth gate: Show loading while checking authentication
+  if (isAuthLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-vsc-bg">
+        <RefreshCw className="w-8 h-8 text-vsc-accent animate-spin" />
+      </div>
+    );
+  }
+
+  // Auth gate: Show login screen if not authenticated
+  if (!isAuthenticated) {
+    return <AuthScreen />;
+  }
+
   if (isProjectLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-vsc-bg">
@@ -798,10 +855,34 @@ export default function Home() {
               )}
 
               {activeView === 'findings' && (
-                <FindingsList
-                  findings={findings}
-                  onFindingClick={handleFindingClick}
-                />
+                <div className="h-full flex flex-col overflow-hidden">
+                  {/* Agent selector for findings */}
+                  <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2 flex-shrink-0">
+                    <Bug className="w-4 h-4 text-vsc-text-muted" />
+                    <select
+                      value={selectedFindingsAgentId || ''}
+                      onChange={(e) => setSelectedFindingsAgentId(e.target.value || null)}
+                      className="flex-1 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+                    >
+                      {!selectedFindingsAgentId && <option value="">Select an agent...</option>}
+                      {agents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name} ({findings.filter(f => f.agent_id === agent.id).length} findings)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <FindingsList
+                      findings={
+                        selectedFindingsAgentId
+                          ? findings.filter(f => f.agent_id === selectedFindingsAgentId)
+                          : []
+                      }
+                      onFindingClick={handleFindingClick}
+                    />
+                  </div>
+                </div>
               )}
             </div>
           </aside>
@@ -863,24 +944,36 @@ export default function Home() {
               </div>
               <div className="flex-1">
                 {diagramMode === 'investigation' ? (
-                  <FlowVisualization
-                    agentId={selectedAgentId}
-                    flow={agentFlow}
-                    variant="investigation"
-                    onQueueInvestigation={
-                      canQueueInvestigations
-                        ? async (nodeId) => {
-                          if (!selectedAgentId) return;
-                          const res = await agentsApi.queueInvestigation(selectedAgentId, nodeId);
-                          if (!res.queued) {
-                            throw new Error(res.reason || 'Not queued');
+                  useSpanBasedFlow ? (
+                    // New span-based visualization
+                    isReconstructing ? (
+                      <div className="flex items-center justify-center h-full text-vsc-fg">
+                        Reconstructing investigation flow...
+                      </div>
+                    ) : (
+                      <TreeLayout spans={spans} edges={spanEdges} />
+                    )
+                  ) : (
+                    // Legacy flow visualization
+                    <FlowVisualization
+                      agentId={selectedAgentId}
+                      flow={agentFlow}
+                      variant="investigation"
+                      onQueueInvestigation={
+                        canQueueInvestigations
+                          ? async (nodeId) => {
+                            if (!selectedAgentId) return;
+                            const res = await agentsApi.queueInvestigation(selectedAgentId, nodeId);
+                            if (!res.queued) {
+                              throw new Error(res.reason || 'Not queued');
+                            }
+                            const updated = await agentsApi.getFlow(selectedAgentId);
+                            setAgentFlow(updated);
                           }
-                          const updated = await agentsApi.getFlow(selectedAgentId);
-                          setAgentFlow(updated);
-                        }
-                        : undefined
-                    }
-                  />
+                          : undefined
+                      }
+                    />
+                  )
                 ) : (
                   <FlowVisualization
                     agentId={selectedRouteId}

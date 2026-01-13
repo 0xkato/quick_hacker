@@ -571,6 +571,46 @@ return "\n\n".join(parts) + "\n"
 - **Tool Implementation:** `backend/agents/tools.py`
 - **Observability Service:** `backend/services/observability_service.py`
 
+## Agent Integration
+
+### DeepAudit
+
+DeepAudit automatically loads category-specific validity checklists:
+
+```python
+# In case_builder.py
+prompt = self._assemble_prompt_for_category(
+    category="SQL_INJECTION",
+    stage="trace_dataflow",
+    task="Trace user input to database query"
+)
+```
+
+The supervisor passes category information to subagents, which use PromptRouter to assemble the appropriate prompt.
+
+### ReAct Agent
+
+ReAct agent detects category from focus_areas and loads the matching validity checklist:
+
+```python
+# Automatically happens in __init__
+category = self._detect_category_from_focus_areas()
+system_prompt = self._build_system_prompt_with_checklist(category)
+```
+
+### UI Display
+
+Findings with `proof_checklist` show a detailed breakdown in the expanded view:
+
+- ✓ Green checkmark = PROVEN
+- ✗ Red X = DISPROVEN
+- ? Gray question = UNKNOWN
+
+Each checklist item shows:
+- Label (e.g., "Source Controlled Input")
+- Description (e.g., "User/attacker controls the input")
+- Reason from classifier (e.g., "Found request.args.get('id')")
+
 ## Next Steps
 
 - **Verification:** Run all tests to ensure system works end-to-end

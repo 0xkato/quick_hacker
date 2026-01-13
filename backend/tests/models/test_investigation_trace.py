@@ -3,6 +3,9 @@ import pytest
 from datetime import datetime, timezone
 from models.investigation_trace import Span, SpanType, SpanState, SpanOutcome, FocusGap
 from models.investigation_trace import Artifact, ArtifactType
+from models.investigation_trace import (
+    TurnPlan, HypothesisInfo, HypothesisActivity, HypothesisState
+)
 
 def test_span_creation():
     """Span should be created with required fields"""
@@ -351,3 +354,178 @@ def test_artifact_serialization_with_defaults():
     assert result["consumer_spans"] == []
     assert result["created_at"] is None
     assert result["size_bytes"] == 0
+
+def test_turn_plan_creation():
+    """TurnPlan should structure investigation preview"""
+    hypothesis = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Check SQL injection",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.NEW,
+        created_turn_id=1,
+        focus_gap=FocusGap.DATAFLOW_EVIDENCED,
+        focus_note="Need to trace user input to query"
+    )
+
+    plan = TurnPlan(
+        goal="Investigate /login route",
+        hypotheses=[hypothesis],
+        selected_hypothesis_id="hyp_1",
+        selected_span_id="span_hyp_1"
+    )
+
+    assert plan.goal == "Investigate /login route"
+    assert len(plan.hypotheses) == 1
+    assert plan.hypotheses[0].hypothesis_id == "hyp_1"
+    assert plan.selected_hypothesis_id == "hyp_1"
+    assert plan.selected_span_id == "span_hyp_1"
+
+def test_hypothesis_activity_states():
+    """HypothesisActivity should cover all workflow states"""
+    # New hypothesis being created
+    hyp_new = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Test",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.NEW,
+        created_turn_id=1,
+        focus_gap=FocusGap.OTHER
+    )
+
+    # Continuing existing hypothesis
+    hyp_continuing = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Test",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.CONTINUING,
+        created_turn_id=1,
+        focus_gap=FocusGap.OTHER
+    )
+
+    # Revisiting after gap
+    hyp_revisiting = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Test",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.REVISITING,
+        created_turn_id=1,
+        focus_gap=FocusGap.OTHER
+    )
+
+    # Queued for future
+    hyp_queued = HypothesisInfo(
+        hypothesis_id="hyp_2",
+        label="Future work",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.QUEUED,
+        created_turn_id=1,
+        focus_gap=FocusGap.OTHER
+    )
+
+    assert hyp_new.activity == HypothesisActivity.NEW
+    assert hyp_continuing.activity == HypothesisActivity.CONTINUING
+    assert hyp_revisiting.activity == HypothesisActivity.REVISITING
+    assert hyp_queued.activity == HypothesisActivity.QUEUED
+
+def test_hypothesis_info_focus_note_validation():
+    """HypothesisInfo should enforce focus_note max length of 120 chars"""
+    valid_note = "A" * 120  # Exactly 120 chars - should work
+
+    hypothesis = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Test",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.NEW,
+        created_turn_id=1,
+        focus_gap=FocusGap.OTHER,
+        focus_note=valid_note
+    )
+    assert hypothesis.focus_note == valid_note
+
+    # Test that >120 chars raises ValueError
+    invalid_note = "A" * 121  # 121 chars - should fail
+    with pytest.raises(ValueError, match="focus_note must be ≤120 chars"):
+        HypothesisInfo(
+            hypothesis_id="hyp_1",
+            label="Test",
+            state=HypothesisState.OPEN,
+            activity=HypothesisActivity.NEW,
+            created_turn_id=1,
+            focus_gap=FocusGap.OTHER,
+            focus_note=invalid_note
+        )
+
+def test_hypothesis_info_serialization():
+    """HypothesisInfo should serialize to dict correctly"""
+    hypothesis = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Check SQL injection",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.NEW,
+        created_turn_id=1,
+        focus_gap=FocusGap.DATAFLOW_EVIDENCED,
+        parent_hypothesis_id="hyp_parent",
+        focus_note="Test note",
+        span_id="span_1",
+        parent_span_id="span_parent"
+    )
+
+    result = hypothesis.to_dict()
+
+    assert result["hypothesis_id"] == "hyp_1"
+    assert result["label"] == "Check SQL injection"
+    assert result["state"] == "open"  # Enum serialized to string
+    assert result["activity"] == "new"  # Enum serialized to string
+    assert result["created_turn_id"] == 1
+    assert result["focus_gap"] == "dataflow_evidenced"  # Enum serialized to string
+    assert result["parent_hypothesis_id"] == "hyp_parent"
+    assert result["focus_note"] == "Test note"
+    assert result["span_id"] == "span_1"
+    assert result["parent_span_id"] == "span_parent"
+
+    # Verify enums are strings
+    assert isinstance(result["state"], str)
+    assert isinstance(result["activity"], str)
+    assert isinstance(result["focus_gap"], str)
+
+def test_turn_plan_serialization():
+    """TurnPlan should serialize to dict correctly"""
+    hypothesis1 = HypothesisInfo(
+        hypothesis_id="hyp_1",
+        label="Check SQL injection",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.NEW,
+        created_turn_id=1,
+        focus_gap=FocusGap.DATAFLOW_EVIDENCED
+    )
+
+    hypothesis2 = HypothesisInfo(
+        hypothesis_id="hyp_2",
+        label="Check XSS",
+        state=HypothesisState.OPEN,
+        activity=HypothesisActivity.QUEUED,
+        created_turn_id=1,
+        focus_gap=FocusGap.SINK_PRESENT
+    )
+
+    plan = TurnPlan(
+        goal="Investigate /login route",
+        hypotheses=[hypothesis1, hypothesis2],
+        selected_hypothesis_id="hyp_1",
+        selected_span_id="span_hyp_1"
+    )
+
+    result = plan.to_dict()
+
+    assert result["goal"] == "Investigate /login route"
+    assert result["selected_hypothesis_id"] == "hyp_1"
+    assert result["selected_span_id"] == "span_hyp_1"
+    assert len(result["hypotheses"]) == 2
+
+    # Verify hypotheses are serialized correctly
+    assert result["hypotheses"][0]["hypothesis_id"] == "hyp_1"
+    assert result["hypotheses"][0]["state"] == "open"
+    assert result["hypotheses"][0]["activity"] == "new"
+    assert result["hypotheses"][1]["hypothesis_id"] == "hyp_2"
+    assert result["hypotheses"][1]["state"] == "open"
+    assert result["hypotheses"][1]["activity"] == "queued"

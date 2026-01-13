@@ -46,6 +46,21 @@ class FocusGap(str, Enum):
     OTHER = "other"
 
 
+class HypothesisState(str, Enum):
+    """State of hypothesis investigation"""
+    OPEN = "open"
+    COMPLETED = "completed"
+    DISCARDED = "discarded"
+
+
+class HypothesisActivity(str, Enum):
+    """Activity indicator for hypothesis in current turn"""
+    NEW = "new"  # First time creating this hypothesis
+    CONTINUING = "continuing"  # Actively working on it
+    REVISITING = "revisiting"  # Returning after gap >5 turns
+    QUEUED = "queued"  # Declared but not active this turn
+
+
 class ArtifactType(str, Enum):
     """Type of artifact"""
     FILE_SNIPPET = "file_snippet"
@@ -171,4 +186,67 @@ class Artifact:
             "consumer_spans": list(self.consumer_spans),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "size_bytes": self.size_bytes
+        }
+
+
+@dataclass
+class HypothesisInfo:
+    """
+    Hypothesis metadata for turn plan.
+
+    Emitted by agent to declare investigation structure.
+    """
+    hypothesis_id: str
+    label: str
+    state: HypothesisState
+    activity: HypothesisActivity
+    created_turn_id: int
+    focus_gap: FocusGap
+
+    # Optional fields
+    parent_hypothesis_id: Optional[str] = None
+    focus_note: Optional[str] = None  # Max 120 chars
+
+    # Dual-write: Backend may assign these
+    span_id: Optional[str] = None
+    parent_span_id: Optional[str] = None
+
+    def __post_init__(self):
+        """Validate field constraints."""
+        if self.focus_note and len(self.focus_note) > 120:
+            raise ValueError(f"focus_note must be ≤120 chars, got {len(self.focus_note)}")
+
+    def to_dict(self) -> dict:
+        return {
+            "hypothesis_id": self.hypothesis_id,
+            "label": self.label,
+            "state": self.state.value,
+            "activity": self.activity.value,
+            "created_turn_id": self.created_turn_id,
+            "focus_gap": self.focus_gap.value,
+            "parent_hypothesis_id": self.parent_hypothesis_id,
+            "focus_note": self.focus_note,
+            "span_id": self.span_id,
+            "parent_span_id": self.parent_span_id
+        }
+
+
+@dataclass
+class TurnPlan:
+    """
+    Investigation plan for current agent turn.
+
+    Provides preview of what agent will investigate and why.
+    """
+    goal: str
+    hypotheses: list[HypothesisInfo]
+    selected_hypothesis_id: str
+    selected_span_id: str  # CRITICAL: Authoritative routing
+
+    def to_dict(self) -> dict:
+        return {
+            "goal": self.goal,
+            "hypotheses": [h.to_dict() for h in self.hypotheses],
+            "selected_hypothesis_id": self.selected_hypothesis_id,
+            "selected_span_id": self.selected_span_id
         }

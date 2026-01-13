@@ -45,7 +45,7 @@ class FeatureFlagService:
         """Initialize feature flag service with defaults"""
         # Global enable state for each flag
         self._enabled: Dict[FeatureFlag, bool] = {
-            FeatureFlag.SPAN_BASED_FLOW: False,
+            FeatureFlag.SPAN_BASED_FLOW: True,  # ENABLED: New span-based visualization
             FeatureFlag.DUAL_WRITE_MODE: True,  # Default: dual write enabled
         }
 

@@ -77,6 +77,11 @@ class Span:
     # Metadata
     metadata: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        """Validate field constraints."""
+        if self.focus_note and len(self.focus_note) > 120:
+            raise ValueError(f"focus_note must be ≤120 chars, got {len(self.focus_note)}")
+
     def to_dict(self) -> dict:
         """Convert to dict for serialization"""
         return {

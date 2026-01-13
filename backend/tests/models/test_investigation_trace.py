@@ -1,6 +1,6 @@
 """Tests for investigation trace data models"""
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from models.investigation_trace import Span, SpanType, SpanState, SpanOutcome, FocusGap
 
 def test_span_creation():
@@ -61,7 +61,7 @@ def test_span_lifecycle():
     # Complete the span with CONFIRMED outcome
     span.state = SpanState.COMPLETED
     span.outcome = SpanOutcome.CONFIRMED
-    span.completed_at = datetime.utcnow()
+    span.completed_at = datetime.now(timezone.utc)
 
     assert span.state == SpanState.COMPLETED
     assert span.outcome == SpanOutcome.CONFIRMED
@@ -188,3 +188,29 @@ def test_span_enum_serialization():
 
     # All should be strings, not enum objects
     assert all(isinstance(result[key], str) for key in ["span_type", "state", "outcome", "focus_gap"])
+
+def test_span_focus_note_validation():
+    """Span should enforce focus_note max length of 120 chars"""
+    valid_note = "A" * 120  # Exactly 120 chars - should work
+
+    span = Span(
+        span_id="span_test",
+        span_type=SpanType.HYPOTHESIS,
+        hypothesis_id="hyp_1",
+        label="Test",
+        state=SpanState.OPEN,
+        focus_note=valid_note
+    )
+    assert span.focus_note == valid_note
+
+    # Test that >120 chars raises ValueError
+    invalid_note = "A" * 121  # 121 chars - should fail
+    with pytest.raises(ValueError, match="focus_note must be ≤120 chars"):
+        Span(
+            span_id="span_test2",
+            span_type=SpanType.HYPOTHESIS,
+            hypothesis_id="hyp_1",
+            label="Test",
+            state=SpanState.OPEN,
+            focus_note=invalid_note
+        )

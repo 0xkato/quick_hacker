@@ -47,7 +47,7 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 - **Monaco Editor:** VS Code-like editing with syntax highlighting
 - **File Explorer:** Hierarchical tree view with search
 - **Chat Interface:** Query agents about findings with streaming responses
-- **Flow Visualization:** See agent execution timeline and tool calls
+- **Investigation Trace:** Interactive span-based tree/DAG visualization of investigation hypotheses, tool calls, and artifact provenance (feature flag-controlled, enabled by default)
 - **Findings Panel:** Filter, group, and export vulnerability reports
 - **Code Graph:** Interactive call graph exploration with relevance scoring
 
@@ -58,8 +58,9 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 │                      Frontend (Next.js 14 + React 18)                    │
 │                                                                          │
 │  ┌───────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
-│  │  Monaco   │  │   File   │  │  Agent   │  │ Findings │  │  Flow   │ │
-│  │  Editor   │  │ Explorer │  │ Manager  │  │  Panel   │  │  Graph  │ │
+│  │  Monaco   │  │   File   │  │  Agent   │  │ Findings │  │  Tree   │ │
+│  │  Editor   │  │ Explorer │  │ Manager  │  │  Panel   │  │ Layout  │ │
+│  │           │  │          │  │          │  │          │  │ (Spans) │ │
 │  └───────────┘  └──────────┘  └──────────┘  └──────────┘  └─────────┘ │
 └────────────────────────────┬─────────────────────────────────────────────┘
                              │ HTTP/REST + WebSocket
@@ -94,10 +95,12 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 │  │   └─────────────────┘    └──────────────────────────────────┘   │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐  │
-│  │  Project   │  │  Session   │  │    Flow    │  │   Code Graph     │  │
-│  │  Service   │  │  Service   │  │  Tracker   │  │   Service        │  │
-│  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘  │
+│  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌──────────┐  │
+│  │  Project   │  │  Session     │  │  Reconstruction  │  │   Code   │  │
+│  │  Service   │  │  Service     │  │  Service         │  │  Graph   │  │
+│  │            │  │              │  │  (Span-based     │  │ Service  │  │
+│  │            │  │              │  │   DAG builder)   │  │          │  │
+│  └────────────┘  └──────────────┘  └──────────────────┘  └──────────┘  │
 └───────────────────────┬──────────────────────────────────────────────────┘
                         │
 ┌───────────────────────┴──────────────────────────────────────────────────┐
@@ -371,7 +374,9 @@ quick_hack/
 │   │   ├── strict_classifier.py     # Vulnerability classification
 │   │   ├── code_graph_service.py    # Call graph construction
 │   │   ├── flow_tracker.py          # Agent execution tracking
-│   │   └── ... (26 more services)
+│   │   ├── reconstruction_service.py # Span-based DAG reconstruction
+│   │   ├── feature_flags.py         # Feature flag service
+│   │   └── ... (24 more services)
 │   ├── database/                    # SQLAlchemy models
 │   │   ├── models.py                # 6 core models (User, Project, Finding, etc.)
 │   │   ├── connection.py            # Async engine setup
@@ -398,13 +403,15 @@ quick_hack/
 │   │   ├── Agent/                   # Agent manager
 │   │   ├── Chat/                    # Chat interface
 │   │   ├── Findings/                # Findings panel
-│   │   ├── Flow/                    # Flow visualization
-│   │   └── ... (15 component dirs)
+│   │   ├── InvestigationFlow/       # Span-based tree visualization (TreeLayout)
+│   │   ├── Flow/                    # Legacy flow visualization
+│   │   └── ... (14 component dirs)
 │   ├── contexts/                    # React Context providers
 │   │   └── AuthContext.tsx          # Global auth state
 │   ├── hooks/                       # Custom React hooks
 │   │   ├── useAuth.ts
 │   │   ├── useWebSocket.ts
+│   │   ├── useInvestigationFlow.ts  # Span reconstruction hook
 │   │   └── ... (10+ hooks)
 │   └── lib/
 │       ├── api.ts                   # API client with auth
@@ -470,6 +477,9 @@ Unified interface for 4 LLM providers enables easy switching and cost optimizati
 
 ### 8. Disposition-First Triage
 Six nuanced dispositions (not binary "vulnerable/safe") provide clear audit trail and different actions per classification.
+
+### 9. Span-Based Investigation Visualization
+Reconstruction algorithm transforms flat event streams into structured DAG with hypothesis spans, tool call nesting, and artifact provenance. Feature flag-controlled with TreeLayout as default renderer, showing branching investigations with collapse/expand and outcome-based coloring.
 
 See [docs/plans/2026-01-12-architecture-reference.md](docs/plans/2026-01-12-architecture-reference.md) for complete architectural documentation (4,300+ lines covering every major component).
 

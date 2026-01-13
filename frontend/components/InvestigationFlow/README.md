@@ -1,15 +1,17 @@
 # InvestigationFlow Component
 
-React Flow-based visualization for AI security audit investigation traces.
+**Active production component** - React Flow-based visualization for AI security audit investigation traces.
 
 ## Overview
 
-The InvestigationFlow component renders investigation spans as an interactive tree/DAG with:
+The InvestigationFlow component is the **default investigation visualization** system, rendering investigation spans as an interactive tree/DAG with:
 - Outcome-based coloring (confirmed, refuted, inconclusive)
 - Collapse/expand functionality for hypothesis nodes
 - Event and artifact count display
 - Focus gap indicators
-- Simple vertical layout (advanced tree layout planned for future tasks)
+- Artifact provenance tracking with evidence edges
+- Real-time reconstruction from agent events
+- Feature flag-controlled activation (SPAN_BASED_FLOW: enabled by default)
 
 ## Components
 
@@ -172,19 +174,59 @@ When no spans are provided, displays: "No investigation data available"
 
 ## Integration
 
-This component is designed to work with:
-- Backend span/edge data from the reconstruction service (Task 17)
-- Frontend data fetching hooks (Task 19)
-- Investigation detail panel (Task 20)
+This component is **fully integrated** with the investigation trace system:
 
-## Current Limitations
+### Backend Integration
+- **Reconstruction Service** (`backend/services/reconstruction_service.py`): Transforms flat event streams into structured DAG
+- **API Endpoint**: `POST /api/agents/{agent_id}/reconstruct` - Processes events and returns spans/edges
+- **Artifact Service**: Tracks artifact provenance for evidence edges
+- **Feature Flags**: `SPAN_BASED_FLOW` flag controls activation (enabled by default)
 
-**Layout**: Currently uses simple vertical stacking (`y: index * 150`). A proper tree layout algorithm (e.g., dagre) is planned for future tasks to handle complex parent-child relationships and minimize edge crossings.
+### Frontend Integration
+- **useInvestigationFlow Hook** (`hooks/useInvestigationFlow.ts`): Fetches and manages span data
+- **Page Integration** (`app/page.tsx`): Conditional rendering based on feature flag
+- **API Client** (`lib/api.ts`): `agents.reconstruct()` method for backend calls
+
+### Data Flow
+```
+ReactAgent emits events
+  ↓
+FlowService tracks events
+  ↓
+Frontend polls/receives events
+  ↓
+useInvestigationFlow calls POST /reconstruct
+  ↓
+ReconstructionService processes events
+  ↓
+Returns spans + edges + event_to_span
+  ↓
+TreeLayout renders interactive visualization
+```
+
+## Current Status
+
+**Production Ready**: This system is active by default and handles all investigation visualization.
+
+To revert to legacy FlowVisualization:
+```python
+# backend/services/feature_flags.py
+FeatureFlag.SPAN_BASED_FLOW: False  # Change from True
+```
+
+## Architecture Notes
+
+**Layout**: Uses simple vertical stacking for performance. Advanced tree layout (dagre) can be added if complex hierarchies require better positioning.
+
+**Performance**: Optimized with React.memo, useMemo, and O(1) lookups for hidden span detection.
+
+**Error Handling**: Wrapped in ErrorBoundary to prevent crashes from ReactFlow errors.
 
 ## Future Enhancements
 
-- Dagre or hierarchical tree layout algorithm
+- Advanced tree layout algorithm (dagre/hierarchical) for complex DAGs
 - Search and filter functionality
-- Node detail popovers
+- Node detail popovers with event/artifact drill-down
 - Export to PNG/SVG
 - Timeline view toggle
+- Progressive loading for large investigation trees

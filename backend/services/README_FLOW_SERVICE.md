@@ -1,5 +1,7 @@
 # Flow Service - Tree Structure
 
+> **Note:** This is the **legacy** investigation tracking system. The **default system** is now the span-based TreeLayout visualization (see `frontend/components/InvestigationFlow/README.md` and `backend/services/reconstruction_service.py`). This legacy system remains available by disabling the `SPAN_BASED_FLOW` feature flag.
+
 ## Overview
 
 The Flow Service tracks investigation progress as a hierarchical tree showing:
@@ -124,6 +126,7 @@ if not file_node:
 
 ## Frontend Integration
 
+**Legacy System (this document):**
 The FlowVisualization component:
 1. Calculates subtree widths
 2. Positions multiple trees horizontally
@@ -131,6 +134,15 @@ The FlowVisualization component:
 4. Uses colored icons for node types
 
 See `frontend/components/FlowVisualization/FlowVisualization.tsx`
+
+**Current Default System:**
+The TreeLayout component with span-based reconstruction:
+1. Reconstructs investigation DAG from event stream
+2. Shows hypothesis spans with outcome-based coloring
+3. Supports collapse/expand for hypothesis nodes
+4. Displays artifact provenance with evidence edges
+
+See `frontend/components/InvestigationFlow/TreeLayout.tsx` and `frontend/components/InvestigationFlow/README.md`
 
 ## Testing
 

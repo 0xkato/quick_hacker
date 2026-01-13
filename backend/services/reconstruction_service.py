@@ -459,13 +459,28 @@ class ReconstructionService:
 
             if event_type == "tool_call":
                 tool_span_counter += 1
-                tool_name = event_data.get("tool_name", "unknown_tool")
 
-                # Extract file path from tool arguments
+                # Extract tool name from label (FlowNode.label contains tool name)
+                tool_name = event.get("label", "unknown_tool")
+
+                # Also try data.tool_name as fallback
+                if tool_name == "unknown_tool" and isinstance(event_data, dict):
+                    tool_name = event_data.get("tool_name", "unknown_tool")
+
+                # Extract file path from data dictionary
                 file_path = None
-                tool_input = event_data.get("tool_input", {})
-                if isinstance(tool_input, dict):
-                    file_path = tool_input.get("file_path") or tool_input.get("path")
+                if isinstance(event_data, dict):
+                    # Try various common keys for file path
+                    file_path = (
+                        event_data.get("file_path") or
+                        event_data.get("path") or
+                        event_data.get("file")
+                    )
+
+                    # Also check if tool_input exists
+                    tool_input = event_data.get("tool_input", {})
+                    if isinstance(tool_input, dict) and not file_path:
+                        file_path = tool_input.get("file_path") or tool_input.get("path")
 
                 # Determine parent span (file span or root)
                 parent_span_id = unattributed_span.span_id

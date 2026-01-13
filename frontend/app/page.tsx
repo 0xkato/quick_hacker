@@ -163,8 +163,17 @@ export default function Home() {
   const { isConnected } = useWebSocket({
     enabled: isAuthReady,
     onFinding: useCallback((finding: Finding) => {
-      setFindings((prev) => [finding, ...prev]);
-    }, []),
+      // Only add finding if it belongs to an agent in the current project
+      setFindings((prev) => {
+        // Check if this finding's agent belongs to current project
+        const belongsToCurrentProject = agents.some(agent => agent.id === finding.agent_id);
+        if (!belongsToCurrentProject) {
+          console.log(`Ignoring finding from agent ${finding.agent_id} (different project)`);
+          return prev;
+        }
+        return [finding, ...prev];
+      });
+    }, [agents]),
     onProgress: useCallback((agentId: string, progress: AgentProgress) => {
       setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
       // Check for flow updates in progress data

@@ -94,6 +94,56 @@ class ToolCore:
             excluded_dirs=set(self.DEFAULT_EXCLUDED_DIRS),
         )
 
+        # Span context tracking
+        self._current_span_id: str | None = None
+        self._current_hypothesis_id: str | None = None
+
+    def set_span_context(
+        self,
+        span_id: str,
+        hypothesis_id: str | None = None
+    ) -> None:
+        """
+        Set current span context for artifact provenance tracking.
+
+        Args:
+            span_id: Current span being executed
+            hypothesis_id: Optional hypothesis ID
+        """
+        self._current_span_id = span_id
+        self._current_hypothesis_id = hypothesis_id
+
+    def clear_span_context(self) -> None:
+        """Clear current span context."""
+        self._current_span_id = None
+        self._current_hypothesis_id = None
+
+    def _track_artifact_provenance(self, artifact_id: str) -> None:
+        """
+        Track artifact provenance in current span.
+
+        Args:
+            artifact_id: Artifact ID to track
+        """
+        if not self._current_span_id or not self.agent_id:
+            return
+
+        # Import here to avoid circular dependency
+        from services.span_service import span_service
+
+        # Add artifact to span
+        span_service.attach_artifact(
+            agent_id=self.agent_id,
+            span_id=self._current_span_id,
+            artifact_id=artifact_id
+        )
+
+        # Track producer provenance
+        artifact_service.add_producer(
+            span_id=self._current_span_id,
+            artifact_id=artifact_id
+        )
+
     def _validate_path(self, path: str) -> Path:
         """Validate a file path and return resolved Path.
 
@@ -213,6 +263,8 @@ class ToolCore:
                         line_start=start_line,
                         line_end=end_line
                     )
+                    # Track provenance in current span
+                    self._track_artifact_provenance(artifact.artifact_id)
                     return {
                         "content": cached_result,
                         "artifact_id": artifact.artifact_id
@@ -263,6 +315,9 @@ class ToolCore:
             line_start=actual_start,
             line_end=actual_end
         )
+
+        # Track provenance in current span
+        self._track_artifact_provenance(artifact.artifact_id)
 
         # Store in cache if enabled (store content string)
         if self.cache is not None and cache_key is not None:

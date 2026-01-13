@@ -3,6 +3,8 @@ import pytest
 from services.tool_core import ToolCore
 from services.artifact_service import artifact_service
 from models.investigation_trace import ArtifactType, generate_artifact_id
+from services.span_service import span_service
+from models.investigation_trace import SpanType, SpanState
 
 @pytest.fixture
 def tool_core(tmp_path):
@@ -116,3 +118,57 @@ async def test_read_file_with_line_range_creates_artifact(tool_core, tmp_path):
     assert artifact.line_start == 2
     assert artifact.line_end == 4
     assert "test.py:2-4" in artifact.summary
+
+def test_set_current_span_context(tool_core):
+    """ToolCore should track current span context"""
+    # Set span context
+    tool_core.set_span_context(
+        span_id="span_123",
+        hypothesis_id="hyp_1"
+    )
+
+    assert tool_core._current_span_id == "span_123"
+    assert tool_core._current_hypothesis_id == "hyp_1"
+
+def test_clear_span_context(tool_core):
+    """ToolCore should clear span context"""
+    tool_core.set_span_context("span_123", "hyp_1")
+    tool_core.clear_span_context()
+
+    assert tool_core._current_span_id is None
+    assert tool_core._current_hypothesis_id is None
+
+@pytest.mark.asyncio
+async def test_read_file_tracks_provenance(tool_core, tmp_path):
+    """read_file should track artifact provenance in span"""
+    artifact_service.clear_artifacts()
+    span_service.clear_agent_spans("agent_123")
+
+    # Create span
+    span = span_service.create_span(
+        agent_id="agent_123",
+        span_id="span_123",
+        span_type=SpanType.HYPOTHESIS,
+        hypothesis_id="hyp_1",
+        label="Test hypothesis",
+        state=SpanState.OPEN
+    )
+
+    # Set span context
+    tool_core.set_span_context("span_123", "hyp_1")
+
+    # Create test file
+    test_file = tmp_path / "test.py"
+    test_file.write_text("test content")
+
+    # Read file
+    result = await tool_core.read_file("test.py")
+
+    # Verify artifact provenance tracked
+    artifact_id = result["artifact_id"]
+    artifact = artifact_service.get_artifact(artifact_id)
+    assert "span_123" in artifact.producer_spans
+
+    # Verify span has artifact
+    updated_span = span_service.get_span("agent_123", "span_123")
+    assert artifact_id in updated_span.artifact_ids

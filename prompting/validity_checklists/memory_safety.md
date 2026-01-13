@@ -38,11 +38,11 @@ You are analyzing potential memory safety vulnerabilities in C, C++, or Rust cod
 **Tool Call Example:**
 ```json
 {
-  "tool": "RipgrepTool",
+  "tool": "search_code",
   "arguments": {
     "pattern": "(strcpy|strcat|sprintf|gets|malloc|free|unsafe|get_unchecked)\\(",
     "file_pattern": "**/*.{c,cpp,rs}",
-    "case_sensitive": false
+    "max_results": 100
   }
 }
 ```
@@ -88,11 +88,11 @@ You are analyzing potential memory safety vulnerabilities in C, C++, or Rust cod
 **Tool Call Example:**
 ```json
 {
-  "tool": "ReadFileTool",
+  "tool": "read_file",
   "arguments": {
-    "file_path": "src/parser.c",
-    "line_start": 100,
-    "line_end": 150
+    "path": "src/parser.c",
+    "start_line": 100,
+    "end_line": 150
   }
 }
 ```
@@ -113,10 +113,10 @@ You are analyzing potential memory safety vulnerabilities in C, C++, or Rust cod
 **Tool Call Example:**
 ```json
 {
-  "tool": "CallGraphTool",
+  "tool": "find_usages",
   "arguments": {
-    "function_name": "parse_packet",
-    "max_depth": 3
+    "name": "parse_packet",
+    "max_results": 50
   }
 }
 ```

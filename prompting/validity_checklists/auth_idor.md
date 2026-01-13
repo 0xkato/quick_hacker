@@ -15,11 +15,11 @@ You are analyzing a potential authorization bypass or Insecure Direct Object Ref
 **Tool Call Example:**
 ```json
 {
-  "tool": "RipgrepTool",
+  "tool": "search_code",
   "arguments": {
     "pattern": "(User\\.objects\\.get|db\\.query|admin_only|@admin_required)",
     "file_pattern": "**/*.py",
-    "case_sensitive": false
+    "max_results": 100
   }
 }
 ```
@@ -38,8 +38,10 @@ You are analyzing a potential authorization bypass or Insecure Direct Object Ref
 **Tool Call Example:**
 ```json
 {
-  "tool": "GetRoutesTool",
-  "arguments": {}
+  "tool": "get_entry_points",
+  "arguments": {
+    "framework": "flask"
+  }
 }
 ```
 
@@ -60,19 +62,23 @@ You are analyzing a potential authorization bypass or Insecure Direct Object Ref
 **Tool Call Example:**
 ```json
 {
-  "tool": "ReadFileTool",
+  "tool": "read_file",
   "arguments": {
-    "file_path": "app/routes.py",
-    "line_start": 50,
-    "line_end": 80
+    "path": "app/routes.py",
+    "start_line": 50,
+    "end_line": 80
   }
 }
 ```
 
 ```json
 {
-  "tool": "GetAuthGatesTool",
-  "arguments": {}
+  "tool": "search_code",
+  "arguments": {
+    "pattern": "(@login_required|@auth\\.required|@require_auth)",
+    "file_pattern": "**/*.py",
+    "max_results": 50
+  }
 }
 ```
 
@@ -108,11 +114,11 @@ You are analyzing a potential authorization bypass or Insecure Direct Object Ref
 **Tool Call Example:**
 ```json
 {
-  "tool": "RipgrepTool",
+  "tool": "search_code",
   "arguments": {
     "pattern": "(objects\\.get|db\\.query|find_by_id)\\(.*id",
     "file_pattern": "**/*.py",
-    "case_sensitive": false
+    "max_results": 100
   }
 }
 ```
@@ -130,11 +136,11 @@ You are analyzing a potential authorization bypass or Insecure Direct Object Ref
 **Tool Call Example:**
 ```json
 {
-  "tool": "ReadFileTool",
+  "tool": "read_file",
   "arguments": {
-    "file_path": "app/orders.py",
-    "line_start": 20,
-    "line_end": 50
+    "path": "app/orders.py",
+    "start_line": 20,
+    "end_line": 50
   }
 }
 ```
@@ -165,10 +171,11 @@ order = Order.objects.get(id=order_id)  # No ownership check
 **Tool Call Example:**
 ```json
 {
-  "tool": "CallGraphTool",
+  "tool": "trace_data_flow",
   "arguments": {
-    "function_name": "get_order",
-    "max_depth": 2
+    "source": "request.args.get('id')",
+    "file_path": "app/orders.py",
+    "sink_patterns": ["objects.get(", "db.query("]
   }
 }
 ```
@@ -204,8 +211,10 @@ order = Order.objects.get(id=order_id)  # No ownership check
 **Tool Call Example:**
 ```json
 {
-  "tool": "GetRoutesTool",
-  "arguments": {}
+  "tool": "get_entry_points",
+  "arguments": {
+    "framework": "flask"
+  }
 }
 ```
 

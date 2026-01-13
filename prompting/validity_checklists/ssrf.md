@@ -13,11 +13,11 @@ You are analyzing a potential Server-Side Request Forgery (SSRF) vulnerability. 
 **Tool Call Example:**
 ```json
 {
-  "tool": "RipgrepTool",
+  "tool": "search_code",
   "arguments": {
     "pattern": "(requests\\.(get|post)|urllib\\.request|httpx\\.(get|post)|fetch)\\(",
     "file_pattern": "**/*.py",
-    "case_sensitive": false
+    "max_results": 100
   }
 }
 ```
@@ -66,11 +66,11 @@ You are analyzing a potential Server-Side Request Forgery (SSRF) vulnerability. 
 **Tool Call Example:**
 ```json
 {
-  "tool": "ReadFileTool",
+  "tool": "read_file",
   "arguments": {
-    "file_path": "app/webhook.py",
-    "line_start": 30,
-    "line_end": 60
+    "path": "app/webhook.py",
+    "start_line": 30,
+    "end_line": 60
   }
 }
 ```
@@ -91,10 +91,10 @@ You are analyzing a potential Server-Side Request Forgery (SSRF) vulnerability. 
 **Tool Call Example:**
 ```json
 {
-  "tool": "CallGraphTool",
+  "tool": "find_usages",
   "arguments": {
-    "function_name": "trigger_webhook",
-    "max_depth": 2
+    "name": "trigger_webhook",
+    "max_results": 50
   }
 }
 ```
@@ -115,8 +115,10 @@ You are analyzing a potential Server-Side Request Forgery (SSRF) vulnerability. 
 **Tool Call Example:**
 ```json
 {
-  "tool": "GetRoutesTool",
-  "arguments": {}
+  "tool": "get_entry_points",
+  "arguments": {
+    "framework": "flask"
+  }
 }
 ```
 

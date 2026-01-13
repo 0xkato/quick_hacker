@@ -13,11 +13,11 @@ You are analyzing a potential SQL injection vulnerability. Follow this evidence-
 **Tool Call Example:**
 ```json
 {
-  "tool": "RipgrepTool",
+  "tool": "search_code",
   "arguments": {
     "pattern": "(execute|executemany|raw|cursor\\.execute|db\\.query)\\(",
     "file_pattern": "**/*.py",
-    "case_sensitive": false
+    "max_results": 100
   }
 }
 ```
@@ -43,11 +43,11 @@ You are analyzing a potential SQL injection vulnerability. Follow this evidence-
 **Tool Call Example:**
 ```json
 {
-  "tool": "ReadFileTool",
+  "tool": "read_file",
   "arguments": {
-    "file_path": "app/routes.py",
-    "line_start": 20,
-    "line_end": 50
+    "path": "app/routes.py",
+    "start_line": 20,
+    "end_line": 50
   }
 }
 ```
@@ -79,10 +79,11 @@ If you see `execute(f"SELECT * FROM users WHERE id = {user_id}")` or `"... WHERE
 **Tool Call Example:**
 ```json
 {
-  "tool": "CallGraphTool",
+  "tool": "trace_data_flow",
   "arguments": {
-    "function_name": "get_user_by_id",
-    "max_depth": 3
+    "source": "request.args.get('id')",
+    "file_path": "app/routes.py",
+    "sink_patterns": ["execute(", "executemany("]
   }
 }
 ```
@@ -104,8 +105,10 @@ If you see `execute(f"SELECT * FROM users WHERE id = {user_id}")` or `"... WHERE
 **Tool Call Example:**
 ```json
 {
-  "tool": "GetRoutesTool",
-  "arguments": {}
+  "tool": "get_entry_points",
+  "arguments": {
+    "framework": "flask"
+  }
 }
 ```
 
@@ -125,8 +128,12 @@ If you see `execute(f"SELECT * FROM users WHERE id = {user_id}")` or `"... WHERE
 **Tool Call Example:**
 ```json
 {
-  "tool": "GetAuthGatesTool",
-  "arguments": {}
+  "tool": "search_code",
+  "arguments": {
+    "pattern": "(@login_required|@auth\\.required|@require_auth)",
+    "file_pattern": "**/*.py",
+    "max_results": 50
+  }
 }
 ```
 

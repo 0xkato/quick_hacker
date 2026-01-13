@@ -3,7 +3,88 @@
 Generates structured markdown case files from signals for the Auditor to verify.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from services.prompt_router import PromptRouter
+
+
+def _map_signal_type_to_category(signal_type: str) -> Optional[str]:
+    """
+    Map signal_type to vulnerability category for PromptRouter.
+
+    Args:
+        signal_type: Signal type (e.g., "sql_injection_candidate", "ssrf_candidate")
+
+    Returns:
+        Category string (e.g., "SQL_INJECTION", "SSRF") or None if no mapping
+    """
+    # Normalize signal_type to uppercase and remove "_candidate" suffix
+    normalized = signal_type.upper().replace("_CANDIDATE", "")
+
+    # Map to PromptRouter categories
+    category_map = {
+        "SQL_INJECTION": "SQL_INJECTION",
+        "SSRF": "SSRF",
+        "CODE_INJECTION": "CODE_INJECTION",
+        "COMMAND_INJECTION": "COMMAND_INJECTION",
+        "XSS": "XSS",
+        "CROSS_SITE_SCRIPTING": "XSS",
+        "DESERIALIZATION": "DESERIALIZATION",
+        "PATH_TRAVERSAL": "PATH_TRAVERSAL",
+        "AUTH_BYPASS": "AUTH_BYPASS",
+        "IDOR": "IDOR",
+        "MEMORY_SAFETY": "MEMORY_SAFETY",
+    }
+
+    return category_map.get(normalized)
+
+
+def assemble_auditor_prompt_for_signal(signal: Dict[str, Any], case_file_path: str) -> str:
+    """
+    Assemble Auditor prompt using PromptRouter for category-specific validity checklist.
+
+    Args:
+        signal: Signal dictionary containing signal_type
+        case_file_path: Path to the case file for this signal
+
+    Returns:
+        Assembled prompt with base + validity_checklist + task
+    """
+    signal_type = signal.get("signal_type", "unknown")
+    category = _map_signal_type_to_category(signal_type)
+
+    # Build task description
+    task = f"""You are an Auditor subagent.
+
+Your task: Verify the signal in case file {case_file_path}.
+
+Read the case file to understand the signal. Then:
+1. Use targeted code reads to verify the data flow
+2. Use analyze_ast and trace_dataflow to confirm vulnerability
+3. Check for sanitization/validation controls
+4. Assess exploitability
+
+Use the following tools:
+- read_file(path): Read file contents
+- analyze_ast(file_path): Get AST analysis
+- trace_dataflow(file_path, line_number): Trace data flow
+- promote_finding(finding): Promote to Finding (if verified)
+
+Decision:
+- If vulnerability CONFIRMED: Call promote_finding with complete details
+- If MORE INVESTIGATION needed: Write updated signal with refined next_steps
+
+ONLY call promote_finding if you are confident the vulnerability is real and exploitable.
+
+Case file location: {case_file_path}"""
+
+    if category:
+        # Use PromptRouter to assemble prompt with validity checklist
+        router = PromptRouter()
+        modules = router.route(category=category, stage="validate_exploitability")
+        return router.assemble_from_paths(modules, task=task)
+    else:
+        # Fallback: return task without validity checklist
+        return task
 
 
 def build_case_file(signal: Dict[str, Any], code_excerpts: List[Dict[str, Any]]) -> str:

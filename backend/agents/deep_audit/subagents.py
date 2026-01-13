@@ -1,5 +1,8 @@
 """Subagent prompt templates for Deep Audit workers and auditor."""
 
+from typing import Dict, Any
+from agents.deep_audit.case_builder import assemble_auditor_prompt_for_signal
+
 
 REPO_PROFILER_PROMPT = """You are a RepoProfiler subagent.
 
@@ -166,6 +169,20 @@ def get_entrypoint_hunter_prompt(scope_id: str, scope_path: str) -> str:
     return ENTRYPOINT_HUNTER_PROMPT_TEMPLATE.format(scope_id=scope_id, scope_path=scope_path)
 
 
-def get_auditor_prompt(case_file_path: str) -> str:
-    """Get Auditor prompt for a specific case file."""
-    return AUDITOR_PROMPT_TEMPLATE.format(case_file_path=case_file_path)
+def get_auditor_prompt(case_file_path: str, signal: Dict[str, Any] = None) -> str:
+    """
+    Get Auditor prompt for a specific case file.
+
+    Args:
+        case_file_path: Path to the case file
+        signal: Optional signal dictionary for category-specific validity checklist
+
+    Returns:
+        Assembled prompt with validity checklist if signal is provided
+    """
+    if signal:
+        # Use PromptRouter integration for category-specific validity checklist
+        return assemble_auditor_prompt_for_signal(signal, case_file_path)
+    else:
+        # Fallback to original template for backward compatibility
+        return AUDITOR_PROMPT_TEMPLATE.format(case_file_path=case_file_path)

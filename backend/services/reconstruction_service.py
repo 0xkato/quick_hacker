@@ -6,20 +6,17 @@ Implements single-pass streaming reconstruction algorithm with declarative routi
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
-from datetime import datetime
+import logging
 
 from models.investigation_trace import (
     Span,
     SpanType,
     SpanState,
-    SpanOutcome,
     FocusGap,
-    HypothesisState,
-    HypothesisActivity,
-    HypothesisInfo,
-    TurnPlan,
     Artifact,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,12 +119,26 @@ class ReconstructionService:
             event_type = event.get("type")
             event_data = event.get("data", {})
 
+            # CRITICAL: Validate event_id exists
+            if not event_id:
+                logger.error("Event missing 'id' field, skipping: %s", event)
+                continue
+
             if event_type == "turn_plan":
+                # CRITICAL: Validate turn_plan data structure
+                if not isinstance(event_data, dict):
+                    logger.error("turn_plan event has invalid data structure (not dict), skipping event_id=%s", event_id)
+                    continue
+
+                hypotheses_data = event_data.get("hypotheses")
+                if not isinstance(hypotheses_data, list):
+                    logger.error("turn_plan event has invalid hypotheses (not list), skipping event_id=%s", event_id)
+                    continue
+
                 # Create hypothesis spans and update routing
                 turn_id = event_data.get("turn_id")
                 goal = event_data.get("goal", "")
                 stage = event_data.get("stage")
-                hypotheses_data = event_data.get("hypotheses", [])
                 selected_hypothesis_id = event_data.get("selected_hypothesis_id")
                 selected_span_id = event_data.get("selected_span_id")
 
@@ -142,6 +153,11 @@ class ReconstructionService:
 
                     # Deterministic span ID
                     span_id = deterministic_span_id(agent_exec_id, f"hyp__{hypothesis_id}")
+
+                    # CRITICAL: Check for duplicate span_id (silent overwrite prevention)
+                    if span_id in spans:
+                        logger.warning("Span ID already exists, skipping duplicate creation: span_id=%s, hypothesis_id=%s", span_id, hypothesis_id)
+                        continue
 
                     # Track hypothesis -> base span mapping
                     hypothesis_to_base_span[hypothesis_id] = span_id
@@ -280,6 +296,11 @@ class ReconstructionService:
 
         for span_id, span in spans.items():
             if span.parent_span_id:
+                # IMPORTANT: Validate parent exists before creating edge
+                if span.parent_span_id not in spans:
+                    logger.warning("Parent span does not exist, skipping edge creation: parent_span_id=%s, child_span_id=%s", span.parent_span_id, span_id)
+                    continue
+
                 edge_id = f"edge_{span.parent_span_id}_to_{span_id}"
                 edge = Edge(
                     id=edge_id,

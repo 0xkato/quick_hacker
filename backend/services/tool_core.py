@@ -167,10 +167,11 @@ class ToolCore:
         path: str,
         start_line: int | None = None,
         end_line: int | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         """Read file contents with optional line range.
 
         This method is automatically cached if cache is enabled.
+        Creates FILE_SNIPPET artifact for investigation trace.
 
         Args:
             path: Relative path from repo root
@@ -178,7 +179,9 @@ class ToolCore:
             end_line: Ending line (1-indexed, inclusive)
 
         Returns:
-            File content as string, with line numbers if range specified
+            Dict with:
+                - content: File content as string
+                - artifact_id: ID of created artifact
 
         Raises:
             FileNotFoundError: If file doesn't exist
@@ -190,7 +193,6 @@ class ToolCore:
         if self.cache is not None:
             git_head = self.git_head_tracker.get_current_head()
             if git_head is None:
-                # Log degraded state - caching disabled due to git failure
                 logger.debug(
                     "Cache disabled for read_file: git HEAD unavailable for path=%s",
                     path
@@ -203,7 +205,18 @@ class ToolCore:
                 )
                 cached_result = self.cache.get(cache_key)
                 if cached_result is not None:
-                    return cached_result
+                    # Cached results are still strings - convert to dict format
+                    # Create artifact for cached content too
+                    artifact = self._create_file_artifact(
+                        content=cached_result,
+                        file_path=path,
+                        line_start=start_line,
+                        line_end=end_line
+                    )
+                    return {
+                        "content": cached_result,
+                        "artifact_id": artifact.artifact_id
+                    }
 
         # Cache miss or caching disabled - execute tool
         file_path = self._validate_path(path)
@@ -214,7 +227,9 @@ class ToolCore:
 
         # No line range specified - return full content
         if start_line is None and end_line is None:
-            result = content
+            result_content = content
+            actual_start = None
+            actual_end = None
         else:
             # Apply line slicing with clamping
             total_lines = len(lines)
@@ -230,18 +245,33 @@ class ToolCore:
 
             # Guard against start >= end
             if start_idx >= end_idx:
-                result = ""
+                result_content = ""
+                actual_start = start_line
+                actual_end = end_line
             else:
                 sliced = lines[start_idx:end_idx]
                 # Add line numbers
                 numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(sliced)]
-                result = "\n".join(numbered)
+                result_content = "\n".join(numbered)
+                actual_start = start_idx + 1
+                actual_end = end_idx
 
-        # Store in cache if enabled
+        # Create artifact
+        artifact = self._create_file_artifact(
+            content=result_content,
+            file_path=path,
+            line_start=actual_start,
+            line_end=actual_end
+        )
+
+        # Store in cache if enabled (store content string)
         if self.cache is not None and cache_key is not None:
-            self.cache.set(cache_key, result)
+            self.cache.set(cache_key, result_content)
 
-        return result
+        return {
+            "content": result_content,
+            "artifact_id": artifact.artifact_id
+        }
 
     async def list_directory(
         self,

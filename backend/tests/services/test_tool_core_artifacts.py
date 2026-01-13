@@ -74,3 +74,45 @@ def test_artifact_deduplication(tool_core):
 
     # Should be same artifact (content-hash deduplication)
     assert art1.artifact_id == art2.artifact_id
+
+@pytest.mark.asyncio
+async def test_read_file_creates_artifact(tool_core, tmp_path):
+    """read_file should create artifact and return artifact_id"""
+    artifact_service.clear_artifacts()
+
+    # Create test file
+    test_file = tmp_path / "test.py"
+    test_file.write_text("line 1\nline 2\nline 3")
+
+    # Read file
+    result = await tool_core.read_file("test.py")
+
+    # Should return dict with content and artifact_id
+    assert isinstance(result, dict)
+    assert "content" in result
+    assert "artifact_id" in result
+    assert result["content"] == "line 1\nline 2\nline 3"
+
+    # Verify artifact created
+    artifact = artifact_service.get_artifact(result["artifact_id"])
+    assert artifact is not None
+    assert artifact.artifact_type == ArtifactType.FILE_SNIPPET
+    assert artifact.file_path == "test.py"
+
+@pytest.mark.asyncio
+async def test_read_file_with_line_range_creates_artifact(tool_core, tmp_path):
+    """read_file with line range should create artifact with line refs"""
+    artifact_service.clear_artifacts()
+
+    # Create test file
+    test_file = tmp_path / "test.py"
+    test_file.write_text("line 1\nline 2\nline 3\nline 4\nline 5")
+
+    # Read specific lines
+    result = await tool_core.read_file("test.py", start_line=2, end_line=4)
+
+    # Verify artifact has line references
+    artifact = artifact_service.get_artifact(result["artifact_id"])
+    assert artifact.line_start == 2
+    assert artifact.line_end == 4
+    assert "test.py:2-4" in artifact.summary

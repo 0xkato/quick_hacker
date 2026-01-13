@@ -52,3 +52,4 @@ backend/tests/fixtures/generated_fastapi_repo/
 
 # Worktrees
 .worktrees/
+.logs/

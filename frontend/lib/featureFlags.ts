@@ -81,14 +81,23 @@ export class FeatureFlagClient {
     try {
       const url = `${API_BASE}/api/feature-flags?user_id=${encodeURIComponent(userId)}`;
 
+      // Get auth token from localStorage
+      const accessToken = localStorage.getItem('accessToken');
+
       // Note: Using fetch directly here rather than api.ts's request()
       // because we want to handle auth errors gracefully for feature flags.
       // Feature flags should degrade gracefully if auth fails.
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+
+      if (accessToken) {
+        headers['Authorization'] = `Bearer ${accessToken}`;
+      }
+
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
       });
 
       if (!response.ok) {
@@ -146,19 +155,21 @@ export class FeatureFlagClient {
   /**
    * Set safe defaults for all flags.
    * Called when fetch fails or endpoint is unavailable.
+   * Defaults match backend initial state.
    */
   private _setDefaults(): void {
     this.flags.clear();
-    this.flags.set(FeatureFlag.SPAN_BASED_FLOW, false);
+    this.flags.set(FeatureFlag.SPAN_BASED_FLOW, true);  // Match backend default
     this.flags.set(FeatureFlag.DUAL_WRITE_MODE, true);
   }
 
   /**
    * Ensure all flags have a value, using defaults for missing ones.
+   * Defaults match backend initial state.
    */
   private _ensureDefaults(): void {
     if (!this.flags.has(FeatureFlag.SPAN_BASED_FLOW)) {
-      this.flags.set(FeatureFlag.SPAN_BASED_FLOW, false);
+      this.flags.set(FeatureFlag.SPAN_BASED_FLOW, true);  // Match backend default
     }
     if (!this.flags.has(FeatureFlag.DUAL_WRITE_MODE)) {
       this.flags.set(FeatureFlag.DUAL_WRITE_MODE, true);

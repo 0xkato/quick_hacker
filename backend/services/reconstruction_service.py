@@ -424,12 +424,14 @@ class ReconstructionService:
         agent_exec_id: str
     ):
         """
-        Fallback algorithm: Create spans from tool_call groupings with file-based hierarchy.
+        Fallback algorithm: Create investigation phases from tool call clustering.
 
         When no turn_plan events exist, creates hierarchy:
         - Root span: "Investigation"
-        - File spans: One per unique file being analyzed
-        - Tool spans: Grouped under their target file
+        - Phase spans: Groups of ~5-10 related tool calls (investigation phases)
+        - Tool spans: Individual tool calls within each phase
+
+        Phases are detected by context shifts (file changes, search pattern changes).
 
         Args:
             unattributed_span: The single unattributed span
@@ -443,14 +445,16 @@ class ReconstructionService:
         unattributed_span.span_type = SpanType.HYPOTHESIS
         unattributed_span.event_ids = []  # Clear, will reassign
 
-        # Track file spans for grouping
-        file_spans: Dict[str, str] = {}  # file_path -> span_id
-        file_span_counter = 0
+        # Track investigation phases
+        phase_counter = 0
+        current_phase_span_id = None
+        current_phase_tool_count = 0
+        current_phase_context = None  # Track current file/search context
+        MAX_TOOLS_PER_PHASE = 8
 
         # Group tool_call with their results
         tool_span_counter = 0
         pending_tool_call = None
-        pending_tool_call_data = None
 
         for event in sorted_events:
             event_id = event.get("id")
@@ -460,61 +464,66 @@ class ReconstructionService:
             if event_type == "tool_call":
                 tool_span_counter += 1
 
-                # Extract tool name from label (FlowNode.label contains tool name)
+                # Extract tool name and context
                 tool_name = event.get("label", "unknown_tool")
-
-                # Also try data.tool_name as fallback
                 if tool_name == "unknown_tool" and isinstance(event_data, dict):
                     tool_name = event_data.get("tool_name", "unknown_tool")
 
-                # Extract file path from data.args (FlowNode stores tool arguments in data.args)
-                file_path = None
+                # Extract context (file path or search pattern) for phase detection
+                context = None
                 if isinstance(event_data, dict):
-                    # FlowNode structure: data = {"tool": "read_file", "args": {"path": "..."}}
                     args = event_data.get("args", {})
                     if isinstance(args, dict):
-                        # Try common argument names for file path
-                        file_path = (
-                            args.get("path") or
-                            args.get("file_path") or
-                            args.get("file")
-                        )
+                        # For file-based tools, use file path
+                        context = args.get("path") or args.get("file_path")
+                        # For search tools, use pattern
+                        if not context:
+                            context = args.get("pattern") or args.get("query")
 
-                    # Fallback: check top-level data keys
-                    if not file_path:
-                        file_path = (
-                            event_data.get("file_path") or
-                            event_data.get("path") or
-                            event_data.get("file")
-                        )
+                # Detect phase boundary (start new phase if needed)
+                should_create_new_phase = (
+                    current_phase_span_id is None or  # First tool
+                    current_phase_tool_count >= MAX_TOOLS_PER_PHASE or  # Hit max tools
+                    (context and current_phase_context and context != current_phase_context)  # Context shift
+                )
 
-                # Determine parent span (file span or root)
-                parent_span_id = unattributed_span.span_id
-                if file_path:
-                    # Get or create file span
-                    if file_path not in file_spans:
-                        file_span_counter += 1
-                        file_span_id = deterministic_span_id(agent_exec_id, f"file_{file_span_counter}")
+                if should_create_new_phase:
+                    # Mark previous phase as completed
+                    if current_phase_span_id and current_phase_span_id in spans:
+                        spans[current_phase_span_id].state = SpanState.COMPLETED
 
-                        # Extract just filename for label
-                        filename = file_path.split('/')[-1] if '/' in file_path else file_path
+                    # Create new phase span
+                    phase_counter += 1
+                    phase_span_id = deterministic_span_id(agent_exec_id, f"phase_{phase_counter}")
 
-                        file_span = Span(
-                            span_id=file_span_id,
-                            span_type=SpanType.HYPOTHESIS,
-                            hypothesis_id=f"file_{file_span_counter}",
-                            label=f"📄 {filename}",
-                            state=SpanState.OPEN,
-                            parent_span_id=unattributed_span.span_id,
-                            event_ids=[],
-                            artifact_ids=[],
-                        )
-                        spans[file_span_id] = file_span
-                        file_spans[file_path] = file_span_id
+                    # Generate phase label based on context
+                    if context:
+                        if '/' in str(context):  # Looks like file path
+                            filename = str(context).split('/')[-1]
+                            phase_label = f"Phase {phase_counter}: {filename}"
+                        else:  # Search pattern or other
+                            phase_label = f"Phase {phase_counter}: {str(context)[:30]}"
+                    else:
+                        phase_label = f"Phase {phase_counter}: Investigation"
 
-                    parent_span_id = file_spans[file_path]
+                    phase_span = Span(
+                        span_id=phase_span_id,
+                        span_type=SpanType.HYPOTHESIS,
+                        hypothesis_id=f"phase_{phase_counter}",
+                        label=phase_label,
+                        state=SpanState.OPEN,
+                        parent_span_id=unattributed_span.span_id,
+                        event_ids=[],
+                        artifact_ids=[],
+                    )
+                    spans[phase_span_id] = phase_span
 
-                # Create tool span
+                    # Update phase tracking
+                    current_phase_span_id = phase_span_id
+                    current_phase_tool_count = 0
+                    current_phase_context = context
+
+                # Create tool span under current phase
                 tool_span_id = deterministic_span_id(agent_exec_id, f"tool_{tool_span_counter}")
                 tool_span = Span(
                     span_id=tool_span_id,
@@ -522,16 +531,18 @@ class ReconstructionService:
                     hypothesis_id=f"tool_{tool_span_counter}",
                     label=f"{tool_name}",
                     state=SpanState.OPEN,
-                    parent_span_id=parent_span_id,
+                    parent_span_id=current_phase_span_id,
                     event_ids=[event_id],
                     artifact_ids=[],
                 )
                 spans[tool_span_id] = tool_span
                 event_to_span[event_id] = tool_span_id
 
+                # Update phase tool count
+                current_phase_tool_count += 1
+
                 # Track for result pairing
                 pending_tool_call = tool_span_id
-                pending_tool_call_data = {"file_path": file_path}
 
             elif event_type == "tool_result":
                 # Attach to pending tool call if exists
@@ -548,16 +559,7 @@ class ReconstructionService:
                     else:
                         spans[pending_tool_call].label += " ✓"
 
-                    # Mark parent file span as completed if exists
-                    if pending_tool_call_data and pending_tool_call_data.get("file_path"):
-                        file_path = pending_tool_call_data["file_path"]
-                        if file_path in file_spans:
-                            file_span_id = file_spans[file_path]
-                            if file_span_id in spans:
-                                spans[file_span_id].state = SpanState.COMPLETED
-
                     pending_tool_call = None
-                    pending_tool_call_data = None
                 else:
                     # Orphan result - attach to root
                     unattributed_span.event_ids.append(event_id)
@@ -567,6 +569,10 @@ class ReconstructionService:
                 # Other events (llm_request, finding, etc.) - attach to root
                 unattributed_span.event_ids.append(event_id)
                 event_to_span[event_id] = unattributed_span.span_id
+
+        # Mark final phase as completed
+        if current_phase_span_id and current_phase_span_id in spans:
+            spans[current_phase_span_id].state = SpanState.COMPLETED
 
 
 # Export global instance

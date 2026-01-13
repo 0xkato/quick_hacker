@@ -415,17 +415,17 @@ class ReActSecurityAgent:
 
         focus_text = " ".join(self.focus_areas).lower()
 
-        # Simple keyword matching (can be improved)
-        if "sql" in focus_text or "injection" in focus_text:
+        # Check specific injection types first, THEN generic SQL/injection
+        if "command" in focus_text and "injection" in focus_text:
+            return "COMMAND_INJECTION"
+        elif "code injection" in focus_text or ("code" in focus_text and "injection" in focus_text):
+            return "CODE_INJECTION"
+        elif "sql" in focus_text or "injection" in focus_text:
             return "SQL_INJECTION"
         elif "xss" in focus_text or "cross-site" in focus_text:
             return "XSS"
         elif "ssrf" in focus_text:
             return "SSRF"
-        elif "command" in focus_text:
-            return "COMMAND_INJECTION"
-        elif "code injection" in focus_text:
-            return "CODE_INJECTION"
         elif "path traversal" in focus_text or "directory traversal" in focus_text:
             return "PATH_TRAVERSAL"
         elif "deserial" in focus_text:

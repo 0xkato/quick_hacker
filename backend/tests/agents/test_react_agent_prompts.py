@@ -107,3 +107,47 @@ def test_react_agent_falls_back_without_focus_areas():
     assert "security_control_bypassed" not in prompt
     # But should include generic ReAct instructions
     assert len(prompt) > 0
+
+def test_react_agent_detects_command_injection_not_sql():
+    """Test that 'command injection' focus detects COMMAND_INJECTION, not SQL_INJECTION."""
+    request = AgentCreateRequest(
+        repo_id="test-repo",
+        agent_type=AgentType.QUICK_AUDIT,
+        provider_config=ProviderConfig(
+            provider=ProviderType.ANTHROPIC,
+            model="claude-sonnet-4-20250514",
+            api_key="test-key"
+        ),
+        focus_areas=["command injection"]
+    )
+
+    agent = ReActSecurityAgent(
+        request=request,
+        repo_path="/tmp/test"
+    )
+
+    # Should detect COMMAND_INJECTION
+    category = agent._detect_category_from_focus_areas()
+    assert category == "COMMAND_INJECTION", f"Expected COMMAND_INJECTION but got {category}"
+
+def test_react_agent_detects_code_injection_not_sql():
+    """Test that 'code injection' focus detects CODE_INJECTION, not SQL_INJECTION."""
+    request = AgentCreateRequest(
+        repo_id="test-repo",
+        agent_type=AgentType.QUICK_AUDIT,
+        provider_config=ProviderConfig(
+            provider=ProviderType.ANTHROPIC,
+            model="claude-sonnet-4-20250514",
+            api_key="test-key"
+        ),
+        focus_areas=["code injection"]
+    )
+
+    agent = ReActSecurityAgent(
+        request=request,
+        repo_path="/tmp/test"
+    )
+
+    # Should detect CODE_INJECTION
+    category = agent._detect_category_from_focus_areas()
+    assert category == "CODE_INJECTION", f"Expected CODE_INJECTION but got {category}"

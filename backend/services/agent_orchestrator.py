@@ -25,6 +25,7 @@ from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import ClaudeSDKProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
 from services.tool_core import ToolCore
+from services.tool_cache import ToolCache
 from services import git_service
 from services.project_service import project_service
 from services.settings_service import settings_service
@@ -747,12 +748,21 @@ class AgentOrchestrator:
             tool_core=None,  # Will be set after tool_core is created
         )
 
+        # Create cache if enabled
+        cache = None
+        if settings.tool_cache_enabled:
+            cache = ToolCache(
+                max_size=settings.tool_cache_max_size,
+                ttl_seconds=settings.tool_cache_ttl_seconds,
+            )
+
         # Create ToolCore with limits factory from orchestrator
         tool_core = ToolCore(
             repo_path=agent.repo_path,
             project_id=agent.repo_id,
             agent_id=agent_id,
             get_scan_limits=sdk_orchestrator.make_fresh_limits,
+            cache=cache,
         )
 
         # Create ClaudeSDKProvider

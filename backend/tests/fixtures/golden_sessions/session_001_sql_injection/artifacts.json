@@ -1,0 +1,8 @@
+[
+  {
+    "artifact_id": "artifact_1",
+    "type": "source_location",
+    "file_path": "app/routes.py",
+    "line_number": 45
+  }
+]

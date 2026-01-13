@@ -1,0 +1,6 @@
+{"event": "hypothesis_started", "span_id": "hyp_1", "timestamp": "2026-01-13T10:00:00Z"}
+{"event": "tool_call", "span_id": "tool_1", "parent_span_id": "hyp_1", "tool": "read_file", "arguments": {"path": "app/routes.py", "start_line": 1, "end_line": 50}, "timestamp": "2026-01-13T10:00:01Z"}
+{"event": "tool_result", "span_id": "tool_1", "result": "...", "timestamp": "2026-01-13T10:00:02Z"}
+{"event": "critic_started", "span_id": "critic_1", "parent_span_id": "hyp_1", "pass_number": 1, "timestamp": "2026-01-13T10:00:05Z"}
+{"event": "critic_decision", "span_id": "critic_1", "decision": "CONTINUE", "timestamp": "2026-01-13T10:00:06Z"}
+{"event": "critic_completed", "span_id": "critic_1", "timestamp": "2026-01-13T10:00:07Z"}

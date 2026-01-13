@@ -1,0 +1,7 @@
+{
+  "session_id": "session_001",
+  "category": "SQL_INJECTION",
+  "agent_type": "DeepAudit",
+  "total_budget_seconds": 300,
+  "expected_disposition": "VALID_SECURITY_ISSUE"
+}

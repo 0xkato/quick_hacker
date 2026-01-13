@@ -1,0 +1,22 @@
+{
+  "spans": [
+    {
+      "span_id": "hyp_1",
+      "parent_span_id": null,
+      "start_time": "2026-01-13T10:00:00Z",
+      "children": ["tool_1", "critic_1"]
+    },
+    {
+      "span_id": "tool_1",
+      "parent_span_id": "hyp_1",
+      "start_time": "2026-01-13T10:00:01Z",
+      "children": []
+    },
+    {
+      "span_id": "critic_1",
+      "parent_span_id": "hyp_1",
+      "start_time": "2026-01-13T10:00:05Z",
+      "children": []
+    }
+  ]
+}

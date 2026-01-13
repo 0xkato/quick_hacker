@@ -51,6 +51,10 @@ def test_map_signal_type_to_category():
     # Test unknown type
     assert _map_signal_type_to_category("unknown_type") is None
 
+def test_map_signal_type_to_category_handles_none():
+    """Test that None signal_type returns None without crashing."""
+    assert _map_signal_type_to_category(None) is None
+
 def test_assemble_auditor_prompt_for_sql_injection_signal():
     """Test assembling auditor prompt with SQL injection validity checklist."""
     signal = {
@@ -101,6 +105,28 @@ def test_assemble_auditor_prompt_for_unknown_signal_type():
         "line_range": [10, 20],
     }
     case_file_path = "/memories/cases/test_case_3.md"
+
+    prompt = assemble_auditor_prompt_for_signal(signal, case_file_path)
+
+    # Verify prompt includes the case file path
+    assert case_file_path in prompt
+
+    # Verify prompt does NOT include validity checklist (fallback mode)
+    assert "SQL Injection Proof Checklist" not in prompt
+    assert "XSS" not in prompt
+
+    # But should still have basic auditor instructions
+    assert "Auditor subagent" in prompt
+
+def test_assemble_auditor_prompt_for_none_signal_type():
+    """Test assembling auditor prompt when signal_type is None (fallback)."""
+    signal = {
+        "signal_id": "test_signal_none",
+        "signal_type": None,
+        "file_path": "app/unknown.py",
+        "line_range": [10, 20],
+    }
+    case_file_path = "/memories/cases/test_case_none.md"
 
     prompt = assemble_auditor_prompt_for_signal(signal, case_file_path)
 

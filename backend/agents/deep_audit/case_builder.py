@@ -30,16 +30,20 @@ class CaseBuilder:
         return router.assemble_from_paths(modules, task=task)
 
 
-def _map_signal_type_to_category(signal_type: str) -> Optional[str]:
+def _map_signal_type_to_category(signal_type: Optional[str]) -> Optional[str]:
     """
     Map signal_type to vulnerability category for PromptRouter.
 
     Args:
-        signal_type: Signal type (e.g., "sql_injection_candidate", "ssrf_candidate")
+        signal_type: Signal type (e.g., "sql_injection_candidate", "ssrf_candidate") or None
 
     Returns:
         Category string (e.g., "SQL_INJECTION", "SSRF") or None if no mapping
     """
+    # Handle None
+    if signal_type is None:
+        return None
+
     # Normalize signal_type to uppercase and remove "_candidate" suffix
     normalized = signal_type.upper().replace("_CANDIDATE", "")
 

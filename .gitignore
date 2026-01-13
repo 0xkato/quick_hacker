@@ -34,6 +34,7 @@ npm-debug.log*
 coverage/
 .coverage
 htmlcov/
+.pytest_cache/
 
 # Runtime data
 backend/data/

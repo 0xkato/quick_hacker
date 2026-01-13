@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from routers import git, files, agents, websocket, projects, flow, auth, call_tree
+from routers import git, files, agents, websocket, projects, flow, auth, call_tree, cache
 from routers import settings as settings_router
 from routers import chat as chat_router
 from routers import graph as graph_router
@@ -129,6 +129,12 @@ app.include_router(auth.router)
 app.include_router(
     session_router.router,
     prefix="/api",
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    cache.router,
+    prefix="/api",
+    tags=["Cache"],
     dependencies=[Depends(require_auth)],
 )
 

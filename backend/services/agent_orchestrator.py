@@ -1,10 +1,13 @@
 """Agent orchestrator for managing multiple concurrent agents."""
 
 import asyncio
+import logging
 from datetime import datetime
 from typing import Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from config import settings
 from middleware.auth import AuthContext, get_user_api_key_for_provider
@@ -751,10 +754,21 @@ class AgentOrchestrator:
         # Create cache if enabled
         cache = None
         if settings.tool_cache_enabled:
-            cache = ToolCache(
-                max_size=settings.tool_cache_max_size,
-                ttl_seconds=settings.tool_cache_ttl_seconds,
-            )
+            try:
+                cache = ToolCache(
+                    max_size=settings.tool_cache_max_size,
+                    ttl_seconds=settings.tool_cache_ttl_seconds,
+                )
+            except ValueError as e:
+                # This should never happen due to Pydantic validation, but handle gracefully
+                logger.error(
+                    "Failed to initialize tool cache with max_size=%d, ttl_seconds=%d: %s",
+                    settings.tool_cache_max_size,
+                    settings.tool_cache_ttl_seconds,
+                    str(e)
+                )
+                # Continue without cache rather than failing agent creation
+                cache = None
 
         # Create ToolCore with limits factory from orchestrator
         tool_core = ToolCore(

@@ -1175,6 +1175,35 @@ class AgentOrchestrator:
             "max_concurrent": settings.max_concurrent_agents,
         }
 
+    async def get_cache_metrics(self) -> dict[str, int]:
+        """Aggregate cache metrics from all active agents.
+
+        Returns:
+            Dictionary with total_hits, total_misses, total_size, cache_count
+        """
+        total_hits = 0
+        total_misses = 0
+        total_size = 0
+        cache_count = 0
+
+        async with self._lock:
+            for agent in self._agents.values():
+                if hasattr(agent, 'tool_core') and hasattr(agent.tool_core, 'cache'):
+                    cache = agent.tool_core.cache
+                    if cache is not None:
+                        metrics = cache.get_metrics()
+                        total_hits += metrics["hits"]
+                        total_misses += metrics["misses"]
+                        total_size += metrics["size"]
+                        cache_count += 1
+
+        return {
+            "total_hits": total_hits,
+            "total_misses": total_misses,
+            "total_size": total_size,
+            "cache_count": cache_count,
+        }
+
 
 # Global orchestrator instance
 orchestrator = AgentOrchestrator()

@@ -5,17 +5,23 @@ from typing import Dict, Any
 
 from config import settings
 from middleware.auth import require_auth
-from services.agent_orchestrator import orchestrator
+from services.agent_orchestrator import orchestrator as agent_orchestrator
 
 router = APIRouter()
 
 
 @router.get("/cache/metrics")
-async def get_cache_metrics(_: str = Depends(require_auth)) -> Dict[str, Any]:
+async def get_cache_metrics(_auth: Depends = Depends(require_auth)) -> Dict[str, Any]:
     """Get tool cache performance metrics.
 
     Returns:
-        Cache statistics including hits, misses, hit rate, and size
+        Dictionary with:
+        - enabled: Whether caching is configured
+        - hits: Total cache hits across all agents
+        - misses: Total cache misses across all agents
+        - hit_rate: Overall hit rate (0.0-1.0)
+        - size: Total number of cached entries
+        - cache_count: Number of agent caches aggregated
     """
     # Check if caching is enabled
     if not settings.tool_cache_enabled:
@@ -27,34 +33,18 @@ async def get_cache_metrics(_: str = Depends(require_auth)) -> Dict[str, Any]:
             "size": 0,
         }
 
-    # Aggregate metrics from all active agents
-    # NOTE: This is a simplified approach. In production, you might want
-    # a global cache or cache manager that tracks all caches.
-    total_hits = 0
-    total_misses = 0
-    total_size = 0
-    cache_count = 0
-
-    async with orchestrator._lock:
-        for agent in orchestrator._agents.values():
-            if hasattr(agent, 'tool_core') and hasattr(agent.tool_core, 'cache'):
-                cache = agent.tool_core.cache
-                if cache is not None:
-                    metrics = cache.get_metrics()
-                    total_hits += metrics["hits"]
-                    total_misses += metrics["misses"]
-                    total_size += metrics["size"]
-                    cache_count += 1
+    # Get aggregated metrics from orchestrator
+    metrics = await agent_orchestrator.get_cache_metrics()
 
     # Calculate aggregate hit rate
-    total_requests = total_hits + total_misses
-    hit_rate = total_hits / total_requests if total_requests > 0 else 0.0
+    total_requests = metrics["total_hits"] + metrics["total_misses"]
+    hit_rate = metrics["total_hits"] / total_requests if total_requests > 0 else 0.0
 
     return {
         "enabled": True,
-        "hits": total_hits,
-        "misses": total_misses,
+        "hits": metrics["total_hits"],
+        "misses": metrics["total_misses"],
         "hit_rate": hit_rate,
-        "size": total_size,
-        "cache_count": cache_count,
+        "size": metrics["total_size"],
+        "cache_count": metrics["cache_count"],
     }

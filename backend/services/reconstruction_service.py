@@ -424,11 +424,12 @@ class ReconstructionService:
         agent_exec_id: str
     ):
         """
-        Fallback algorithm: Create spans from tool_call groupings.
+        Fallback algorithm: Create spans from tool_call groupings with file-based hierarchy.
 
-        When no turn_plan events exist, this creates a simple hierarchy:
-        - Root span: "Investigation" (replaces "Unattributed Events")
-        - Child spans: One per tool call with its result
+        When no turn_plan events exist, creates hierarchy:
+        - Root span: "Investigation"
+        - File spans: One per unique file being analyzed
+        - Tool spans: Grouped under their target file
 
         Args:
             unattributed_span: The single unattributed span
@@ -442,10 +443,14 @@ class ReconstructionService:
         unattributed_span.span_type = SpanType.HYPOTHESIS
         unattributed_span.event_ids = []  # Clear, will reassign
 
+        # Track file spans for grouping
+        file_spans: Dict[str, str] = {}  # file_path -> span_id
+        file_span_counter = 0
+
         # Group tool_call with their results
         tool_span_counter = 0
         pending_tool_call = None
-        pending_tool_call_event_id = None
+        pending_tool_call_data = None
 
         for event in sorted_events:
             event_id = event.get("id")
@@ -453,18 +458,50 @@ class ReconstructionService:
             event_data = event.get("data", {})
 
             if event_type == "tool_call":
-                # Create a new span for this tool call
                 tool_span_counter += 1
                 tool_name = event_data.get("tool_name", "unknown_tool")
-                tool_span_id = deterministic_span_id(agent_exec_id, f"tool_{tool_span_counter}")
 
+                # Extract file path from tool arguments
+                file_path = None
+                tool_input = event_data.get("tool_input", {})
+                if isinstance(tool_input, dict):
+                    file_path = tool_input.get("file_path") or tool_input.get("path")
+
+                # Determine parent span (file span or root)
+                parent_span_id = unattributed_span.span_id
+                if file_path:
+                    # Get or create file span
+                    if file_path not in file_spans:
+                        file_span_counter += 1
+                        file_span_id = deterministic_span_id(agent_exec_id, f"file_{file_span_counter}")
+
+                        # Extract just filename for label
+                        filename = file_path.split('/')[-1] if '/' in file_path else file_path
+
+                        file_span = Span(
+                            span_id=file_span_id,
+                            span_type=SpanType.HYPOTHESIS,
+                            hypothesis_id=f"file_{file_span_counter}",
+                            label=f"📄 {filename}",
+                            state=SpanState.OPEN,
+                            parent_span_id=unattributed_span.span_id,
+                            event_ids=[],
+                            artifact_ids=[],
+                        )
+                        spans[file_span_id] = file_span
+                        file_spans[file_path] = file_span_id
+
+                    parent_span_id = file_spans[file_path]
+
+                # Create tool span
+                tool_span_id = deterministic_span_id(agent_exec_id, f"tool_{tool_span_counter}")
                 tool_span = Span(
                     span_id=tool_span_id,
                     span_type=SpanType.HYPOTHESIS,
                     hypothesis_id=f"tool_{tool_span_counter}",
                     label=f"{tool_name}",
                     state=SpanState.OPEN,
-                    parent_span_id=unattributed_span.span_id,
+                    parent_span_id=parent_span_id,
                     event_ids=[event_id],
                     artifact_ids=[],
                 )
@@ -473,7 +510,7 @@ class ReconstructionService:
 
                 # Track for result pairing
                 pending_tool_call = tool_span_id
-                pending_tool_call_event_id = event_id
+                pending_tool_call_data = {"file_path": file_path}
 
             elif event_type == "tool_result":
                 # Attach to pending tool call if exists
@@ -486,12 +523,20 @@ class ReconstructionService:
 
                     # Check for success/error
                     if event_data.get("is_error"):
-                        spans[pending_tool_call].label += " (error)"
+                        spans[pending_tool_call].label += " ❌"
                     else:
                         spans[pending_tool_call].label += " ✓"
 
+                    # Mark parent file span as completed if exists
+                    if pending_tool_call_data and pending_tool_call_data.get("file_path"):
+                        file_path = pending_tool_call_data["file_path"]
+                        if file_path in file_spans:
+                            file_span_id = file_spans[file_path]
+                            if file_span_id in spans:
+                                spans[file_span_id].state = SpanState.COMPLETED
+
                     pending_tool_call = None
-                    pending_tool_call_event_id = None
+                    pending_tool_call_data = None
                 else:
                     # Orphan result - attach to root
                     unattributed_span.event_ids.append(event_id)

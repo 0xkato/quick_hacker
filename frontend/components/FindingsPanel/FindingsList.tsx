@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
+import ProofChecklistView from './ProofChecklistView';
 
 // Classification badge colors and labels
 const CLASSIFICATION_COLORS: Record<FindingClassification, string> = {
@@ -270,6 +271,13 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
                   <li key={idx}>{reason}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* Proof checklist */}
+          {finding.proof_checklist && (
+            <div className="mt-4">
+              <ProofChecklistView checklist={finding.proof_checklist} />
             </div>
           )}
 

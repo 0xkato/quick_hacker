@@ -11,6 +11,8 @@ from typing import Optional, Callable, Literal
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 
+from services.feature_flags import feature_flags, FeatureFlag
+
 
 @dataclass
 class FlowContext:
@@ -271,11 +273,40 @@ class FlowService:
         confidence_score: Optional[float] = None,
         set_current: bool = True,
         auto_parent: bool = False,
+        span_id: Optional[str] = None,
+        hypothesis_id: Optional[str] = None,
     ) -> FlowNode:
-        """Add a node to the flow."""
+        """Add a node to the flow.
+
+        Span fields (span_id, hypothesis_id) are only emitted when the
+        DUAL_WRITE_MODE feature flag is enabled, supporting gradual migration
+        from legacy format to span-based format.
+
+        Args:
+            agent_id: Agent identifier
+            node_type: Type of node to create
+            label: Human-readable label for the node
+            data: Optional data dictionary
+            parent_id: Optional parent node ID for explicit parent relationship
+            edge_label: Optional label for the edge from parent to this node
+            llm_reasoning: Optional LLM reasoning text
+            code_context: Optional code context
+            tool_result_summary: Optional tool result summary
+            confidence_score: Optional confidence score (0.0-1.0)
+            set_current: Whether to set this node as current in flow
+            auto_parent: Whether to auto-determine parent based on node type
+            span_id: Optional span ID (only emitted if DUAL_WRITE_MODE enabled)
+            hypothesis_id: Optional hypothesis ID (only emitted if DUAL_WRITE_MODE enabled)
+
+        Returns:
+            The created FlowNode
+        """
         flow = self._flows.get(agent_id)
         if not flow:
             flow = self.initialize_flow(agent_id)
+
+        # Check dual-write mode flag
+        dual_write_enabled = feature_flags.is_enabled(FeatureFlag.DUAL_WRITE_MODE)
 
         # Determine parent based on context if not explicitly provided
         if parent_id is None and auto_parent:
@@ -304,6 +335,8 @@ class FlowService:
             code_context=code_context,
             tool_result_summary=tool_result_summary,
             confidence_score=confidence_score,
+            span_id=span_id if dual_write_enabled else None,
+            hypothesis_id=hypothesis_id if dual_write_enabled else None,
         )
 
         flow.nodes.append(node)
@@ -457,6 +490,10 @@ class FlowService:
         Creates a turn_plan node with full hypothesis metadata and updates
         flow context to route subsequent actions to the selected span.
 
+        Span fields (span_id, hypothesis_id) are only emitted when the
+        DUAL_WRITE_MODE feature flag is enabled, supporting gradual migration
+        from legacy format to span-based format.
+
         Args:
             agent_id: Agent identifier
             turn_plan: TurnPlan instance with hypotheses and selection
@@ -467,6 +504,9 @@ class FlowService:
         flow = self._flows.get(agent_id)
         if not flow:
             flow = self.initialize_flow(agent_id)
+
+        # Check dual-write mode flag
+        dual_write_enabled = feature_flags.is_enabled(FeatureFlag.DUAL_WRITE_MODE)
 
         # Create truncated label from goal (40 chars max)
         goal_preview = turn_plan.goal[:40] + "..." if len(turn_plan.goal) > 40 else turn_plan.goal
@@ -483,8 +523,8 @@ class FlowService:
             label=label,
             status="completed",
             data=node_data,
-            span_id=turn_plan.selected_span_id,
-            hypothesis_id=turn_plan.selected_hypothesis_id,
+            span_id=turn_plan.selected_span_id if dual_write_enabled else None,
+            hypothesis_id=turn_plan.selected_hypothesis_id if dual_write_enabled else None,
             turn_id=turn_plan.turn_id,  # type: ignore
         )
 

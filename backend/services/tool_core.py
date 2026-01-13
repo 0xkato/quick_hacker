@@ -6,9 +6,12 @@ behavior between Claude SDK (MCP) and legacy ReAct providers.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from models.sink_signals import CandidateStatus, RiskTier, SinkSignal, SinkSignalKind, SinkSignalStatus
 from services.security_scanners import (
@@ -184,7 +187,13 @@ class ToolCore:
         git_head = None
         if self.cache is not None:
             git_head = self.git_head_tracker.get_current_head()
-            if git_head is not None:
+            if git_head is None:
+                # Log degraded state - caching disabled due to git failure
+                logger.debug(
+                    "Cache disabled for read_file: git HEAD unavailable for path=%s",
+                    path
+                )
+            else:
                 cache_key = self.cache.generate_key(
                     tool_name="read_file",
                     args={"path": path, "start_line": start_line, "end_line": end_line},

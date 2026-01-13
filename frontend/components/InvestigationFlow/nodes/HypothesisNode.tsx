@@ -53,8 +53,10 @@ const getStateColor = (state: SpanState, outcome: Outcome): string => {
  * - Outcome-based visual styling
  * - Collapse/expand button (if events exist)
  * - Focus gap (if present)
+ *
+ * Memoized to prevent unnecessary re-renders when parent TreeLayout re-renders.
  */
-const HypothesisNode: React.FC<HypothesisNodeProps> = ({ data }) => {
+const HypothesisNode: React.FC<HypothesisNodeProps> = React.memo(({ data }) => {
   const { span, isCollapsed, onToggleCollapse } = data;
 
   // Determine node color based on state and outcome
@@ -142,6 +144,8 @@ const HypothesisNode: React.FC<HypothesisNodeProps> = ({ data }) => {
       />
     </div>
   );
-};
+});
+
+HypothesisNode.displayName = 'HypothesisNode';
 
 export default HypothesisNode;

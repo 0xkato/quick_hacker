@@ -9,7 +9,7 @@ The InvestigationFlow component renders investigation spans as an interactive tr
 - Collapse/expand functionality for hypothesis nodes
 - Event and artifact count display
 - Focus gap indicators
-- Automatic tree layout
+- Simple vertical layout (advanced tree layout planned for future tasks)
 
 ## Components
 
@@ -177,9 +177,13 @@ This component is designed to work with:
 - Frontend data fetching hooks (Task 19)
 - Investigation detail panel (Task 20)
 
+## Current Limitations
+
+**Layout**: Currently uses simple vertical stacking (`y: index * 150`). A proper tree layout algorithm (e.g., dagre) is planned for future tasks to handle complex parent-child relationships and minimize edge crossings.
+
 ## Future Enhancements
 
-- Dagre layout algorithm for better tree positioning
+- Dagre or hierarchical tree layout algorithm
 - Search and filter functionality
 - Node detail popovers
 - Export to PNG/SVG

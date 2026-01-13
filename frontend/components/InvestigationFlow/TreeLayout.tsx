@@ -16,6 +16,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 
 import HypothesisNode from './nodes/HypothesisNode';
+import ErrorBoundary from './ErrorBoundary';
 import { Span, Edge, HypothesisNodeData } from './types';
 
 interface TreeLayoutProps {
@@ -32,7 +33,7 @@ const nodeTypes = {
  * TreeLayout Component
  *
  * Converts span/edge data into React Flow nodes and edges with:
- * - Automatic tree layout
+ * - Simple vertical layout (advanced layout planned for future tasks)
  * - Collapse/expand functionality
  * - Outcome-based visual styling
  * - Event and artifact count display
@@ -54,34 +55,40 @@ const TreeLayout: React.FC<TreeLayoutProps> = ({ spans, edges }) => {
     });
   }, []);
 
-  // Check if a span should be hidden (parent is collapsed)
-  const isSpanHidden = useCallback(
-    (span: Span): boolean => {
-      let current = span;
-      while (current.parent_span_id) {
-        if (collapsedSpans.has(current.parent_span_id)) {
-          return true;
+  // Compute set of all hidden span IDs (descendants of collapsed spans)
+  // This is O(n) once, instead of O(n²) on every render
+  const hiddenSpanIds = useMemo(() => {
+    const hidden = new Set<string>();
+
+    // Helper to recursively mark all descendants as hidden
+    const markDescendantsHidden = (spanId: string) => {
+      Object.values(spans).forEach((span) => {
+        if (span.parent_span_id === spanId) {
+          hidden.add(span.span_id);
+          markDescendantsHidden(span.span_id); // Recursively mark children
         }
-        const parent = spans[current.parent_span_id];
-        if (!parent) break;
-        current = parent;
-      }
-      return false;
-    },
-    [spans, collapsedSpans]
-  );
+      });
+    };
+
+    // Mark descendants of all collapsed spans
+    collapsedSpans.forEach((collapsedSpanId) => {
+      markDescendantsHidden(collapsedSpanId);
+    });
+
+    return hidden;
+  }, [spans, collapsedSpans]);
 
   // Convert spans to React Flow nodes
   const nodes = useMemo<Node<HypothesisNodeData>[]>(() => {
     return Object.values(spans)
-      .filter((span) => !isSpanHidden(span))
+      .filter((span) => !hiddenSpanIds.has(span.span_id)) // O(1) lookup instead of O(n) walk
       .map((span, index) => {
         const isCollapsed = collapsedSpans.has(span.span_id);
 
         return {
           id: span.span_id,
           type: 'hypothesis',
-          position: { x: 0, y: index * 150 }, // Placeholder position, will be auto-laid out
+          position: { x: 0, y: index * 150 }, // Simple vertical stacking; advanced layout planned for future
           data: {
             span,
             isCollapsed,
@@ -89,16 +96,16 @@ const TreeLayout: React.FC<TreeLayoutProps> = ({ spans, edges }) => {
           },
         };
       });
-  }, [spans, collapsedSpans, isSpanHidden, toggleCollapse]);
+  }, [spans, collapsedSpans, hiddenSpanIds, toggleCollapse]);
 
   // Convert edges to React Flow edges
   const reactFlowEdges = useMemo<ReactFlowEdge[]>(() => {
     return edges
       .filter((edge) => !edge.hidden)
       .filter((edge) => {
-        // Filter out edges to/from hidden spans
-        const sourceHidden = spans[edge.source] && isSpanHidden(spans[edge.source]);
-        const targetHidden = spans[edge.target] && isSpanHidden(spans[edge.target]);
+        // Filter out edges to/from hidden spans using O(1) lookup
+        const sourceHidden = hiddenSpanIds.has(edge.source);
+        const targetHidden = hiddenSpanIds.has(edge.target);
         return !sourceHidden && !targetHidden;
       })
       .map((edge) => {
@@ -117,7 +124,7 @@ const TreeLayout: React.FC<TreeLayoutProps> = ({ spans, edges }) => {
           style,
         };
       });
-  }, [edges, spans, isSpanHidden]);
+  }, [edges, hiddenSpanIds]);
 
   // Nodes and edges are computed from props, no need for separate state
 
@@ -134,23 +141,25 @@ const TreeLayout: React.FC<TreeLayoutProps> = ({ spans, edges }) => {
 
   return (
     <div className="h-full w-full">
-      <ReactFlow
-        nodes={nodes}
-        edges={reactFlowEdges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.1}
-        maxZoom={2}
-      >
-        <Background />
-        <Controls />
-        <MiniMap
-          nodeStrokeWidth={3}
-          zoomable
-          pannable
-        />
-      </ReactFlow>
+      <ErrorBoundary>
+        <ReactFlow
+          nodes={nodes}
+          edges={reactFlowEdges}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          minZoom={0.1}
+          maxZoom={2}
+        >
+          <Background />
+          <Controls />
+          <MiniMap
+            nodeStrokeWidth={3}
+            zoomable
+            pannable
+          />
+        </ReactFlow>
+      </ErrorBoundary>
     </div>
   );
 };

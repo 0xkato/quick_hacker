@@ -33,12 +33,14 @@ class PromptRouter:
     VALIDITY_CHECKLIST_MAP = {
         "SQL_INJECTION": "validity_checklists/sql_injection.md",
         "SSRF": "validity_checklists/ssrf.md",
-        "CODE_INJECTION": "validity_checklists/sql_injection.md",  # TODO: Create code_injection.md
-        "COMMAND_INJECTION": "validity_checklists/sql_injection.md",  # TODO: Create command_injection.md
+        "CODE_INJECTION": "validity_checklists/code_injection.md",
+        "COMMAND_INJECTION": "validity_checklists/command_injection.md",
+        "XSS": "validity_checklists/xss.md",
+        "DESERIALIZATION": "validity_checklists/deserialization.md",
+        "PATH_TRAVERSAL": "validity_checklists/path_traversal.md",
         "AUTH_BYPASS": "validity_checklists/auth_idor.md",
         "IDOR": "validity_checklists/auth_idor.md",
         "MEMORY_SAFETY": "validity_checklists/memory_safety.md",
-        # TODO: Add other categories
     }
 
     # Mapping from stage names to stage module paths

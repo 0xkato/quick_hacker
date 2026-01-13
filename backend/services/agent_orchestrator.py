@@ -1376,14 +1376,14 @@ class AgentOrchestrator:
 
         async with self._lock:
             for agent in self._agents.values():
-                if hasattr(agent, 'tool_core') and hasattr(agent.tool_core, 'cache'):
-                    cache = agent.tool_core.cache
-                    if cache is not None:
-                        metrics = cache.get_metrics()
-                        total_hits += metrics["hits"]
-                        total_misses += metrics["misses"]
-                        total_size += metrics["size"]
-                        cache_count += 1
+                # Check for cache stored on agent (all agent types)
+                if hasattr(agent, '_tool_cache') and agent._tool_cache is not None:
+                    cache = agent._tool_cache
+                    metrics = cache.get_metrics()
+                    total_hits += metrics["hits"]
+                    total_misses += metrics["misses"]
+                    total_size += metrics["size"]
+                    cache_count += 1
 
         return {
             "total_hits": total_hits,

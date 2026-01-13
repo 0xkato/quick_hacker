@@ -13,9 +13,9 @@
 **Approach:**
 1. Review complete proof checklist
 2. Apply StrictClassifier rules:
-   - Rule 2: not_only_misconfig == PROVEN_FALSE → MISCONFIGURATION
-   - Rule 3b: For exec/eval, security_control_bypassed can replace boundary_crossed
-   - Rule 4: ALL items PROVEN_TRUE → VALID_SECURITY_ISSUE
+   - Rule 1: not_only_misconfig == PROVEN_FALSE → MISCONFIGURATION
+   - Rule 2: For exec/eval, security_control_bypassed can replace boundary_crossed
+   - Rule 3: ALL items PROVEN_TRUE → VALID_SECURITY_ISSUE
 3. Assign disposition
 4. Compute confidence based on checklist completeness
 

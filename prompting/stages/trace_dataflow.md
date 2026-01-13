@@ -3,9 +3,10 @@
 **Goal:** Follow data flow from source (user input) to sink (dangerous operation)
 
 **Available Tools:**
-- ReadFileTool(file_path, line_start, line_end) - Read specific file sections
-- CallGraphTool(function_name, max_depth) - Trace function calls
-- RipgrepTool(pattern, file_pattern, case_sensitive) - Search for patterns
+- read_file(path, start_line, end_line) - Read specific file sections
+- trace_data_flow(source, file_path, sink_patterns) - Trace how data flows from source to sinks
+- find_usages(name, max_results) - Find all places where a function/variable is used
+- search_code(pattern, file_pattern, max_results) - Search for patterns in code
 
 **Output Required:**
 - Step-by-step data flow with file:line citations for each step

@@ -138,6 +138,7 @@ class ReActSecurityAgent:
         self.time_budget_seconds = request.time_budget_seconds
         self.name = request.name or f"react-{self.agent_type.value}-{self.id}"
         self.custom_prompt = request.custom_prompt
+        self.focus_areas = request.focus_areas or []
 
         # Status
         self.status = AgentStatus.PENDING
@@ -406,6 +407,57 @@ class ReActSecurityAgent:
             return load_prompt("agents/audit_completion_confirmation_deep_audit.md")
 
         return load_prompt("agents/audit_completion_confirmation_default.md")
+
+    def _detect_category_from_focus_areas(self) -> Optional[str]:
+        """Detect vulnerability category from focus_areas."""
+        if not self.focus_areas:
+            return None
+
+        focus_text = " ".join(self.focus_areas).lower()
+
+        # Simple keyword matching (can be improved)
+        if "sql" in focus_text or "injection" in focus_text:
+            return "SQL_INJECTION"
+        elif "xss" in focus_text or "cross-site" in focus_text:
+            return "XSS"
+        elif "ssrf" in focus_text:
+            return "SSRF"
+        elif "command" in focus_text:
+            return "COMMAND_INJECTION"
+        elif "code injection" in focus_text:
+            return "CODE_INJECTION"
+        elif "path traversal" in focus_text or "directory traversal" in focus_text:
+            return "PATH_TRAVERSAL"
+        elif "deserial" in focus_text:
+            return "DESERIALIZATION"
+        elif "auth" in focus_text and "bypass" in focus_text:
+            return "AUTH_BYPASS"
+        elif "idor" in focus_text or "insecure direct object" in focus_text:
+            return "IDOR"
+        # Add more as needed
+
+        return None
+
+    def _build_system_prompt_with_checklist(self, category: Optional[str], repo_info: str) -> str:
+        """
+        Build system prompt with category-specific validity checklist.
+
+        If category is provided, includes the relevant validity checklist.
+        Otherwise, uses base prompts only.
+        """
+        from services.prompt_router import PromptRouter
+
+        if category:
+            router = PromptRouter()
+            # Get modules for this category
+            modules = router.route(category=category)
+            # Assemble with repo info as task context
+            base_prompt = router.assemble_from_paths(modules, task=f"Repository context:\n{repo_info}")
+
+            return base_prompt
+        else:
+            # Legacy behavior: use old prompts if no category
+            return render_prompt("agents/react_system_prompt.md", repo_info=repo_info)
 
     def _guess_language_from_path(self, file_path: str) -> str:
         ext = (file_path.rsplit(".", 1)[-1] if "." in file_path else "").lower()
@@ -1104,12 +1156,15 @@ class ReActSecurityAgent:
                 }
             ]
         else:
-            # Single model mode - use original REACT prompt
-            system_prompt = render_prompt("agents/react_system_prompt.md", repo_info=repo_info)
+            # Single model mode - detect category and use PromptRouter if available
+            category = self._detect_category_from_focus_areas()
+            system_prompt = self._build_system_prompt_with_checklist(category, repo_info)
 
             # Sanitize and add custom prompt if provided (security: prevent prompt injection)
             sanitized_prompt = sanitize_custom_prompt(self.custom_prompt)
-            if sanitized_prompt:
+            if sanitized_prompt and not category:
+                # Only add custom prompt block if we didn't use PromptRouter
+                # (PromptRouter already incorporates focus via category)
                 system_prompt += "\n\n" + render_prompt("agents/user_focus_area.md", custom_focus=sanitized_prompt)
 
             if self._attack_surface_triage:

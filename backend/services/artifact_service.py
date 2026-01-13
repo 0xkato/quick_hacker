@@ -4,6 +4,7 @@ Artifact Service - Manages investigation artifacts.
 Provides content-hash deduplicated artifact storage and provenance tracking.
 """
 
+from collections import defaultdict
 from typing import Optional
 from models.investigation_trace import Artifact, ArtifactType
 
@@ -133,6 +134,41 @@ class ArtifactService:
             artifact for artifact in self._artifacts.values()
             if span_id in artifact.consumer_spans
         ]
+
+    def get_stats(self) -> dict:
+        """
+        Get artifact statistics.
+
+        Returns:
+            Dict with total counts and breakdowns by type
+        """
+        type_counts = defaultdict(int)
+        total_size = 0
+
+        for artifact in self._artifacts.values():
+            type_counts[artifact.artifact_type.value] += 1
+            total_size += artifact.size_bytes
+
+        return {
+            "total_artifacts": len(self._artifacts),
+            "by_type": dict(type_counts),
+            "total_size_bytes": total_size
+        }
+
+    def remove_artifact(self, artifact_id: str) -> bool:
+        """
+        Remove an artifact.
+
+        Args:
+            artifact_id: Artifact ID to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        if artifact_id in self._artifacts:
+            del self._artifacts[artifact_id]
+            return True
+        return False
 
 
 # Global instance

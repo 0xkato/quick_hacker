@@ -155,3 +155,60 @@ def test_artifact_service_get_artifacts_by_producer():
     # Find artifacts produced by span_B
     artifacts = service.get_artifacts_by_producer("span_B")
     assert len(artifacts) == 1
+
+def test_artifact_service_get_stats():
+    """ArtifactService should provide statistics"""
+    service = ArtifactService()
+
+    # Create artifacts of different types
+    service.create_artifact(
+        generate_artifact_id("snippet1"),
+        ArtifactType.FILE_SNIPPET,
+        "snippet1",
+        "Snippet 1"
+    )
+    service.create_artifact(
+        generate_artifact_id("snippet2"),
+        ArtifactType.FILE_SNIPPET,
+        "snippet2",
+        "Snippet 2"
+    )
+    service.create_artifact(
+        generate_artifact_id("search1"),
+        ArtifactType.SEARCH_RESULT,
+        "search1",
+        "Search 1"
+    )
+
+    stats = service.get_stats()
+
+    assert stats["total_artifacts"] == 3
+    assert stats["by_type"]["file_snippet"] == 2
+    assert stats["by_type"]["search_result"] == 1
+    assert stats["total_size_bytes"] == 0  # size_bytes defaults to 0
+
+def test_artifact_service_remove_artifact():
+    """ArtifactService should support artifact removal"""
+    service = ArtifactService()
+
+    artifact_id = generate_artifact_id("content")
+    service.create_artifact(
+        artifact_id=artifact_id,
+        artifact_type=ArtifactType.TOOL_OUTPUT,
+        content="content",
+        summary="Test"
+    )
+
+    # Verify artifact exists
+    assert service.get_artifact(artifact_id) is not None
+
+    # Remove artifact
+    removed = service.remove_artifact(artifact_id)
+    assert removed is True
+
+    # Verify artifact removed
+    assert service.get_artifact(artifact_id) is None
+
+    # Removing nonexistent artifact should return False
+    removed = service.remove_artifact(artifact_id)
+    assert removed is False

@@ -26,6 +26,8 @@ from services.security_scanners.base import WorkspacePolicy, ScanLimits
 from services.sink_signal_service import compute_signal_fingerprint, sink_signal_service
 from services.tool_cache import ToolCache
 from services.git_head_tracker import GitHeadTracker
+from services.artifact_service import artifact_service
+from models.investigation_trace import Artifact, ArtifactType, generate_artifact_id
 
 
 class ToolCore:
@@ -1229,3 +1231,94 @@ class ToolCore:
             "disprove_answers": disprove_answers,
             "reasoning": reasoning
         }
+
+    def _create_file_artifact(
+        self,
+        content: str,
+        file_path: str,
+        line_start: int | None = None,
+        line_end: int | None = None
+    ) -> Artifact:
+        """
+        Create FILE_SNIPPET artifact.
+
+        Args:
+            content: File content
+            file_path: Path to file (relative to repo root)
+            line_start: Optional starting line
+            line_end: Optional ending line
+
+        Returns:
+            Created artifact
+        """
+        # Generate deterministic artifact ID
+        artifact_id = generate_artifact_id(content)
+
+        # Generate summary
+        if line_start and line_end:
+            summary = f"File snippet from {file_path}:{line_start}-{line_end}"
+        else:
+            summary = f"File content from {file_path}"
+
+        # Truncate summary to 200 chars
+        if len(summary) > 200:
+            summary = summary[:197] + "..."
+
+        # Create artifact (idempotent)
+        artifact = artifact_service.create_artifact(
+            artifact_id=artifact_id,
+            artifact_type=ArtifactType.FILE_SNIPPET,
+            content=content,
+            summary=summary,
+            file_path=file_path,
+            line_start=line_start,
+            line_end=line_end
+        )
+
+        # Calculate size
+        artifact.size_bytes = len(content.encode('utf-8'))
+
+        return artifact
+
+    def _create_tool_output_artifact(
+        self,
+        content: str,
+        tool_name: str,
+        query: str | None = None
+    ) -> Artifact:
+        """
+        Create TOOL_OUTPUT artifact.
+
+        Args:
+            content: Tool output content
+            tool_name: Name of tool that produced output
+            query: Optional query/pattern used
+
+        Returns:
+            Created artifact
+        """
+        # Generate deterministic artifact ID
+        artifact_id = generate_artifact_id(content)
+
+        # Generate summary
+        if query:
+            summary = f"{tool_name} output for '{query}'"
+        else:
+            summary = f"{tool_name} output"
+
+        # Truncate summary to 200 chars
+        if len(summary) > 200:
+            summary = summary[:197] + "..."
+
+        # Create artifact (idempotent)
+        artifact = artifact_service.create_artifact(
+            artifact_id=artifact_id,
+            artifact_type=ArtifactType.TOOL_OUTPUT,
+            content=content,
+            summary=summary
+        )
+
+        # Calculate size
+        artifact.size_bytes = len(content.encode('utf-8'))
+
+        return artifact

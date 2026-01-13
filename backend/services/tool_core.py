@@ -250,6 +250,8 @@ class ToolCore:
     ) -> dict[str, Any]:
         """List directory contents.
 
+        This method is automatically cached if cache is enabled.
+
         Args:
             path: Relative path from repo root (use "." for root)
             recursive: If True, list all files recursively
@@ -259,6 +261,33 @@ class ToolCore:
         Returns:
             Dict with items list and metadata
         """
+        # Cache check
+        cache_key = None
+        git_head = None
+        if self.cache is not None:
+            git_head = self.git_head_tracker.get_current_head()
+            if git_head is None:
+                # Log degraded state - caching disabled due to git failure
+                logger.debug(
+                    "Cache disabled for list_directory: git HEAD unavailable for path=%s",
+                    path
+                )
+            else:
+                cache_key = self.cache.generate_key(
+                    tool_name="list_directory",
+                    args={
+                        "path": path,
+                        "recursive": recursive,
+                        "pattern": pattern,
+                        "max_items": max_items,
+                    },
+                    git_head=git_head
+                )
+                cached_result = self.cache.get(cache_key)
+                if cached_result is not None:
+                    return cached_result
+
+        # Cache miss or caching disabled - execute tool
         dir_path = self._validate_dir(path)
 
         # Check if starting path is an excluded directory
@@ -302,12 +331,18 @@ class ToolCore:
 
         await asyncio.to_thread(collect_items)
 
-        return {
+        result = {
             "path": path,
             "items": items[:max_items],
             "count": len(items),
             "truncated": len(items) >= max_items,
         }
+
+        # Store in cache if enabled
+        if self.cache is not None and cache_key is not None:
+            self.cache.set(cache_key, result)
+
+        return result
 
     async def search_code(
         self,
@@ -317,6 +352,8 @@ class ToolCore:
     ) -> dict[str, Any]:
         """Search for regex pattern across codebase.
 
+        This method is automatically cached if cache is enabled.
+
         Args:
             pattern: Regex pattern to search for
             file_pattern: Optional glob to filter files
@@ -325,6 +362,32 @@ class ToolCore:
         Returns:
             Dict with matches list and metadata
         """
+        # Cache check
+        cache_key = None
+        git_head = None
+        if self.cache is not None:
+            git_head = self.git_head_tracker.get_current_head()
+            if git_head is None:
+                # Log degraded state - caching disabled due to git failure
+                logger.debug(
+                    "Cache disabled for search_code: git HEAD unavailable for pattern=%s",
+                    pattern
+                )
+            else:
+                cache_key = self.cache.generate_key(
+                    tool_name="search_code",
+                    args={
+                        "pattern": pattern,
+                        "file_pattern": file_pattern,
+                        "max_results": max_results,
+                    },
+                    git_head=git_head
+                )
+                cached_result = self.cache.get(cache_key)
+                if cached_result is not None:
+                    return cached_result
+
+        # Cache miss or caching disabled - execute tool
         import re
 
         try:
@@ -379,12 +442,18 @@ class ToolCore:
 
         await asyncio.to_thread(search_files)
 
-        return {
+        result = {
             "matches": results,
             "count": len(results),
             "files_searched": files_searched,
             "truncated": len(results) >= max_results,
         }
+
+        # Store in cache if enabled
+        if self.cache is not None and cache_key is not None:
+            self.cache.set(cache_key, result)
+
+        return result
 
     async def scan_for_secrets(
         self,

@@ -257,3 +257,97 @@ def test_artifact_content_hash_generation():
     assert id1 == id2
     assert id1.startswith("art_")
     assert len(id1) == 20  # "art_" + 16 hex chars
+
+def test_artifact_summary_validation():
+    """Artifact should enforce summary max length of 200 chars"""
+    valid_summary = "A" * 200  # Exactly 200 chars - should work
+
+    artifact = Artifact(
+        artifact_id="art_test",
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="test",
+        summary=valid_summary
+    )
+    assert artifact.summary == valid_summary
+
+    # Test that >200 chars raises ValueError
+    invalid_summary = "A" * 201  # 201 chars - should fail
+    with pytest.raises(ValueError, match="summary must be ≤200 chars"):
+        Artifact(
+            artifact_id="art_test2",
+            artifact_type=ArtifactType.FILE_SNIPPET,
+            content="test",
+            summary=invalid_summary
+        )
+
+def test_artifact_dict_content_hashing():
+    """Artifact ID generation should handle dict content and be order-independent"""
+    from models.investigation_trace import generate_artifact_id
+
+    # Test dict content
+    dict_content_1 = {"key1": "value1", "key2": "value2"}
+    dict_content_2 = {"key2": "value2", "key1": "value1"}  # Different order
+
+    id1 = generate_artifact_id(dict_content_1)
+    id2 = generate_artifact_id(dict_content_2)
+
+    # Should generate same ID regardless of dict key order
+    assert id1 == id2
+    assert id1.startswith("art_")
+    assert len(id1) == 20
+
+def test_artifact_serialization():
+    """Artifact should serialize to dict correctly"""
+    artifact = Artifact(
+        artifact_id="art_abc123",
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="code here",
+        summary="Test artifact",
+        file_path="app/auth.py",
+        line_start=45,
+        line_end=50,
+        created_at=datetime(2026, 1, 13, 12, 30, 45, tzinfo=timezone.utc),
+        size_bytes=100
+    )
+
+    artifact.producer_spans.add("span_1")
+    artifact.consumer_spans.add("span_2")
+
+    result = artifact.to_dict()
+
+    # Verify all fields present
+    assert result["artifact_id"] == "art_abc123"
+    assert result["artifact_type"] == "file_snippet"  # Enum serialized to string
+    assert result["content"] == "code here"
+    assert result["summary"] == "Test artifact"
+    assert result["file_path"] == "app/auth.py"
+    assert result["line_start"] == 45
+    assert result["line_end"] == 50
+    assert result["producer_spans"] == ["span_1"]  # Set converted to list
+    assert result["consumer_spans"] == ["span_2"]  # Set converted to list
+    assert result["created_at"] == "2026-01-13T12:30:45+00:00"  # ISO format
+    assert result["size_bytes"] == 100
+
+    # Verify types
+    assert isinstance(result["artifact_type"], str)
+    assert isinstance(result["producer_spans"], list)
+    assert isinstance(result["consumer_spans"], list)
+
+def test_artifact_serialization_with_defaults():
+    """Artifact should serialize correctly with None/default values"""
+    artifact = Artifact(
+        artifact_id="art_def",
+        artifact_type=ArtifactType.TOOL_OUTPUT,
+        content="output",
+        summary="Default values test"
+    )
+
+    result = artifact.to_dict()
+
+    assert result["file_path"] is None
+    assert result["line_start"] is None
+    assert result["line_end"] is None
+    assert result["producer_spans"] == []  # Empty set -> empty list
+    assert result["consumer_spans"] == []
+    assert result["created_at"] is None
+    assert result["size_bytes"] == 0

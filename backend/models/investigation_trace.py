@@ -54,7 +54,7 @@ class ArtifactType(str, Enum):
     TOOL_OUTPUT = "tool_output"
 
 
-def generate_artifact_id(content: str) -> str:
+def generate_artifact_id(content: str | dict) -> str:
     """
     Generate deterministic artifact ID from content hash.
 
@@ -151,6 +151,11 @@ class Artifact:
     # Metadata
     created_at: Optional[datetime] = None
     size_bytes: int = 0
+
+    def __post_init__(self):
+        """Validate field constraints."""
+        if self.summary and len(self.summary) > 200:
+            raise ValueError(f"summary must be ≤200 chars, got {len(self.summary)}")
 
     def to_dict(self) -> dict:
         """Convert to dict for serialization"""

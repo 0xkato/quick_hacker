@@ -80,3 +80,78 @@ def test_artifact_service_get_artifacts_by_type():
     snippets = service.get_artifacts_by_type(ArtifactType.FILE_SNIPPET)
     assert len(snippets) == 1
     assert snippets[0].artifact_type == ArtifactType.FILE_SNIPPET
+
+def test_artifact_service_add_producer():
+    """ArtifactService should track producer spans"""
+    service = ArtifactService()
+
+    artifact_id = generate_artifact_id("content")
+    service.create_artifact(
+        artifact_id=artifact_id,
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="content",
+        summary="Test"
+    )
+
+    # Add producer span
+    success = service.add_producer("span_123", artifact_id)
+    assert success is True
+
+    artifact = service.get_artifact(artifact_id)
+    assert "span_123" in artifact.producer_spans
+
+    # Adding same producer again should be idempotent
+    success = service.add_producer("span_123", artifact_id)
+    assert success is True
+    assert len(artifact.producer_spans) == 1
+
+def test_artifact_service_add_consumer():
+    """ArtifactService should track consumer spans"""
+    service = ArtifactService()
+
+    artifact_id = generate_artifact_id("content")
+    service.create_artifact(
+        artifact_id=artifact_id,
+        artifact_type=ArtifactType.SEARCH_RESULT,
+        content="content",
+        summary="Test"
+    )
+
+    # Add consumer span
+    success = service.add_consumer("span_456", artifact_id)
+    assert success is True
+
+    artifact = service.get_artifact(artifact_id)
+    assert "span_456" in artifact.consumer_spans
+
+def test_artifact_service_provenance_nonexistent():
+    """Provenance methods should handle nonexistent artifacts"""
+    service = ArtifactService()
+
+    success = service.add_producer("span_123", "nonexistent_id")
+    assert success is False
+
+    success = service.add_consumer("span_456", "nonexistent_id")
+    assert success is False
+
+def test_artifact_service_get_artifacts_by_producer():
+    """ArtifactService should find artifacts by producer span"""
+    service = ArtifactService()
+
+    art1_id = generate_artifact_id("content1")
+    art2_id = generate_artifact_id("content2")
+
+    service.create_artifact(art1_id, ArtifactType.FILE_SNIPPET, "content1", "Art 1")
+    service.create_artifact(art2_id, ArtifactType.FILE_SNIPPET, "content2", "Art 2")
+
+    service.add_producer("span_A", art1_id)
+    service.add_producer("span_A", art2_id)
+    service.add_producer("span_B", art2_id)
+
+    # Find artifacts produced by span_A
+    artifacts = service.get_artifacts_by_producer("span_A")
+    assert len(artifacts) == 2
+
+    # Find artifacts produced by span_B
+    artifacts = service.get_artifacts_by_producer("span_B")
+    assert len(artifacts) == 1

@@ -84,6 +84,56 @@ class ArtifactService:
         """Clear all artifacts"""
         self._artifacts.clear()
 
+    def add_producer(self, span_id: str, artifact_id: str) -> bool:
+        """
+        Add a producer span for an artifact.
+
+        Args:
+            span_id: Span that produced this artifact
+            artifact_id: Artifact ID
+
+        Returns:
+            True if successful, False if artifact not found
+        """
+        artifact = self.get_artifact(artifact_id)
+        if not artifact:
+            return False
+
+        artifact.producer_spans.add(span_id)
+        return True
+
+    def add_consumer(self, span_id: str, artifact_id: str) -> bool:
+        """
+        Add a consumer span for an artifact.
+
+        Args:
+            span_id: Span that consumed this artifact
+            artifact_id: Artifact ID
+
+        Returns:
+            True if successful, False if artifact not found
+        """
+        artifact = self.get_artifact(artifact_id)
+        if not artifact:
+            return False
+
+        artifact.consumer_spans.add(span_id)
+        return True
+
+    def get_artifacts_by_producer(self, span_id: str) -> list[Artifact]:
+        """Get all artifacts produced by a specific span"""
+        return [
+            artifact for artifact in self._artifacts.values()
+            if span_id in artifact.producer_spans
+        ]
+
+    def get_artifacts_by_consumer(self, span_id: str) -> list[Artifact]:
+        """Get all artifacts consumed by a specific span"""
+        return [
+            artifact for artifact in self._artifacts.values()
+            if span_id in artifact.consumer_spans
+        ]
+
 
 # Global instance
 artifact_service = ArtifactService()

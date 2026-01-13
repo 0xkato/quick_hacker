@@ -259,6 +259,17 @@ export const agents = {
     return request<Finding[]>(`/api/agents/findings/all${query}`);
   },
 
+  async loadAgentState(agentId: string): Promise<{
+    status: string;
+    agent_id: string;
+    interactions_loaded: number;
+    tool_details_loaded: number;
+    flow_nodes_loaded: number;
+    findings_loaded: number;
+  }> {
+    return request(`/api/agents/${agentId}/load`, { method: 'POST' });
+  },
+
   async getStats(): Promise<AgentStats> {
     return request<AgentStats>('/api/agents/stats');
   },
@@ -353,6 +364,18 @@ export const agents = {
 
   async listSavedStates(): Promise<Array<Record<string, unknown>>> {
     return request('/api/agents/saved-states');
+  },
+
+  // Reconstruction API
+  async reconstruct(agentId: string, events: any[]): Promise<{
+    spans: Record<string, any>;
+    edges: any[];
+    event_to_span: Record<string, string>;
+  }> {
+    return request(`/api/agents/${agentId}/reconstruct`, {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    });
   },
 };
 

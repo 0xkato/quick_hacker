@@ -368,8 +368,16 @@ def test_edge_building_validates_parent_exists():
         ),
     }
 
-    # Call _build_edges directly
-    edges = service_instance._build_edges(mock_spans)
+    # Call _build_edges directly with minimal required args
+    from collections import defaultdict
+    edges = service_instance._build_edges(
+        spans=mock_spans,
+        artifact_producer_spans=defaultdict(set),
+        artifact_consumer_spans=defaultdict(set),
+        artifacts={},
+        event_to_span={},
+        sorted_events=[]
+    )
 
     # Should have NO edges (parent doesn't exist in spans dict)
     assert len(edges) == 0
@@ -425,3 +433,320 @@ def test_turn_plan_with_invalid_data_structure():
 
     # Valid event should be in event_to_span
     assert "event-1" in event_to_span
+
+
+def test_artifact_provenance_creates_edges():
+    """ReconstructionService should create evidence edges from artifact provenance"""
+    service = ReconstructionService()
+    agent_exec_id = "exec-test-8"
+
+    # Create an artifact
+    artifact = Artifact(
+        artifact_id="art-test-1",
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="def login(username, password):\n    query = f'SELECT * FROM users WHERE name={username}'",
+        summary="SQL injection in login",
+        file_path="/app/auth.py",
+        line_start=10,
+        line_end=11,
+    )
+    artifacts = {"art-test-1": artifact}
+
+    # Create two hypothesis spans via turn_plan events
+    turn_plan_1 = {
+        "id": "event-tp-1",
+        "type": "turn_plan",
+        "timestamp": "2026-01-13T10:00:00Z",
+        "data": {
+            "turn_id": 1,
+            "goal": "Find SQL injection",
+            "stage": "exploration",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp-1",
+                    "label": "SQL injection producer",
+                    "state": "active",
+                    "activity": "new",
+                    "parent_hypothesis_id": None,
+                }
+            ],
+            "selected_hypothesis_id": "hyp-1",
+            "selected_span_id": "exec-test-8__hyp__hyp-1",
+        }
+    }
+
+    turn_plan_2 = {
+        "id": "event-tp-2",
+        "type": "turn_plan",
+        "timestamp": "2026-01-13T10:05:00Z",
+        "data": {
+            "turn_id": 2,
+            "goal": "Analyze SQL injection",
+            "stage": "triage",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp-2",
+                    "label": "SQL injection consumer",
+                    "state": "active",
+                    "activity": "new",
+                    "parent_hypothesis_id": None,
+                }
+            ],
+            "selected_hypothesis_id": "hyp-2",
+            "selected_span_id": "exec-test-8__hyp__hyp-2",
+        }
+    }
+
+    # Create tool_result event (produces artifact)
+    tool_result_event = {
+        "id": "event-tool-1",
+        "type": "tool_result",
+        "timestamp": "2026-01-13T10:02:00Z",
+        "data": {"tool": "grep", "result": "found SQL injection"},
+        "output_artifact_ids": ["art-test-1"],  # Produces artifact
+    }
+
+    # Create analysis event (consumes artifact)
+    analysis_event = {
+        "id": "event-analysis-1",
+        "type": "analysis",
+        "timestamp": "2026-01-13T10:07:00Z",
+        "data": {"analysis": "SQL injection confirmed"},
+        "input_artifact_ids": ["art-test-1"],  # Consumes artifact
+    }
+
+    events = [turn_plan_1, tool_result_event, turn_plan_2, analysis_event]
+
+    spans, edges, event_to_span = service.reconstruct_investigation_dag(
+        events=events,
+        artifacts=artifacts,
+        agent_exec_id=agent_exec_id
+    )
+
+    # Verify spans were created
+    span_1_id = "exec-test-8__hyp__hyp-1"
+    span_2_id = "exec-test-8__hyp__hyp-2"
+    assert span_1_id in spans
+    assert span_2_id in spans
+
+    # Verify artifact_ids were tracked in spans
+    assert "art-test-1" in spans[span_1_id].artifact_ids
+    assert "art-test-1" not in spans[span_2_id].artifact_ids  # Consumers don't add to artifact_ids
+
+    # Verify evidence edge was created
+    evidence_edges = [e for e in edges if e.edge_type == "evidence_link"]
+    assert len(evidence_edges) == 1
+
+    evidence_edge = evidence_edges[0]
+    assert evidence_edge.source == span_1_id
+    assert evidence_edge.target == span_2_id
+    assert evidence_edge.style == "dashed"
+    assert "SQL injection in login" in evidence_edge.label or "art-test-1" in evidence_edge.id
+
+
+def test_artifact_provenance_bundles_multiple_artifacts():
+    """ReconstructionService should bundle edges when >= 3 artifacts between same span pair"""
+    service = ReconstructionService()
+    agent_exec_id = "exec-test-9"
+
+    # Create 3 artifacts
+    artifacts = {
+        "art-1": Artifact(
+            artifact_id="art-1",
+            artifact_type=ArtifactType.FILE_SNIPPET,
+            content="snippet 1",
+            summary="First artifact",
+        ),
+        "art-2": Artifact(
+            artifact_id="art-2",
+            artifact_type=ArtifactType.SEARCH_RESULT,
+            content="result 2",
+            summary="Second artifact",
+        ),
+        "art-3": Artifact(
+            artifact_id="art-3",
+            artifact_type=ArtifactType.TOOL_OUTPUT,
+            content="output 3",
+            summary="Third artifact",
+        ),
+    }
+
+    # Create two hypothesis spans
+    turn_plan_1 = {
+        "id": "event-tp-1",
+        "type": "turn_plan",
+        "timestamp": "2026-01-13T10:00:00Z",
+        "data": {
+            "turn_id": 1,
+            "goal": "Producer span",
+            "stage": "exploration",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp-producer",
+                    "label": "Producer hypothesis",
+                    "state": "active",
+                    "activity": "new",
+                    "parent_hypothesis_id": None,
+                }
+            ],
+            "selected_hypothesis_id": "hyp-producer",
+            "selected_span_id": "exec-test-9__hyp__hyp-producer",
+        }
+    }
+
+    turn_plan_2 = {
+        "id": "event-tp-2",
+        "type": "turn_plan",
+        "timestamp": "2026-01-13T10:10:00Z",
+        "data": {
+            "turn_id": 2,
+            "goal": "Consumer span",
+            "stage": "triage",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp-consumer",
+                    "label": "Consumer hypothesis",
+                    "state": "active",
+                    "activity": "new",
+                    "parent_hypothesis_id": None,
+                }
+            ],
+            "selected_hypothesis_id": "hyp-consumer",
+            "selected_span_id": "exec-test-9__hyp__hyp-consumer",
+        }
+    }
+
+    # Create events that produce 3 artifacts
+    event_1 = {
+        "id": "event-1",
+        "type": "tool_result",
+        "timestamp": "2026-01-13T10:02:00Z",
+        "output_artifact_ids": ["art-1"],
+    }
+
+    event_2 = {
+        "id": "event-2",
+        "type": "tool_result",
+        "timestamp": "2026-01-13T10:03:00Z",
+        "output_artifact_ids": ["art-2"],
+    }
+
+    event_3 = {
+        "id": "event-3",
+        "type": "tool_result",
+        "timestamp": "2026-01-13T10:04:00Z",
+        "output_artifact_ids": ["art-3"],
+    }
+
+    # Create event that consumes all 3 artifacts
+    event_consume = {
+        "id": "event-consume",
+        "type": "analysis",
+        "timestamp": "2026-01-13T10:12:00Z",
+        "input_artifact_ids": ["art-1", "art-2", "art-3"],
+    }
+
+    events = [turn_plan_1, event_1, event_2, event_3, turn_plan_2, event_consume]
+
+    spans, edges, event_to_span = service.reconstruct_investigation_dag(
+        events=events,
+        artifacts=artifacts,
+        agent_exec_id=agent_exec_id
+    )
+
+    # Verify evidence edge was created and bundled
+    evidence_edges = [e for e in edges if e.edge_type == "evidence_link"]
+    assert len(evidence_edges) == 1
+
+    bundled_edge = evidence_edges[0]
+    assert bundled_edge.source == "exec-test-9__hyp__hyp-producer"
+    assert bundled_edge.target == "exec-test-9__hyp__hyp-consumer"
+    assert bundled_edge.label == "3 artifacts"
+    assert bundled_edge.style == "dashed"
+
+
+def test_artifact_provenance_enforces_time_directionality():
+    """ReconstructionService should NOT create edges when consumer timestamp < producer timestamp"""
+    service = ReconstructionService()
+    agent_exec_id = "exec-test-10"
+
+    # Create an artifact
+    artifact = Artifact(
+        artifact_id="art-test-time",
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="test content",
+        summary="Test artifact",
+    )
+    artifacts = {"art-test-time": artifact}
+
+    # Create two hypothesis spans
+    turn_plan_1 = {
+        "id": "event-tp-1",
+        "type": "turn_plan",
+        "timestamp": "2026-01-13T10:00:00Z",
+        "data": {
+            "turn_id": 1,
+            "goal": "Consumer span (earlier)",
+            "stage": "exploration",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp-1",
+                    "label": "Consumer hypothesis",
+                    "state": "active",
+                    "activity": "new",
+                    "parent_hypothesis_id": None,
+                }
+            ],
+            "selected_hypothesis_id": "hyp-1",
+            "selected_span_id": "exec-test-10__hyp__hyp-1",
+        }
+    }
+
+    turn_plan_2 = {
+        "id": "event-tp-2",
+        "type": "turn_plan",
+        "timestamp": "2026-01-13T10:10:00Z",
+        "data": {
+            "turn_id": 2,
+            "goal": "Producer span (later)",
+            "stage": "triage",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp-2",
+                    "label": "Producer hypothesis",
+                    "state": "active",
+                    "activity": "new",
+                    "parent_hypothesis_id": None,
+                }
+            ],
+            "selected_hypothesis_id": "hyp-2",
+            "selected_span_id": "exec-test-10__hyp__hyp-2",
+        }
+    }
+
+    # Consumer event BEFORE producer event (backward in time)
+    consume_event = {
+        "id": "event-consume",
+        "type": "analysis",
+        "timestamp": "2026-01-13T10:02:00Z",  # Earlier
+        "input_artifact_ids": ["art-test-time"],
+    }
+
+    produce_event = {
+        "id": "event-produce",
+        "type": "tool_result",
+        "timestamp": "2026-01-13T10:12:00Z",  # Later
+        "output_artifact_ids": ["art-test-time"],
+    }
+
+    events = [turn_plan_1, consume_event, turn_plan_2, produce_event]
+
+    spans, edges, event_to_span = service.reconstruct_investigation_dag(
+        events=events,
+        artifacts=artifacts,
+        agent_exec_id=agent_exec_id
+    )
+
+    # Verify NO evidence edge was created (time-directionality violation)
+    evidence_edges = [e for e in edges if e.edge_type == "evidence_link"]
+    assert len(evidence_edges) == 0

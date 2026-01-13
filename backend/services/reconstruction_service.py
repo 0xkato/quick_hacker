@@ -5,7 +5,8 @@ Implements single-pass streaming reconstruction algorithm with declarative routi
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
+from collections import defaultdict
 import logging
 
 from models.investigation_trace import (
@@ -112,6 +113,10 @@ class ReconstructionService:
         current_selected_span: Optional[str] = None
         current_selected_hypothesis_id: Optional[str] = None
         current_stage: Optional[str] = None
+
+        # Step 4b: Track artifact provenance
+        artifact_producer_spans: Dict[str, Set[str]] = defaultdict(set)
+        artifact_consumer_spans: Dict[str, Set[str]] = defaultdict(set)
 
         # Step 5: Single pass through events
         for event in sorted_events:
@@ -231,8 +236,29 @@ class ReconstructionService:
                     spans[target_span_id].event_ids.append(event_id)
                     event_to_span[event_id] = target_span_id
 
-        # Step 6: Build edges
-        edges = self._build_edges(spans)
+                    # Track artifact provenance
+                    output_artifact_ids = event.get("output_artifact_ids", [])
+                    for aid in output_artifact_ids:
+                        spans[target_span_id].artifact_ids.append(aid)
+                        artifact_producer_spans[aid].add(target_span_id)
+
+                    input_artifact_ids = event.get("input_artifact_ids", [])
+                    for aid in input_artifact_ids:
+                        artifact_consumer_spans[aid].add(target_span_id)
+
+        # Step 6: Deduplicate artifact_ids in spans
+        for span in spans.values():
+            span.artifact_ids = list(dict.fromkeys(span.artifact_ids))
+
+        # Step 7: Build edges
+        edges = self._build_edges(
+            spans=spans,
+            artifact_producer_spans=artifact_producer_spans,
+            artifact_consumer_spans=artifact_consumer_spans,
+            artifacts=artifacts,
+            event_to_span=event_to_span,
+            sorted_events=sorted_events
+        )
 
         return spans, edges, event_to_span
 
@@ -280,20 +306,36 @@ class ReconstructionService:
         # Priority 4: Unattributed span
         return unattributed_span_id
 
-    def _build_edges(self, spans: Dict[str, Span]) -> List[Edge]:
+    def _build_edges(
+        self,
+        spans: Dict[str, Span],
+        artifact_producer_spans: Dict[str, Set[str]],
+        artifact_consumer_spans: Dict[str, Set[str]],
+        artifacts: Dict[str, Artifact],
+        event_to_span: Dict[str, str],
+        sorted_events: List[Dict]
+    ) -> List[Edge]:
         """
-        Build span hierarchy edges.
+        Build span hierarchy and artifact provenance edges.
 
-        Creates parent_child edges from span.parent_span_id relationships.
+        Creates two types of edges:
+        1. parent_child: From span.parent_span_id relationships
+        2. evidence_link: From artifact provenance (producer -> consumer)
 
         Args:
             spans: Spans dict
+            artifact_producer_spans: Mapping of artifact_id -> producer span_ids
+            artifact_consumer_spans: Mapping of artifact_id -> consumer span_ids
+            artifacts: Artifacts dict
+            event_to_span: Mapping of event_id -> span_id
+            sorted_events: Sorted events list (for timestamp checks)
 
         Returns:
             List of edges
         """
         edges: List[Edge] = []
 
+        # 1. Span hierarchy edges (parent_child)
         for span_id, span in spans.items():
             if span.parent_span_id:
                 # IMPORTANT: Validate parent exists before creating edge
@@ -310,6 +352,56 @@ class ReconstructionService:
                     label="parent_child",
                 )
                 edges.append(edge)
+
+        # 2. Artifact provenance edges (evidence_link)
+        span_pair_artifacts: Dict[Tuple[str, str], Set[str]] = defaultdict(set)
+
+        for aid, prod_spans in artifact_producer_spans.items():
+            for prod_span in prod_spans:
+                for cons_span in artifact_consumer_spans.get(aid, set()):
+                    if cons_span != prod_span:
+                        # Time-directional check
+                        prod_events = [e for e in sorted_events if event_to_span.get(e.get("id")) == prod_span]
+                        cons_events = [e for e in sorted_events if event_to_span.get(e.get("id")) == cons_span]
+
+                        if prod_events and cons_events:
+                            prod_latest = max(e.get("timestamp", "") for e in prod_events)
+                            cons_earliest = min(e.get("timestamp", "") for e in cons_events)
+
+                            if prod_latest < cons_earliest:
+                                span_pair_artifacts[(prod_span, cons_span)].add(aid)
+
+        # Create evidence edges
+        for (prod_span, cons_span), artifact_ids in span_pair_artifacts.items():
+            count = len(artifact_ids)
+
+            if count >= 3:
+                # Bundle edge
+                edges.append(Edge(
+                    id=f"evidence_{prod_span}_{cons_span}",
+                    source=prod_span,
+                    target=cons_span,
+                    edge_type="evidence_link",
+                    label=f"{count} artifacts",
+                    style="dashed"
+                ))
+            else:
+                # Individual edges
+                for aid in artifact_ids:
+                    artifact = artifacts.get(aid)
+                    if artifact and artifact.summary:
+                        summary = artifact.summary[:20] + "..." if len(artifact.summary) > 20 else artifact.summary
+                    else:
+                        summary = "(missing)"
+
+                    edges.append(Edge(
+                        id=f"evidence_{aid}_{prod_span}_{cons_span}",
+                        source=prod_span,
+                        target=cons_span,
+                        edge_type="evidence_link",
+                        label=summary,
+                        style="dashed"
+                    ))
 
         return edges
 

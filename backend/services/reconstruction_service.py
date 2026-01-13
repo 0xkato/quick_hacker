@@ -250,6 +250,16 @@ class ReconstructionService:
         for span in spans.values():
             span.artifact_ids = list(dict.fromkeys(span.artifact_ids))
 
+        # Step 6.5: Fallback - if only unattributed span exists, create tool-call-based spans
+        if len(spans) == 1 and unattributed_span_id in spans:
+            self._create_fallback_tool_spans(
+                unattributed_span=spans[unattributed_span_id],
+                sorted_events=sorted_events,
+                spans=spans,
+                event_to_span=event_to_span,
+                agent_exec_id=agent_exec_id
+            )
+
         # Step 7: Build edges
         edges = self._build_edges(
             spans=spans,
@@ -404,6 +414,93 @@ class ReconstructionService:
                     ))
 
         return edges
+
+    def _create_fallback_tool_spans(
+        self,
+        unattributed_span: Span,
+        sorted_events: List[Dict],
+        spans: Dict[str, Span],
+        event_to_span: Dict[str, str],
+        agent_exec_id: str
+    ):
+        """
+        Fallback algorithm: Create spans from tool_call groupings.
+
+        When no turn_plan events exist, this creates a simple hierarchy:
+        - Root span: "Investigation" (replaces "Unattributed Events")
+        - Child spans: One per tool call with its result
+
+        Args:
+            unattributed_span: The single unattributed span
+            sorted_events: All events sorted by timestamp
+            spans: Spans dictionary to modify
+            event_to_span: Event mapping to update
+            agent_exec_id: Agent execution ID
+        """
+        # Update unattributed span to be the root
+        unattributed_span.label = "Investigation Root"
+        unattributed_span.span_type = SpanType.HYPOTHESIS
+        unattributed_span.event_ids = []  # Clear, will reassign
+
+        # Group tool_call with their results
+        tool_span_counter = 0
+        pending_tool_call = None
+        pending_tool_call_event_id = None
+
+        for event in sorted_events:
+            event_id = event.get("id")
+            event_type = event.get("type")
+            event_data = event.get("data", {})
+
+            if event_type == "tool_call":
+                # Create a new span for this tool call
+                tool_span_counter += 1
+                tool_name = event_data.get("tool_name", "unknown_tool")
+                tool_span_id = deterministic_span_id(agent_exec_id, f"tool_{tool_span_counter}")
+
+                tool_span = Span(
+                    span_id=tool_span_id,
+                    span_type=SpanType.HYPOTHESIS,
+                    hypothesis_id=f"tool_{tool_span_counter}",
+                    label=f"{tool_name}",
+                    state=SpanState.OPEN,
+                    parent_span_id=unattributed_span.span_id,
+                    event_ids=[event_id],
+                    artifact_ids=[],
+                )
+                spans[tool_span_id] = tool_span
+                event_to_span[event_id] = tool_span_id
+
+                # Track for result pairing
+                pending_tool_call = tool_span_id
+                pending_tool_call_event_id = event_id
+
+            elif event_type == "tool_result":
+                # Attach to pending tool call if exists
+                if pending_tool_call and pending_tool_call in spans:
+                    spans[pending_tool_call].event_ids.append(event_id)
+                    event_to_span[event_id] = pending_tool_call
+
+                    # Mark as completed
+                    spans[pending_tool_call].state = SpanState.COMPLETED
+
+                    # Check for success/error
+                    if event_data.get("is_error"):
+                        spans[pending_tool_call].label += " (error)"
+                    else:
+                        spans[pending_tool_call].label += " ✓"
+
+                    pending_tool_call = None
+                    pending_tool_call_event_id = None
+                else:
+                    # Orphan result - attach to root
+                    unattributed_span.event_ids.append(event_id)
+                    event_to_span[event_id] = unattributed_span.span_id
+
+            else:
+                # Other events (llm_request, finding, etc.) - attach to root
+                unattributed_span.event_ids.append(event_id)
+                event_to_span[event_id] = unattributed_span.span_id
 
 
 # Export global instance

@@ -286,6 +286,86 @@ class ObservabilityService:
 
         return detail_id
 
+    # === Critic Loop Logging ===
+
+    def log_critic_started(
+        self,
+        agent_id: str,
+        span_id: str,
+        parent_span_id: str,
+        pass_number: int,
+    ) -> None:
+        """Log critic evaluation start."""
+        self._broadcast(WSMessage(
+            type=WSMessageType.PROGRESS,
+            agent_id=agent_id,
+            data={
+                "event": "critic_started",
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+                "pass_number": pass_number,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        ))
+
+    def log_critic_decision(
+        self,
+        agent_id: str,
+        span_id: str,
+        decision: str,
+        reasoning: Optional[str] = None,
+    ) -> None:
+        """Log critic decision."""
+        self._broadcast(WSMessage(
+            type=WSMessageType.PROGRESS,
+            agent_id=agent_id,
+            data={
+                "event": "critic_decision",
+                "span_id": span_id,
+                "decision": decision,
+                "reasoning": reasoning,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        ))
+
+    def log_critic_output(
+        self,
+        agent_id: str,
+        span_id: str,
+        blocking_gaps: list[str],
+        recommended_tool_calls: list[str],
+        disposition_hint: Optional[str] = None,
+    ) -> None:
+        """Log critic output details."""
+        self._broadcast(WSMessage(
+            type=WSMessageType.PROGRESS,
+            agent_id=agent_id,
+            data={
+                "event": "critic_output",
+                "span_id": span_id,
+                "blocking_gaps": blocking_gaps,
+                "recommended_tool_calls": recommended_tool_calls,
+                "disposition_hint": disposition_hint,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        ))
+
+    def log_critic_completed(
+        self,
+        agent_id: str,
+        span_id: str,
+    ) -> None:
+        """Log critic evaluation completion."""
+        self._broadcast(WSMessage(
+            type=WSMessageType.PROGRESS,
+            agent_id=agent_id,
+            data={
+                "event": "critic_completed",
+                "span_id": span_id,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        ))
+
     # === Data Retrieval ===
 
     def get_interactions(

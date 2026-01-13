@@ -403,6 +403,8 @@ class AgentOrchestrator:
             nonlocal current_tool_calls, current_request_id, current_tool_node_id, sdk_findings, session_policy_template
 
             event_type_str = event.get("type", "sdk_event")
+            if event_type_str == "finding":
+                print(f"[Orchestrator DEBUG] Received 'finding' event from SDK orchestrator. Keys: {list(event.keys())}")
 
             # Map SDK event types to WSMessageType
             SDK_TO_WS_MAP = {
@@ -576,6 +578,8 @@ class AgentOrchestrator:
                         tool_args = tc.get("args", {})
                         break
 
+                print(f"[Orchestrator DEBUG] tool_result: tool_use_id={tool_use_id}, tool_name={tool_name}, is_error={is_error}")
+
                 # Log to observability service
                 observability_service.log_tool_execution(
                     agent_id=agent_id,
@@ -594,7 +598,8 @@ class AgentOrchestrator:
                     flow_service.update_node_status(agent_id, current_tool_node_id, status)
 
                     # === Add finding/signal nodes if applicable ===
-                    if tool_name == "report_finding" and not is_error:
+                    # Tool names from MCP have the prefix "mcp__quickhack__"
+                    if tool_name.endswith("report_finding") and not is_error:
                         try:
                             # Debug: Log the raw result for diagnosis
                             print(f"[Orchestrator] report_finding result type: {type(result)}")
@@ -603,10 +608,25 @@ class AgentOrchestrator:
                             elif isinstance(result, str):
                                 print(f"[Orchestrator] result preview: {result[:200]}")
 
+                            # Strategy 0: Check if result is a list (MCP tool response format)
+                            finding_data = None
+                            if isinstance(result, list):
+                                print("[Orchestrator] Result is list, extracting text (Strategy 0)")
+                                for item in result:
+                                    if isinstance(item, dict) and item.get("type") == "text":
+                                        text = item.get("text", "")
+                                        if text.strip().startswith("{"):
+                                            try:
+                                                parsed = json.loads(text)
+                                                if isinstance(parsed, dict) and "finding" in parsed:
+                                                    finding_data = parsed
+                                                    print("[Orchestrator] Extracted finding from list text")
+                                                    break
+                                            except json.JSONDecodeError as jde:
+                                                print(f"[Orchestrator] JSON parse failed: {jde}")
                             # Strategy 1: Check if result is a dict with top-level "finding" key
                             # (This is what our improved MCP tool returns)
-                            finding_data = None
-                            if isinstance(result, dict) and "finding" in result:
+                            elif isinstance(result, dict) and "finding" in result:
                                 print("[Orchestrator] Found 'finding' at top level (Strategy 1)")
                                 finding_data = result
                             # Strategy 2: Check if result is SDK response format with content array
@@ -670,6 +690,14 @@ class AgentOrchestrator:
                                     }
                                     severity_enum = severity_map.get(severity_str.lower(), Severity.MEDIUM)
 
+                                    # Convert source_trace to list if it's a string
+                                    source_trace = raw_finding.get("source_trace")
+                                    if isinstance(source_trace, str):
+                                        source_trace = [source_trace] if source_trace else None
+                                    elif source_trace is None:
+                                        source_trace = None
+                                    # else it's already a list or will be validated by Pydantic
+
                                     finding_obj = Finding(
                                         id=f"{agent_id}-finding-{finding_counter[0]}",
                                         agent_id=agent_id,
@@ -688,7 +716,7 @@ class AgentOrchestrator:
                                         proof_of_concept=raw_finding.get("proof_of_concept"),
                                         recommended_fix=raw_finding.get("recommended_fix"),
                                         confidence=raw_finding.get("confidence", 0.5),
-                                        source_trace=raw_finding.get("source_trace"),
+                                        source_trace=source_trace,
                                         created_at=datetime.utcnow(),
                                         metadata={"source": "sdk_audit"},
                                     )
@@ -712,7 +740,7 @@ class AgentOrchestrator:
                             import traceback
                             traceback.print_exc()
 
-                    elif tool_name == "upsert_sink_signal" and not is_error:
+                    elif tool_name.endswith("upsert_sink_signal") and not is_error:
                         try:
                             signal_data = json.loads(result) if isinstance(result, str) else result
                             if isinstance(signal_data, dict) and "signal" in signal_data:
@@ -738,6 +766,74 @@ class AgentOrchestrator:
                             agent_id=agent_id,
                             data={"type": "flow_update", "flow": flow.to_dict()}
                         ))
+                return
+
+            # Handle "finding" events from SDK orchestrator
+            elif event_type_str == "finding":
+                try:
+                    raw_finding = event
+                    # Remove the 'type' key to get just the finding data
+                    raw_finding_data = {k: v for k, v in raw_finding.items() if k != 'type'}
+
+                    severity_str = raw_finding_data.get("severity", "medium")
+                    title = raw_finding_data.get("title", "Finding")
+
+                    print(f"[Orchestrator] Processing 'finding' event: {title} ({severity_str})")
+
+                    # Map severity string to Severity enum
+                    from models.schemas import Severity
+                    severity_map = {
+                        "critical": Severity.CRITICAL,
+                        "high": Severity.HIGH,
+                        "medium": Severity.MEDIUM,
+                        "low": Severity.LOW,
+                        "info": Severity.INFO,
+                    }
+                    severity_enum = severity_map.get(severity_str.lower(), Severity.MEDIUM)
+
+                    # Convert source_trace to list if it's a string
+                    source_trace = raw_finding_data.get("source_trace")
+                    if isinstance(source_trace, str):
+                        source_trace = [source_trace] if source_trace else None
+                    elif source_trace is None:
+                        source_trace = None
+
+                    finding_counter[0] += 1
+                    finding_obj = Finding(
+                        id=f"{agent_id}-finding-{finding_counter[0]}",
+                        agent_id=agent_id,
+                        repo_id=agent.repo_id,
+                        severity=severity_enum,
+                        title=title,
+                        description=raw_finding_data.get("description", ""),
+                        file_path=raw_finding_data.get("file_path", ""),
+                        line_start=raw_finding_data.get("line_start", 1),
+                        line_end=raw_finding_data.get("line_end"),
+                        code_snippet=raw_finding_data.get("vulnerable_code", ""),
+                        vulnerable_code=raw_finding_data.get("vulnerable_code", ""),
+                        vulnerability_type=raw_finding_data.get("vulnerability_type", "Unknown"),
+                        cwe_id=raw_finding_data.get("cwe_id"),
+                        attack_scenario=raw_finding_data.get("attack_scenario"),
+                        proof_of_concept=raw_finding_data.get("proof_of_concept"),
+                        recommended_fix=raw_finding_data.get("recommended_fix"),
+                        confidence=raw_finding_data.get("confidence", 0.5),
+                        source_trace=source_trace,
+                        created_at=datetime.utcnow(),
+                        metadata={"source": "sdk_audit"},
+                    )
+                    sdk_findings.append(finding_obj)
+
+                    # Broadcast finding to frontend
+                    self._broadcast_message(WSMessage(
+                        type=WSMessageType.FINDING,
+                        agent_id=agent_id,
+                        data=finding_obj.model_dump(mode='json'),
+                    ))
+                    print(f"[Orchestrator] ✓ Successfully broadcast finding from event: {title} ({severity_str})")
+                except Exception as e:
+                    print(f"[Orchestrator] ✗ Failed to process finding event: {e}")
+                    import traceback
+                    traceback.print_exc()
                 return
 
             self._broadcast_message(
@@ -993,6 +1089,86 @@ class AgentOrchestrator:
             focus_areas=focus_areas,
             target_files=target_files,
         )
+
+    def evaluate_with_critic(
+        self,
+        agent_id: str,
+        finding: Finding,
+        evidence: 'EvidenceResult',
+        checklist: 'ProofChecklist',
+        preliminary_disposition: 'Disposition',
+        pass_number: int,
+        remaining_tool_calls: int,
+        hypothesis_span_id: str
+    ) -> 'CriticDecision':
+        """
+        Evaluate finding with critic loop and emit observability events.
+
+        Args:
+            agent_id: ID of the agent performing evaluation
+            finding: Finding being evaluated
+            evidence: Evidence gathered so far
+            checklist: Proof checklist with current status
+            preliminary_disposition: Preliminary disposition assessment
+            pass_number: Current pass number (1, 2, 3, ...)
+            remaining_tool_calls: Tool calls remaining in budget
+            hypothesis_span_id: Parent span ID for hierarchy
+
+        Returns:
+            CriticDecision with decision, gaps, and recommendations
+        """
+        from services.critic_loop import CriticLoop, CriticInput
+
+        # Generate critic span ID
+        critic_span_id = f"critic_{hypothesis_span_id}_{pass_number}"
+
+        # Emit critic_started event
+        observability_service.log_critic_started(
+            agent_id=agent_id,
+            span_id=critic_span_id,
+            parent_span_id=hypothesis_span_id,
+            pass_number=pass_number
+        )
+
+        # Create critic input
+        critic_input = CriticInput(
+            finding=finding,
+            evidence=evidence,
+            checklist=checklist,
+            preliminary_disposition=preliminary_disposition,
+            pass_number=pass_number,
+            remaining_tool_calls=remaining_tool_calls,
+            hypothesis_span_id=hypothesis_span_id
+        )
+
+        # Evaluate with critic loop
+        critic = CriticLoop()
+        decision = critic.evaluate(critic_input)
+
+        # Emit critic_decision event
+        observability_service.log_critic_decision(
+            agent_id=agent_id,
+            span_id=critic_span_id,
+            decision=decision.decision,
+            reasoning=decision.reasoning
+        )
+
+        # Emit critic_output event with details
+        observability_service.log_critic_output(
+            agent_id=agent_id,
+            span_id=critic_span_id,
+            blocking_gaps=decision.blocking_gaps,
+            recommended_tool_calls=decision.recommended_tool_calls,
+            disposition_hint=decision.disposition_hint
+        )
+
+        # Emit critic_completed event
+        observability_service.log_critic_completed(
+            agent_id=agent_id,
+            span_id=critic_span_id
+        )
+
+        return decision
 
     async def pause_agent(self, agent_id: str) -> Agent:
         """Pause a running agent."""

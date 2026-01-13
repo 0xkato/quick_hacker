@@ -384,7 +384,7 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
                 start_line=args.get("start_line"),
                 end_line=args.get("end_line"),
             )
-            return _make_response(_truncate_output(result))
+            return _make_response(_truncate_output(result["content"]))
         except Exception as e:
             return _make_error_response(e)
 

@@ -686,7 +686,8 @@ class ToolExecutor:
     ) -> ToolResult:
         """Read file contents. Delegates to ToolCore."""
         try:
-            content = await self._tool_core.read_file(path, start_line, end_line)
+            result = await self._tool_core.read_file(path, start_line, end_line)
+            content = result["content"]
 
             # ToolCore returns content without line numbers when no range is specified
             # Add line numbers for consistency with legacy behavior

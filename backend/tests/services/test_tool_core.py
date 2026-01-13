@@ -87,8 +87,11 @@ class TestToolCoreReadFile:
     @pytest.mark.asyncio
     async def test_read_file_returns_content(self, tool_core, temp_repo):
         """Should return file content."""
-        content = await tool_core.read_file("src/main.py")
-        assert "def main(): pass" in content
+        result = await tool_core.read_file("src/main.py")
+        assert isinstance(result, dict)
+        assert "content" in result
+        assert "artifact_id" in result
+        assert "def main(): pass" in result["content"]
 
     @pytest.mark.asyncio
     async def test_read_file_with_line_range(self, tool_core, temp_repo):
@@ -96,7 +99,8 @@ class TestToolCoreReadFile:
         # Create multi-line file
         (temp_repo / "multiline.txt").write_text("line1\nline2\nline3\nline4\nline5")
 
-        content = await tool_core.read_file("multiline.txt", start_line=2, end_line=4)
+        result = await tool_core.read_file("multiline.txt", start_line=2, end_line=4)
+        content = result["content"]
         assert "line2" in content
         assert "line4" in content
         assert "line1" not in content
@@ -108,7 +112,8 @@ class TestToolCoreReadFile:
         (temp_repo / "short.txt").write_text("line1\nline2")
 
         # end_line beyond file length should be clamped
-        content = await tool_core.read_file("short.txt", start_line=1, end_line=100)
+        result = await tool_core.read_file("short.txt", start_line=1, end_line=100)
+        content = result["content"]
         assert "line1" in content
         assert "line2" in content
 
@@ -123,8 +128,8 @@ class TestToolCoreReadFile:
         """Should return empty when start >= end after clamping."""
         (temp_repo / "tiny.txt").write_text("line1")
 
-        content = await tool_core.read_file("tiny.txt", start_line=10, end_line=20)
-        assert content == ""
+        result = await tool_core.read_file("tiny.txt", start_line=10, end_line=20)
+        assert result["content"] == ""
 
     @pytest.mark.asyncio
     async def test_read_file_rejects_path_traversal(self, tool_core):

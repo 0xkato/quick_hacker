@@ -62,7 +62,7 @@ mkdir -p "$ROOT_DIR/repos" "$ROOT_DIR/data/agent_states"
 # Start databases with Docker
 if [ "$NO_DB" = false ] && [ "$FRONTEND_ONLY" = false ]; then
     echo -e "${BLUE}[1/4] Starting databases (Redis + PostgreSQL)...${NC}"
-    docker compose up -d redis postgres
+    docker compose up -d --pull never redis postgres
 
     # Wait for databases to be ready
     echo "Waiting for databases to be ready..."

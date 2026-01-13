@@ -79,6 +79,20 @@ class FlowNode:
     tool_result_summary: Optional[str] = None
     confidence_score: Optional[float] = None
 
+    # NEW: Span tracking fields (dual-write)
+    span_id: Optional[str] = None
+    parent_span_id: Optional[str] = None
+    hypothesis_id: Optional[str] = None
+    turn_id: int = 0
+    correlation_id: Optional[str] = None
+
+    # NEW: Artifact provenance
+    input_artifact_ids: list[str] = field(default_factory=list)
+    output_artifact_ids: list[str] = field(default_factory=list)
+
+    # NEW: Tool pairing
+    tool_invocation_id: Optional[str] = None
+
     def to_dict(self) -> dict:
         return asdict(self)
 

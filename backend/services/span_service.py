@@ -4,12 +4,45 @@ Span Service - Manages investigation spans.
 Provides CRUD operations for spans and maintains per-agent span stores.
 """
 
+import hashlib
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 from models.investigation_trace import (
     Span, SpanType, SpanState, SpanOutcome, FocusGap
 )
+
+
+def generate_deterministic_span_id(
+    agent_exec_id: str,
+    hypothesis_id: str,
+    suffix: str = ""
+) -> str:
+    """
+    Generate deterministic span ID.
+
+    Uses SHA1 hash of (agent_exec_id, hypothesis_id, suffix) for stable IDs
+    that survive reconstruction.
+
+    Args:
+        agent_exec_id: Agent execution identifier
+        hypothesis_id: Hypothesis identifier
+        suffix: Optional suffix for visit spans (e.g., ":visit_turn:10")
+
+    Returns:
+        Deterministic span ID like "span_a1b2c3d4e5f67890"
+
+    Examples:
+        >>> generate_deterministic_span_id("agent_1", "hyp_1")
+        "span_a1b2c3d4e5f67890"
+
+        >>> generate_deterministic_span_id("agent_1", "hyp_1", ":visit_turn:10")
+        "span_f0e1d2c3b4a59687"
+    """
+    key = f"{agent_exec_id}:{hypothesis_id}{suffix}"
+    hash_obj = hashlib.sha1(key.encode('utf-8'))
+    hash_hex = hash_obj.hexdigest()[:16]
+    return f"span_{hash_hex}"
 
 
 class SpanService:

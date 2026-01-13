@@ -1,6 +1,6 @@
 """Tests for SpanService"""
 import pytest
-from services.span_service import SpanService
+from services.span_service import SpanService, generate_deterministic_span_id
 from models.investigation_trace import Span, SpanType, SpanState
 
 def test_span_service_create_span():
@@ -244,3 +244,34 @@ def test_span_service_focus_note_truncation():
     # Should be truncated to 120 chars
     assert len(span.focus_note) == 120
     assert span.focus_note == "x" * 120
+
+def test_generate_deterministic_span_id():
+    """Span IDs should be deterministic for same inputs"""
+    agent_id = "agent_123"
+    hypothesis_id = "hyp_abc"
+
+    id1 = generate_deterministic_span_id(agent_id, hypothesis_id)
+    id2 = generate_deterministic_span_id(agent_id, hypothesis_id)
+
+    assert id1 == id2
+    assert id1.startswith("span_")
+    assert len(id1) == 21  # "span_" + 16 hex chars
+
+def test_generate_deterministic_span_id_with_suffix():
+    """Span IDs should support suffixes for visit spans"""
+    agent_id = "agent_123"
+    hypothesis_id = "hyp_abc"
+
+    base_id = generate_deterministic_span_id(agent_id, hypothesis_id)
+    visit_id = generate_deterministic_span_id(agent_id, hypothesis_id, ":visit_turn:10")
+
+    assert base_id != visit_id
+    assert visit_id.startswith("span_")
+
+def test_generate_deterministic_span_id_stability():
+    """Span IDs should be stable across process restarts"""
+    # Same inputs should always produce same output
+    id1 = generate_deterministic_span_id("agent_1", "hyp_1")
+    id2 = generate_deterministic_span_id("agent_1", "hyp_1")
+
+    assert id1 == id2

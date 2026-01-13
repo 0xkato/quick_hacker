@@ -78,24 +78,53 @@ const TreeLayout: React.FC<TreeLayoutProps> = ({ spans, edges }) => {
     return hidden;
   }, [spans, collapsedSpans]);
 
-  // Convert spans to React Flow nodes
+  // Convert spans to React Flow nodes with tree layout
   const nodes = useMemo<Node<HypothesisNodeData>[]>(() => {
-    return Object.values(spans)
-      .filter((span) => !hiddenSpanIds.has(span.span_id)) // O(1) lookup instead of O(n) walk
-      .map((span, index) => {
-        const isCollapsed = collapsedSpans.has(span.span_id);
+    // Calculate depth (level) for each span
+    const depthMap = new Map<string, number>();
+    const calculateDepth = (spanId: string): number => {
+      if (depthMap.has(spanId)) {
+        return depthMap.get(spanId)!;
+      }
+      const span = spans[spanId];
+      if (!span) return 0;
 
-        return {
-          id: span.span_id,
-          type: 'hypothesis',
-          position: { x: 0, y: index * 150 }, // Simple vertical stacking; advanced layout planned for future
-          data: {
-            span,
-            isCollapsed,
-            onToggleCollapse: () => toggleCollapse(span.span_id),
-          },
-        };
-      });
+      const depth = span.parent_span_id ? calculateDepth(span.parent_span_id) + 1 : 0;
+      depthMap.set(spanId, depth);
+      return depth;
+    };
+
+    // Calculate depth for all visible spans
+    const visibleSpans = Object.values(spans)
+      .filter((span) => !hiddenSpanIds.has(span.span_id));
+
+    visibleSpans.forEach((span) => calculateDepth(span.span_id));
+
+    // Count siblings at each depth level for Y positioning
+    const siblingsAtDepth = new Map<number, number>();
+
+    return visibleSpans.map((span) => {
+      const isCollapsed = collapsedSpans.has(span.span_id);
+      const depth = depthMap.get(span.span_id) || 0;
+
+      // Track how many nodes we've placed at this depth
+      const siblingIndex = siblingsAtDepth.get(depth) || 0;
+      siblingsAtDepth.set(depth, siblingIndex + 1);
+
+      return {
+        id: span.span_id,
+        type: 'hypothesis',
+        position: {
+          x: depth * 300,        // Horizontal spacing based on tree depth
+          y: siblingIndex * 150  // Vertical spacing based on sibling position
+        },
+        data: {
+          span,
+          isCollapsed,
+          onToggleCollapse: () => toggleCollapse(span.span_id),
+        },
+      };
+    });
   }, [spans, collapsedSpans, hiddenSpanIds, toggleCollapse]);
 
   // Convert edges to React Flow edges

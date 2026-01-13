@@ -2,6 +2,7 @@
 import pytest
 from datetime import datetime, timezone
 from models.investigation_trace import Span, SpanType, SpanState, SpanOutcome, FocusGap
+from models.investigation_trace import Artifact, ArtifactType
 
 def test_span_creation():
     """Span should be created with required fields"""
@@ -214,3 +215,45 @@ def test_span_focus_note_validation():
             state=SpanState.OPEN,
             focus_note=invalid_note
         )
+
+def test_artifact_creation():
+    """Artifact should be created with content hash ID"""
+    artifact = Artifact(
+        artifact_id="sha256_abc123",
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="def vulnerable_function():\n    pass",
+        summary="File snippet from auth.py:45-50"
+    )
+
+    assert artifact.artifact_id == "sha256_abc123"
+    assert artifact.artifact_type == ArtifactType.FILE_SNIPPET
+    assert artifact.content == "def vulnerable_function():\n    pass"
+    assert artifact.summary == "File snippet from auth.py:45-50"
+
+def test_artifact_with_references():
+    """Artifact should support file references"""
+    artifact = Artifact(
+        artifact_id="sha256_abc123",
+        artifact_type=ArtifactType.FILE_SNIPPET,
+        content="code here",
+        summary="File snippet",
+        file_path="app/auth.py",
+        line_start=45,
+        line_end=50
+    )
+
+    assert artifact.file_path == "app/auth.py"
+    assert artifact.line_start == 45
+    assert artifact.line_end == 50
+
+def test_artifact_content_hash_generation():
+    """Artifact ID should be deterministic content hash"""
+    from models.investigation_trace import generate_artifact_id
+
+    content = "def test(): pass"
+    id1 = generate_artifact_id(content)
+    id2 = generate_artifact_id(content)
+
+    assert id1 == id2
+    assert id1.startswith("art_")
+    assert len(id1) == 20  # "art_" + 16 hex chars

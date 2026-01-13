@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional
+import hashlib
+import json
 
 
 class SpanType(str, Enum):
@@ -42,6 +44,28 @@ class FocusGap(str, Enum):
     NOT_ONLY_MISCONFIG = "not_only_misconfig"
     SECURITY_CONTROL_BYPASSED = "security_control_bypassed"
     OTHER = "other"
+
+
+class ArtifactType(str, Enum):
+    """Type of artifact"""
+    FILE_SNIPPET = "file_snippet"
+    SEARCH_RESULT = "search_result"
+    CALL_GRAPH = "call_graph"
+    TOOL_OUTPUT = "tool_output"
+
+
+def generate_artifact_id(content: str) -> str:
+    """
+    Generate deterministic artifact ID from content hash.
+
+    Uses SHA256 hash for content deduplication.
+    """
+    if isinstance(content, dict):
+        content = json.dumps(content, sort_keys=True)
+
+    hash_obj = hashlib.sha256(content.encode('utf-8'))
+    hash_hex = hash_obj.hexdigest()[:16]  # First 16 chars
+    return f"art_{hash_hex}"
 
 
 @dataclass
@@ -100,4 +124,46 @@ class Span:
             "event_ids": self.event_ids,
             "artifact_ids": self.artifact_ids,
             "metadata": self.metadata
+        }
+
+
+@dataclass
+class Artifact:
+    """
+    Investigation artifact (file snippet, search result, etc.)
+
+    Deduplicated by content hash for efficient cross-span evidence tracking.
+    """
+    artifact_id: str
+    artifact_type: ArtifactType
+    content: str | dict
+    summary: str  # Max 200 chars
+
+    # File references (for FILE_SNIPPET type)
+    file_path: Optional[str] = None
+    line_start: Optional[int] = None
+    line_end: Optional[int] = None
+
+    # Provenance (computed during reconstruction)
+    producer_spans: set[str] = field(default_factory=set)
+    consumer_spans: set[str] = field(default_factory=set)
+
+    # Metadata
+    created_at: Optional[datetime] = None
+    size_bytes: int = 0
+
+    def to_dict(self) -> dict:
+        """Convert to dict for serialization"""
+        return {
+            "artifact_id": self.artifact_id,
+            "artifact_type": self.artifact_type.value,
+            "content": self.content,
+            "summary": self.summary,
+            "file_path": self.file_path,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "producer_spans": list(self.producer_spans),
+            "consumer_spans": list(self.consumer_spans),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "size_bytes": self.size_bytes
         }

@@ -193,7 +193,7 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="border-t border-vsc-border-subtle p-3 space-y-3 text-vsc-sm bg-vsc-sidebar">
+        <div className="border-t border-vsc-border-subtle p-3 space-y-3 text-vsc-sm bg-vsc-sidebar overflow-y-auto" style={{ maxHeight: '400px' }}>
           {/* Type */}
           <div className="flex items-center gap-2">
             <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">Type</span>

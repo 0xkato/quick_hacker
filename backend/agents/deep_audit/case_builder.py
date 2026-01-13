@@ -7,6 +7,29 @@ from typing import Any, Dict, List, Optional
 from services.prompt_router import PromptRouter
 
 
+class CaseBuilder:
+    """Case builder for Deep Audit signals.
+
+    Generates structured case files and assembles category-specific prompts.
+    """
+
+    def _assemble_prompt_for_category(self, category: str, stage: str, task: str) -> str:
+        """
+        Assemble prompt using PromptRouter for category-specific validity checklist.
+
+        Args:
+            category: Vulnerability category (e.g., "SQL_INJECTION", "XSS")
+            stage: DeepAudit stage (e.g., "trace_dataflow", "validate_exploitability")
+            task: Specific task description
+
+        Returns:
+            Assembled prompt with base + validity_checklist + stage + task
+        """
+        router = PromptRouter()
+        modules = router.route(category=category, stage=stage)
+        return router.assemble_from_paths(modules, task=task)
+
+
 def _map_signal_type_to_category(signal_type: str) -> Optional[str]:
     """
     Map signal_type to vulnerability category for PromptRouter.

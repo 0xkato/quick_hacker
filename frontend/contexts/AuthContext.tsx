@@ -186,6 +186,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initAuth();
   }, [getAccessToken, fetchUser, refreshToken]);
 
+  // Auto-refresh token before expiration to keep user logged in
+  useEffect(() => {
+    if (!user) return;
+
+    const scheduleRefresh = () => {
+      const token = getAccessToken();
+      if (!token) return;
+
+      try {
+        // Decode JWT to get expiration (format: base64url.base64url.base64url)
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const expiresAt = payload.exp * 1000; // Convert to milliseconds
+        const now = Date.now();
+        const timeUntilExpiry = expiresAt - now;
+
+        // Refresh 5 minutes before expiration (or immediately if less than 5 minutes left)
+        const refreshBuffer = 5 * 60 * 1000; // 5 minutes
+        const refreshIn = Math.max(0, timeUntilExpiry - refreshBuffer);
+
+        const timeoutId = setTimeout(async () => {
+          console.log('[Auth] Auto-refreshing token...');
+          await refreshToken();
+        }, refreshIn);
+
+        return timeoutId;
+      } catch (error) {
+        console.error('[Auth] Failed to schedule token refresh:', error);
+      }
+    };
+
+    const timeoutId = scheduleRefresh();
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [user, getAccessToken, refreshToken]);
+
   return (
     <AuthContext.Provider
       value={{

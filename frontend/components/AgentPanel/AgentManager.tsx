@@ -18,6 +18,7 @@ import {
 import clsx from 'clsx';
 import type { Agent, AgentType, ScanTier, ProviderType, AgentCreateRequest, AgentProgress } from '@/types';
 import { agents as agentsApi, settings as settingsApi, type AppSettings } from '@/lib/api';
+import { CacheMetricsCard } from '@/components/CacheMetrics/CacheMetricsCard';
 
 interface AgentManagerProps {
   repoId: string | null;
@@ -598,6 +599,10 @@ export function AgentManager({
       </div>
 
       <div className="flex-1 overflow-auto p-2 space-y-2">
+        {/* Cache Metrics */}
+        <CacheMetricsCard />
+
+        {/* Agent Cards */}
         {agents.length === 0 ? (
           <div className="empty-state">
             <Bug className="empty-state-icon" />

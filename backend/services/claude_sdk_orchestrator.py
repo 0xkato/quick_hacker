@@ -373,7 +373,7 @@ class ClaudeSDKOrchestrator:
                         if candidate.startswith("{") or candidate.startswith("["):
                             try:
                                 parsed = json.loads(text)
-                                print("[SDK Orchestrator] Parsed JSON from text")
+                                print(f"[SDK Orchestrator] Parsed JSON from text. First 200 chars: {text[:200]}")
                             except json.JSONDecodeError as jde:
                                 print(f"[SDK Orchestrator] JSON parse failed: {jde}")
                                 parsed = None
@@ -386,7 +386,10 @@ class ClaudeSDKOrchestrator:
                     # Broadcast finding in real-time
                     self._emit_event("finding", finding)
                 else:
-                    print(f"[SDK Orchestrator] No finding extracted. parsed type: {type(parsed)}, has 'finding': {isinstance(parsed, dict) and 'finding' in parsed if parsed else False}")
+                    if isinstance(parsed, dict):
+                        print(f"[SDK Orchestrator] No finding extracted. parsed keys: {list(parsed.keys())}, has 'finding': {'finding' in parsed}")
+                    else:
+                        print(f"[SDK Orchestrator] No finding extracted. parsed type: {type(parsed)}, value: {parsed}")
 
         try:
             # Emit request event (the prompt being sent to Claude)

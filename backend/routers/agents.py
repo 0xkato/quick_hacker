@@ -178,6 +178,55 @@ async def get_agent(agent_id: str):
     raise HTTPException(status_code=404, detail="Agent not found")
 
 
+@router.post("/{agent_id}/load")
+async def load_agent_state(agent_id: str):
+    """Load agent's persisted state into memory (observability, flow, findings)."""
+    from models.observability import LLMInteraction, ToolDetail
+
+    # Load persisted state
+    snapshot = persistence_service.load_agent_state(agent_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="No persisted state found for this agent")
+
+    # Restore LLM interactions to observability service
+    if snapshot.llm_interactions:
+        observability_service._interactions[agent_id] = []
+        for interaction_data in snapshot.llm_interactions:
+            try:
+                interaction = LLMInteraction(**interaction_data)
+                observability_service._interactions[agent_id].append(interaction)
+            except Exception as e:
+                print(f"[LoadAgent] Failed to restore LLM interaction: {e}")
+
+    # Restore tool details to observability service
+    if snapshot.tool_details:
+        observability_service._tool_details[agent_id] = []
+        for tool_data in snapshot.tool_details:
+            try:
+                tool_detail = ToolDetail(**tool_data)
+                observability_service._tool_details[agent_id].append(tool_detail)
+            except Exception as e:
+                print(f"[LoadAgent] Failed to restore tool detail: {e}")
+
+    # Restore flow visualization
+    if snapshot.flow_nodes or snapshot.flow_edges:
+        flow_service.restore_flow(
+            agent_id,
+            nodes=snapshot.flow_nodes or [],
+            edges=snapshot.flow_edges or [],
+            current_node_id=snapshot.current_flow_node_id,
+        )
+
+    return {
+        "status": "ok",
+        "agent_id": agent_id,
+        "interactions_loaded": len(snapshot.llm_interactions or []),
+        "tool_details_loaded": len(snapshot.tool_details or []),
+        "flow_nodes_loaded": len(snapshot.flow_nodes or []),
+        "findings_loaded": len(snapshot.findings or []),
+    }
+
+
 @router.delete("/{agent_id}", response_model=APIResponse)
 async def delete_agent(agent_id: str):
     """Delete an agent, its findings, and persisted state."""

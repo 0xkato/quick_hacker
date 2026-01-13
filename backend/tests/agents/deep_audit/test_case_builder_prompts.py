@@ -1,6 +1,7 @@
 import pytest
 from services.prompt_router import PromptRouter
 from agents.deep_audit.case_builder import (
+    CaseBuilder,
     _map_signal_type_to_category,
     assemble_auditor_prompt_for_signal,
 )
@@ -8,26 +9,29 @@ from agents.deep_audit.subagents import get_auditor_prompt
 
 def test_case_builder_loads_validity_checklist_for_sql_injection():
     """Test that case builder loads SQL injection validity checklist."""
-    # Test the PromptRouter integration concept
-    router = PromptRouter()
-    modules = router.route(category="SQL_INJECTION")
+    # Test the _assemble_prompt_for_category method on CaseBuilder instance
+    case_builder = CaseBuilder()
+    prompt = case_builder._assemble_prompt_for_category(
+        category="SQL_INJECTION",
+        stage="validate_exploitability",
+        task="Analyze potential SQL injection"
+    )
 
-    # Verify correct checklist is selected
-    assert modules.validity_checklist == "validity_checklists/sql_injection.md"
-
-    # Verify prompt can be assembled
-    prompt = router.assemble_from_paths(modules, task="Analyze potential SQL injection")
+    # Verify prompt includes validity checklist
     assert "SQL Injection Proof Checklist" in prompt
     assert "sink_present" in prompt
 
 def test_case_builder_loads_validity_checklist_for_xss():
     """Test that case builder loads XSS validity checklist."""
-    router = PromptRouter()
-    modules = router.route(category="XSS")
+    # Test the _assemble_prompt_for_category method on CaseBuilder instance
+    case_builder = CaseBuilder()
+    prompt = case_builder._assemble_prompt_for_category(
+        category="XSS",
+        stage="validate_exploitability",
+        task="Analyze potential XSS"
+    )
 
-    assert modules.validity_checklist == "validity_checklists/xss.md"
-
-    prompt = router.assemble_from_paths(modules, task="Analyze potential XSS")
+    # Verify prompt includes XSS validity checklist
     assert "XSS" in prompt
     assert "security_control_bypassed" in prompt
 

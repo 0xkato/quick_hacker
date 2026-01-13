@@ -127,6 +127,7 @@ class ReActSecurityAgent:
         request: AgentCreateRequest,
         repo_path: str,
         on_message: Optional[Callable[[WSMessage], None]] = None,
+        cache: Optional["ToolCache"] = None,
     ):
         self.id = str(uuid.uuid4())[:8]
         self.request = request  # Store for SDK mode fallback in to_schema()/get_state_snapshot()
@@ -168,7 +169,7 @@ class ReActSecurityAgent:
         self._on_message = on_message
 
         # Tools and provider
-        self.tool_executor = ToolExecutor(repo_path, project_id=self.repo_id)
+        self.tool_executor = ToolExecutor(repo_path, project_id=self.repo_id, cache=cache)
 
         # Dual-model support
         self._scanner_config: Optional[ProviderConfig] = None

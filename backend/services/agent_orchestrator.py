@@ -199,16 +199,44 @@ class AgentOrchestrator:
         if use_claude_sdk:
             print("[Orchestrator] Using Claude SDK mode")
 
+        # Create cache if enabled
+        cache = None
+        if settings.tool_cache_enabled:
+            try:
+                cache = ToolCache(
+                    max_size=settings.tool_cache_max_size,
+                    ttl_seconds=settings.tool_cache_ttl_seconds,
+                )
+            except ValueError as e:
+                logger.error(
+                    "Failed to initialize tool cache with max_size=%d, ttl_seconds=%d: %s",
+                    settings.tool_cache_max_size,
+                    settings.tool_cache_ttl_seconds,
+                    str(e)
+                )
+                # Continue without cache rather than failing agent creation
+                cache = None
+
         # Create agent instance
         agent_class = AGENT_CLASSES.get(request.agent_type)
         if not agent_class:
             raise ValueError(f"Unknown agent type: {request.agent_type}")
 
-        agent = agent_class(
-            request=request,
-            repo_path=repo_path,
-            on_message=self._broadcast_message,
-        )
+        # Pass cache to agent constructor if it accepts it
+        agent_kwargs = {
+            "request": request,
+            "repo_path": repo_path,
+            "on_message": self._broadcast_message,
+        }
+
+        # ReActSecurityAgent accepts cache parameter
+        if agent_class == ReActSecurityAgent:
+            agent_kwargs["cache"] = cache
+
+        agent = agent_class(**agent_kwargs)
+
+        # Store cache on agent for potential reuse in _run_sdk_agent
+        agent._tool_cache = cache
 
         async with self._lock:
             self._agents[agent.id] = agent
@@ -847,24 +875,8 @@ class AgentOrchestrator:
             tool_core=None,  # Will be set after tool_core is created
         )
 
-        # Create cache if enabled
-        cache = None
-        if settings.tool_cache_enabled:
-            try:
-                cache = ToolCache(
-                    max_size=settings.tool_cache_max_size,
-                    ttl_seconds=settings.tool_cache_ttl_seconds,
-                )
-            except ValueError as e:
-                # This should never happen due to Pydantic validation, but handle gracefully
-                logger.error(
-                    "Failed to initialize tool cache with max_size=%d, ttl_seconds=%d: %s",
-                    settings.tool_cache_max_size,
-                    settings.tool_cache_ttl_seconds,
-                    str(e)
-                )
-                # Continue without cache rather than failing agent creation
-                cache = None
+        # Reuse cache from agent if it was already created, otherwise create new
+        cache = getattr(agent, '_tool_cache', None)
 
         # Create ToolCore with limits factory from orchestrator
         tool_core = ToolCore(

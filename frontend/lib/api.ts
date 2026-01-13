@@ -779,4 +779,21 @@ export const session = {
   },
 };
 
+// === Cache API ===
+
+export interface CacheMetrics {
+  enabled: boolean;
+  hits: number;
+  misses: number;
+  hit_rate: number;
+  size: number;
+  cache_count?: number;
+}
+
+export const cache = {
+  async getMetrics(): Promise<CacheMetrics> {
+    return request<CacheMetrics>('/api/cache/metrics');
+  },
+};
+
 export { APIError, API_BASE };

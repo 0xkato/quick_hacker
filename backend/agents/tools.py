@@ -573,6 +573,7 @@ class ToolExecutor:
         repo_path: str,
         project_id: Optional[str] = None,
         time_budget_ms: Optional[int] = None,
+        cache: Optional["ToolCache"] = None,
     ):
         self.repo_path = Path(repo_path)
         self.project_id = project_id
@@ -590,6 +591,7 @@ class ToolExecutor:
             repo_path=str(self.repo_path),
             project_id=project_id or "",
             get_scan_limits=self._make_scan_limits,
+            cache=cache,
         )
 
     def _safe_path(self, path: str) -> Path:

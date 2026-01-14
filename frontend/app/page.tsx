@@ -35,7 +35,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '@/hooks/useAuth';
 import { useInvestigationFlow } from '@/hooks/useInvestigationFlow';
 import { featureFlags, FeatureFlag } from '@/lib/featureFlags';
-import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, session as sessionApi, initializeAuth, setAuthFunctions, type Project } from '@/lib/api';
+import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, session as sessionApi, setAuthFunctions, type Project } from '@/lib/api';
 import type {
   FileNode,
   FileContent,
@@ -58,7 +58,6 @@ export default function Home() {
   // Project state
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [isProjectLoading, setIsProjectLoading] = useState(true);
-  const [isAuthReady, setIsAuthReady] = useState(false);
   const [isThreatModelSaving, setIsThreatModelSaving] = useState(false);
 
   // State
@@ -161,7 +160,7 @@ export default function Home() {
 
   // WebSocket - only connect after auth is ready (JWT or legacy session token)
   const { isConnected } = useWebSocket({
-    enabled: isAuthReady,
+    enabled: isAuthenticated,
     onFinding: useCallback((finding: Finding) => {
       // Only add finding if it belongs to an agent in the current project
       setFindings((prev) => {
@@ -220,7 +219,7 @@ export default function Home() {
 
   // Load flow and observability data when agent is selected
   useEffect(() => {
-    if (!selectedAgentId) {
+    if (!isAuthenticated || !selectedAgentId) {
       setAgentFlow(null);
       setLlmInteractions([]);
       setToolDetails([]);
@@ -287,12 +286,12 @@ export default function Home() {
         clearInterval(intervalId);
       }
     };
-  }, [selectedAgentId, agents]);
+  }, [selectedAgentId, agents, isAuthenticated]);
 
   // Load call-tree routes when enabled
   useEffect(() => {
     const projectId = currentProject?.id;
-    if (!projectId || diagramMode !== 'calltree') {
+    if (!isAuthenticated || !projectId || diagramMode !== 'calltree') {
       setCallTreeRoutes([]);
       setSelectedRouteId(null);
       setCallTreeFlow(null);
@@ -327,12 +326,12 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [currentProject?.id, diagramMode]);
+  }, [currentProject?.id, diagramMode, isAuthenticated]);
 
   // Build call tree when a route is selected
   useEffect(() => {
     const projectId = currentProject?.id;
-    if (!projectId || diagramMode !== 'calltree' || !selectedRouteId) {
+    if (!isAuthenticated || !projectId || diagramMode !== 'calltree' || !selectedRouteId) {
       setCallTreeFlow(null);
       setIsCallTreeLoading(false);
       return;
@@ -360,18 +359,20 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [currentProject?.id, diagramMode, selectedRouteId]);
+  }, [currentProject?.id, diagramMode, selectedRouteId, isAuthenticated]);
 
   // Initialize auth and check project status on mount
   useEffect(() => {
+    if (isAuthLoading || !isAuthenticated) {
+      return;
+    }
+
+    setIsProjectLoading(true);
+    let cancelled = false;
     const initialize = async () => {
       try {
-        // Initialize authentication first
-        await initializeAuth();
-        setIsAuthReady(true);
-
-        // Then check project status
         const status = await projectsApi.getStatus();
+        if (cancelled) return;
         if (status.current_project) {
           setCurrentProject(status.current_project);
           // Load project data when restoring from a previous session
@@ -379,19 +380,20 @@ export default function Home() {
         }
       } catch (err) {
         console.error('Failed to initialize:', err);
-        // Still mark auth as ready to allow reconnection attempts
-        setIsAuthReady(true);
       } finally {
-        setIsProjectLoading(false);
+        if (!cancelled) setIsProjectLoading(false);
       }
     };
     initialize();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthLoading, isAuthenticated]);
 
   // Check for existing snapshot on project load
   useEffect(() => {
     const projectId = currentProject?.id;
-    if (!projectId || !isAuthReady) return;
+    if (!isAuthenticated || !projectId) return;
 
     const checkSnapshot = async () => {
       try {
@@ -403,7 +405,7 @@ export default function Home() {
     };
 
     checkSnapshot();
-  }, [currentProject?.id, isAuthReady]);
+  }, [currentProject?.id, isAuthenticated]);
 
   // Load project data when entering a project
   const loadProjectData = async (project: Project) => {

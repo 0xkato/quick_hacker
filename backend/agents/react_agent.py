@@ -48,6 +48,7 @@ from prompting_loader import load_prompt, render_prompt
 from providers import Message, get_provider
 from services.attack_surface_service import attack_surface_service, AttackSurfaceTriageItem
 from services.flow_service import flow_service
+from services.findings_service import findings_service
 from services.investigation_queue_service import investigation_queue_service
 from services.observability_service import observability_service
 from services.code_graph_service import code_graph_service
@@ -1806,7 +1807,7 @@ class ReActSecurityAgent:
         return tool_name
 
     async def _create_finding(self, data: dict):
-        """Create a Finding from reported data."""
+        """Create a Finding from reported data and save to database."""
         try:
             finding = Finding(
                 id=str(uuid.uuid4())[:8],
@@ -1831,7 +1832,18 @@ class ReActSecurityAgent:
                 metadata={"agent_type": self.agent_type.value}
             )
 
+            # Save to in-memory list (for backward compatibility)
             self.findings.append(finding)
+
+            # Save to database (for persistence)
+            try:
+                await findings_service.save_finding(finding)
+                self._log(f"Finding saved to database: {finding.id}")
+            except Exception as db_err:
+                self._log(f"Failed to save finding to database: {db_err}", "error")
+                # Continue anyway - finding is still in memory and will be in snapshot
+
+            # Broadcast to WebSocket
             self._broadcast(WSMessageType.FINDING, finding.model_dump(mode='json'))
             self._log(f"Finding reported: {finding.title} ({finding.severity.value})")
 

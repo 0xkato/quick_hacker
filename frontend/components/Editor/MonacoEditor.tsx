@@ -97,6 +97,7 @@ export function MonacoEditor({ file, findings = [], onLineClick }: MonacoEditorP
 
     // Create decorations for findings
     const decorations: editor.IModelDeltaDecoration[] = fileFindings.map((finding) => {
+      const severity = finding.severity ?? 'info';
       const severityColors: Record<string, string> = {
         critical: 'rgba(241, 76, 76, 0.25)',
         high: 'rgba(204, 167, 0, 0.25)',
@@ -122,17 +123,17 @@ export function MonacoEditor({ file, findings = [], onLineClick }: MonacoEditorP
         ),
         options: {
           isWholeLine: true,
-          className: `finding-decoration-${finding.severity}`,
-          linesDecorationsClassName: `finding-glyph-${finding.severity}`,
+          className: `finding-decoration-${severity}`,
+          linesDecorationsClassName: `finding-glyph-${severity}`,
           hoverMessage: {
-            value: `**${finding.severity.toUpperCase()}**: ${finding.title}\n\n${finding.description}`,
+            value: `**${severity.toUpperCase()}**: ${finding.title}\n\n${finding.description}`,
           },
           overviewRuler: {
-            color: glyphColors[finding.severity] || '#858585',
+            color: glyphColors[severity] || '#858585',
             position: monaco.editor.OverviewRulerLane.Right,
           },
           minimap: {
-            color: severityColors[finding.severity] || '#858585',
+            color: severityColors[severity] || '#858585',
             position: monaco.editor.MinimapPosition.Inline,
           },
         },

@@ -51,7 +51,7 @@ const DISPOSITION_LABELS: Record<Disposition, string> = {
 };
 
 // Reportable dispositions
-const REPORTABLE_DISPOSITIONS: Set<Disposition> = new Set(['VALID_SECURITY_ISSUE', 'BUG']);
+const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['VALID_SECURITY_ISSUE', 'BUG']);
 
 interface FindingsListProps {
   findings: Finding[];

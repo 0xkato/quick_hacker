@@ -262,7 +262,7 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
                 : 0}
             </span>
           </div>
-          {data.data.by_disposition && typeof data.data.by_disposition === 'object' && (
+          {typeof data.data.by_disposition === 'object' && data.data.by_disposition !== null && (
             <div className="text-vsc-xs text-vsc-text-muted pt-1 border-t border-vsc-border">
               {Object.entries(data.data.by_disposition as Record<string, number>)
                 .filter(([_, count]) => count > 0)

@@ -17,7 +17,8 @@ from models.schemas import (
     TriageResult,
     TriageMetrics,
     ChecklistStatus,
-    ChecklistItem
+    ChecklistItem,
+    FindingClassification,
 )
 from services.evidence_gatherer import EvidenceGatherer
 from services.strict_classifier import StrictClassifier
@@ -36,6 +37,25 @@ class FindingTriageService:
 
     def __init__(self):
         pass
+
+    def _classification_from_disposition(
+        self, disposition: Disposition | None, current: FindingClassification
+    ) -> FindingClassification:
+        """Map triage disposition to UI-facing classification badge."""
+        if disposition is None:
+            return current
+
+        if disposition == Disposition.VALID_SECURITY_ISSUE:
+            return FindingClassification.SECURITY_ISSUE
+        if disposition == Disposition.BUG:
+            return FindingClassification.BUG
+        if disposition == Disposition.MISCONFIGURATION:
+            return FindingClassification.MISCONFIGURATION
+        if disposition in (Disposition.HARDENING, Disposition.BY_DESIGN):
+            return FindingClassification.HARDENING
+
+        # SPECULATIVE: keep original (default is SECURITY_ISSUE).
+        return current
 
     def triage_findings(
         self,
@@ -274,6 +294,9 @@ class FindingTriageService:
         triaged = finding.model_copy(deep=True)
         triaged.batch_id = batch_id
         triaged.disposition = classification.disposition
+        triaged.classification = self._classification_from_disposition(
+            classification.disposition, triaged.classification
+        )
         triaged.classification_confidence = classification.classification_confidence
         triaged.exploit_confidence = classification.exploit_confidence
         triaged.proof_checklist = classification.proof_checklist

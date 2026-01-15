@@ -90,6 +90,10 @@ class AppSettings(BaseModel):
             default_model="claude-sonnet-4-20250514",
             available_models=["claude-opus-4-5-20251101", "claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"]
         ),
+        "codex_cli": ProviderSettings(
+            default_model="gpt-5.2-codex",
+            available_models=["gpt-5.2-codex", "gpt-5.2", "gpt-4o"]
+        ),
         "ollama": ProviderSettings(
             base_url="http://ollama:11434",
             default_model="llama3.1",

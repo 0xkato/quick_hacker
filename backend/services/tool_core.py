@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import ast
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -27,6 +28,7 @@ from services.sink_signal_service import compute_signal_fingerprint, sink_signal
 from services.tool_cache import ToolCache
 from services.git_head_tracker import GitHeadTracker
 from services.artifact_service import artifact_service
+from services.redaction_service import redaction_service
 from models.investigation_trace import Artifact, ArtifactType, generate_artifact_id
 
 
@@ -160,15 +162,15 @@ class ToolCore:
         # Build candidate path WITHOUT resolving yet
         candidate = self.repo_path / path
 
-        # Check path traversal BEFORE checking existence
-        # (WorkspacePolicy checks existence first, which would mask traversal attacks)
-        resolved = candidate.resolve()
+        # Fast lexical traversal check that doesn't follow symlinks.
+        # This ensures we reject escapes even when the target path does not exist.
+        normalized = Path(os.path.normpath(str(candidate)))
         try:
-            resolved.relative_to(self.repo_path)
+            normalized.relative_to(self.repo_path)
         except ValueError:
             raise ValueError(f"Path escapes workspace: {path}")
 
-        # Use WorkspacePolicy for remaining validation (existence, excluded dirs, size)
+        # WorkspacePolicy must validate BEFORE we resolve for use.
         ok, reason = self.workspace_policy.validate_path(candidate)
         if not ok:
             if reason and "not exist" in reason.lower():
@@ -176,6 +178,13 @@ class ToolCore:
             if reason and "excluded" in reason.lower():
                 raise ValueError(f"Path in excluded directory: {path}")
             raise ValueError(f"Path rejected: {reason}")
+
+        # Now resolve for use (safe after policy validation).
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(self.repo_path)
+        except ValueError:
+            raise ValueError(f"Path escapes workspace: {path}")
 
         return resolved
 
@@ -307,6 +316,9 @@ class ToolCore:
                 result_content = "\n".join(numbered)
                 actual_start = start_idx + 1
                 actual_end = end_idx
+
+        # Redact secrets before returning/storing artifacts (LLMs should not receive raw secrets).
+        result_content = redaction_service.redact(result_content)
 
         # Create artifact
         artifact = self._create_file_artifact(
@@ -475,65 +487,48 @@ class ToolCore:
                     return cached_result
 
         # Cache miss or caching disabled - execute tool
-        import re
+        limits = self._get_scan_limits()
 
-        try:
-            regex = re.compile(pattern, re.IGNORECASE)
-        except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}")
+        # Translate file_pattern to semantic_grep's file_glob.
+        file_glob = file_pattern or "**/*"
 
-        results: list[dict] = []
-        files_searched = 0
+        scan = await semantic_grep(
+            policy=self.workspace_policy,
+            pattern=pattern,
+            limits=limits,
+            context_lines=0,
+            file_glob=file_glob,
+            max_matches=max_results,
+        )
 
-        def search_files():
-            nonlocal results, files_searched
+        if not scan.success:
+            raise ValueError(scan.error or "search_code failed")
 
-            for root, dirs, files in os.walk(self.repo_path):
-                # Skip excluded directories
-                dirs[:] = [d for d in dirs
-                          if not d.startswith(".")
-                          and d not in self.DEFAULT_EXCLUDED_DIRS]
+        results: list[dict[str, Any]] = []
+        for finding in scan.findings[:max_results]:
+            # Convert absolute paths to repo-relative for UI consistency.
+            file_str = str(finding.file_path)
+            try:
+                file_str = str(Path(file_str).resolve().relative_to(self.repo_path))
+            except Exception:
+                pass
 
-                for filename in files:
-                    if filename.startswith("."):
-                        continue
-                    if file_pattern and not Path(filename).match(file_pattern.replace("**/", "")):
-                        continue
+            snippet = (finding.snippet or "").splitlines()
+            line_preview = snippet[0].strip() if snippet else ""
 
-                    file_path = Path(root) / filename
-                    rel_path = file_path.relative_to(self.repo_path)
-
-                    # Skip binary files
-                    if file_path.suffix in {".png", ".jpg", ".gif", ".ico", ".woff",
-                                           ".ttf", ".eot", ".pdf", ".zip", ".tar", ".gz"}:
-                        continue
-
-                    try:
-                        content = file_path.read_text(errors="ignore")
-                        files_searched += 1
-
-                        for i, line in enumerate(content.split("\n"), 1):
-                            if regex.search(line):
-                                results.append({
-                                    "file": str(rel_path),
-                                    "line": i,
-                                    "content": line.strip()[:200]
-                                })
-                                if len(results) >= max_results:
-                                    return
-                    except Exception:
-                        continue
-
-                if len(results) >= max_results:
-                    return
-
-        await asyncio.to_thread(search_files)
+            results.append(
+                {
+                    "file": file_str,
+                    "line": int(finding.line_start or 1),
+                    "content": line_preview[:200],
+                }
+            )
 
         result = {
             "matches": results,
             "count": len(results),
-            "files_searched": files_searched,
-            "truncated": len(results) >= max_results,
+            "files_searched": int(scan.files_scanned or 0),
+            "truncated": len(scan.findings) > len(results),
         }
 
         # Store in cache if enabled
@@ -541,6 +536,194 @@ class ToolCore:
             self.cache.set(cache_key, result)
 
         return result
+
+    async def analyze_ast(self, file_path: str) -> dict[str, Any]:
+        """Analyze a source file with best-effort AST parsing.
+
+        Currently supports Python files (`.py`).
+        """
+        resolved = self._validate_path(file_path)
+        suffix = resolved.suffix.lower()
+
+        content = await asyncio.to_thread(resolved.read_text, errors="ignore")
+
+        if suffix != ".py":
+            return {
+                "file_path": file_path,
+                "language": "unknown",
+                "supported": False,
+                "error": f"Unsupported file type for AST analysis: {suffix}",
+            }
+
+        tree = ast.parse(content)
+
+        functions: list[dict[str, Any]] = []
+        classes: list[dict[str, Any]] = []
+        imports: list[dict[str, Any]] = []
+
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions.append(
+                    {
+                        "name": node.name,
+                        "line_start": getattr(node, "lineno", None),
+                        "line_end": getattr(node, "end_lineno", None),
+                        "args": [a.arg for a in node.args.args],
+                        "is_async": isinstance(node, ast.AsyncFunctionDef),
+                    }
+                )
+            elif isinstance(node, ast.ClassDef):
+                classes.append(
+                    {
+                        "name": node.name,
+                        "line_start": getattr(node, "lineno", None),
+                        "line_end": getattr(node, "end_lineno", None),
+                        "methods": [
+                            n.name
+                            for n in node.body
+                            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        ],
+                    }
+                )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.append(
+                        {
+                            "module": alias.name,
+                            "asname": alias.asname,
+                            "line": getattr(node, "lineno", None),
+                        }
+                    )
+            elif isinstance(node, ast.ImportFrom):
+                imports.append(
+                    {
+                        "module": node.module,
+                        "names": [a.name for a in node.names],
+                        "level": node.level,
+                        "line": getattr(node, "lineno", None),
+                    }
+                )
+
+        return {
+            "file_path": file_path,
+            "language": "python",
+            "supported": True,
+            "functions": functions,
+            "classes": classes,
+            "imports": imports,
+        }
+
+    async def trace_dataflow(self, file_path: str, line_number: int) -> dict[str, Any]:
+        """Best-effort local dataflow trace for a given file location.
+
+        This is intentionally conservative and Python-only for now; it is meant to
+        help the model gather evidence, not to prove exploitability on its own.
+        """
+        resolved = self._validate_path(file_path)
+        if resolved.suffix.lower() != ".py":
+            return {
+                "file_path": file_path,
+                "line_number": line_number,
+                "supported": False,
+                "error": "trace_dataflow currently supports Python files only",
+            }
+
+        content = await asyncio.to_thread(resolved.read_text, errors="ignore")
+        tree = ast.parse(content)
+
+        # Find the smallest enclosing function.
+        enclosing: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+        enclosing_span: int | None = None
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            start = getattr(node, "lineno", None)
+            end = getattr(node, "end_lineno", None)
+            if start is None or end is None:
+                continue
+            if start <= line_number <= end:
+                span = end - start
+                if enclosing is None or (enclosing_span is not None and span < enclosing_span):
+                    enclosing = node
+                    enclosing_span = span
+
+        if enclosing is None:
+            return {
+                "file_path": file_path,
+                "line_number": line_number,
+                "supported": True,
+                "enclosing_function": None,
+                "variables": [],
+            }
+
+        # Collect assignments up to the target line.
+        assignments: dict[str, ast.AST] = {}
+        for node in ast.walk(enclosing):
+            node_line = getattr(node, "lineno", None)
+            if node_line is None or node_line >= line_number:
+                continue
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        assignments[target.id] = node.value
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name) and node.value is not None:
+                    assignments[node.target.id] = node.value
+            elif isinstance(node, ast.AugAssign):
+                if isinstance(node.target, ast.Name):
+                    assignments[node.target.id] = node.value
+
+        # Find variable names referenced on the target line.
+        referenced: set[str] = set()
+        for node in ast.walk(enclosing):
+            if getattr(node, "lineno", None) != line_number:
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                    referenced.add(sub.id)
+
+        args = {a.arg for a in enclosing.args.args}
+
+        def fmt(expr: ast.AST) -> str:
+            try:
+                return ast.unparse(expr)
+            except Exception:
+                return expr.__class__.__name__
+
+        traces: list[dict[str, Any]] = []
+        for name in sorted(referenced):
+            chain: list[str] = [name]
+            origin: str | None = None
+
+            cur = name
+            for _ in range(10):
+                if cur in args:
+                    origin = "parameter"
+                    break
+                expr = assignments.get(cur)
+                if expr is None:
+                    break
+                if isinstance(expr, ast.Name):
+                    cur = expr.id
+                    chain.append(cur)
+                    continue
+                origin = fmt(expr)
+                break
+
+            traces.append({"name": name, "chain": chain, "origin": origin})
+
+        return {
+            "file_path": file_path,
+            "line_number": int(line_number),
+            "supported": True,
+            "enclosing_function": {
+                "name": enclosing.name,
+                "line_start": getattr(enclosing, "lineno", None),
+                "line_end": getattr(enclosing, "end_lineno", None),
+                "is_async": isinstance(enclosing, ast.AsyncFunctionDef),
+            },
+            "variables": traces,
+        }
 
     async def scan_for_secrets(
         self,
@@ -847,8 +1030,56 @@ class ToolCore:
             if line_end < line_start:
                 raise ValueError("line_end must be >= line_start")
 
+        # Normalize file_path to a repo-relative, non-escaping path. Do not require the file to exist:
+        # findings can reference paths that were moved/removed, but must never leak host paths.
+        raw_file_path = file_path
+        file_path_candidate = Path(file_path)
+        if file_path_candidate.is_absolute():
+            try:
+                file_path = file_path_candidate.resolve().relative_to(self.repo_path).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"Path escapes workspace: {raw_file_path}") from exc
+        else:
+            file_path = Path(os.path.normpath(file_path)).as_posix()
+
+        if not file_path or file_path == ".":
+            raise ValueError("file_path must be a non-empty repo-relative path")
+
+        # Fast lexical traversal check (doesn't follow symlinks, doesn't require existence).
+        candidate = self.repo_path / file_path
+        normalized = Path(os.path.normpath(str(candidate)))
+        try:
+            normalized.relative_to(self.repo_path)
+        except ValueError as exc:
+            raise ValueError(f"Path escapes workspace: {raw_file_path}") from exc
+
+        # Reject excluded dirs even if file doesn't exist (prevents UI/path probing).
+        for part in Path(file_path).parts:
+            if part in self.DEFAULT_EXCLUDED_DIRS:
+                raise ValueError(f"Path in excluded directory: {file_path}")
+
+        # If the file exists, enforce full WorkspacePolicy (symlink rejection, size limits).
+        if candidate.exists():
+            ok, reason = self.workspace_policy.validate_path(candidate)
+            if not ok:
+                if reason and "excluded" in reason.lower():
+                    raise ValueError(f"Path in excluded directory: {file_path}")
+                raise ValueError(f"Path rejected: {reason}")
+
+        # Redact secrets from user-provided fields (defense-in-depth).
+        vulnerable_code = redaction_service.redact(vulnerable_code)
+        description = redaction_service.redact(description)
+        if attack_scenario is not None:
+            attack_scenario = redaction_service.redact(attack_scenario)
+        if proof_of_concept is not None:
+            proof_of_concept = redaction_service.redact(proof_of_concept)
+        if recommended_fix is not None:
+            recommended_fix = redaction_service.redact(recommended_fix)
+        if source_trace is not None:
+            source_trace = [redaction_service.redact(str(item)) for item in source_trace]
+
         finding = {
-            "severity": severity,
+            "severity": severity_lower,
             "title": title,
             "vulnerability_type": vulnerability_type,
             "file_path": file_path,

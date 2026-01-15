@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   AlertCircle,
@@ -33,25 +33,25 @@ const CLASSIFICATION_LABELS: Record<FindingClassification, string> = {
 
 // Disposition badge colors and labels
 const DISPOSITION_COLORS: Record<Disposition, string> = {
-  VALID_SECURITY_ISSUE: 'rgba(220, 38, 38, 0.85)',  // red-600
-  BUG: 'rgba(234, 88, 12, 0.85)',                   // orange-600
-  MISCONFIGURATION: 'rgba(234, 179, 8, 0.85)',       // yellow-500
-  HARDENING: 'rgba(59, 130, 246, 0.85)',            // blue-500
-  BY_DESIGN: 'rgba(107, 114, 128, 0.85)',           // gray-500
-  SPECULATIVE: 'rgba(156, 163, 175, 0.85)',         // gray-400
+  valid_security_issue: 'rgba(220, 38, 38, 0.85)',  // red-600
+  bug: 'rgba(234, 88, 12, 0.85)',                   // orange-600
+  misconfiguration: 'rgba(234, 179, 8, 0.85)',      // yellow-500
+  hardening: 'rgba(59, 130, 246, 0.85)',            // blue-500
+  by_design: 'rgba(107, 114, 128, 0.85)',           // gray-500
+  speculative: 'rgba(156, 163, 175, 0.85)',         // gray-400
 };
 
 const DISPOSITION_LABELS: Record<Disposition, string> = {
-  VALID_SECURITY_ISSUE: 'Valid Issue',
-  BUG: 'Bug',
-  MISCONFIGURATION: 'Misconfiguration',
-  HARDENING: 'Hardening',
-  BY_DESIGN: 'By Design',
-  SPECULATIVE: 'Speculative',
+  valid_security_issue: 'Valid Issue',
+  bug: 'Bug',
+  misconfiguration: 'Misconfiguration',
+  hardening: 'Hardening',
+  by_design: 'By Design',
+  speculative: 'Speculative',
 };
 
 // Reportable dispositions
-const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['VALID_SECURITY_ISSUE', 'BUG']);
+const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['valid_security_issue', 'bug']);
 
 interface FindingsListProps {
   findings: Finding[];
@@ -327,7 +327,26 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
 export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
-  const [showFiltered, setShowFiltered] = useState(false);
+
+  const isTriageFiltered = useCallback(
+    (finding: Finding) => Boolean(finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition)),
+    []
+  );
+  const isReportable = useCallback((finding: Finding) => !isTriageFiltered(finding), [isTriageFiltered]);
+  const triageFilteredCount = findings.filter(isTriageFiltered).length;
+
+  // If triage filtered everything, default to showing filtered findings so the panel
+  // doesn't look empty even though findings exist.
+  const defaultShowFiltered = findings.length > 0 && findings.every((f) => !isReportable(f));
+  const [showFiltered, setShowFiltered] = useState(defaultShowFiltered);
+  const [userToggledShowFiltered, setUserToggledShowFiltered] = useState(false);
+
+  useEffect(() => {
+    if (userToggledShowFiltered) return;
+    if (!showFiltered && findings.length > 0 && findings.every((f) => !isReportable(f))) {
+      setShowFiltered(true);
+    }
+  }, [findings, isReportable, showFiltered, userToggledShowFiltered]);
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {
@@ -342,33 +361,23 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
   };
 
   // Filter by reportability (if triage system is enabled)
-  const reportableFindings = showFiltered
-    ? findings
-    : findings.filter((f) => {
-        // If no disposition, show it (legacy behavior)
-        if (!f.disposition) return true;
-        // Show only reportable dispositions
-        return REPORTABLE_DISPOSITIONS.has(f.disposition);
-      });
+  const visibleFindings = showFiltered ? findings : findings.filter(isReportable);
 
   // Filter by severity
   const filteredFindings =
     filterSeverity === 'all'
-      ? reportableFindings
-      : reportableFindings.filter((f) => f.severity === filterSeverity);
+      ? visibleFindings
+      : visibleFindings.filter((f) => f.severity === filterSeverity);
 
-  // Count by severity (from reportable findings)
+  // Count by severity (from visible findings)
   const counts: Record<Severity | 'all', number> = {
-    all: reportableFindings.length,
-    critical: reportableFindings.filter((f) => f.severity === 'critical').length,
-    high: reportableFindings.filter((f) => f.severity === 'high').length,
-    medium: reportableFindings.filter((f) => f.severity === 'medium').length,
-    low: reportableFindings.filter((f) => f.severity === 'low').length,
-    info: reportableFindings.filter((f) => f.severity === 'info').length,
+    all: visibleFindings.length,
+    critical: visibleFindings.filter((f) => f.severity === 'critical').length,
+    high: visibleFindings.filter((f) => f.severity === 'high').length,
+    medium: visibleFindings.filter((f) => f.severity === 'medium').length,
+    low: visibleFindings.filter((f) => f.severity === 'low').length,
+    info: visibleFindings.filter((f) => f.severity === 'info').length,
   };
-
-  // Count filtered findings
-  const filteredCount = findings.length - reportableFindings.length;
 
   return (
     <div className="h-full flex flex-col">
@@ -377,16 +386,19 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
         <div className="flex items-center justify-between mb-2">
           <span className="text-vsc-xs text-vsc-text-muted">
             {filteredFindings.length} of {findings.length}
-            {filteredCount > 0 && !showFiltered && (
+            {triageFilteredCount > 0 && !showFiltered && (
               <span className="ml-1 text-vsc-text-muted">
-                ({filteredCount} filtered)
+                ({triageFilteredCount} filtered)
               </span>
             )}
           </span>
           {/* Show Filtered toggle */}
-          {filteredCount > 0 && (
+          {triageFilteredCount > 0 && (
             <button
-              onClick={() => setShowFiltered(!showFiltered)}
+              onClick={() => {
+                setUserToggledShowFiltered(true);
+                setShowFiltered(!showFiltered);
+              }}
               className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover"
               style={{
                 borderRadius: 'var(--radius-sm)',

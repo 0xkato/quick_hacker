@@ -331,19 +331,42 @@ class BaseAgent(ABC):
         from models.observability import AgentStateSnapshot
         from services.observability_service import observability_service
 
+        repo_path = str(self.repo_path)
+
+        files_analyzed: int
+        if isinstance(self.files_analyzed, (list, tuple, set)):
+            files_analyzed = len(self.files_analyzed)
+        else:
+            try:
+                files_analyzed = int(self.files_analyzed or 0)
+            except Exception:
+                files_analyzed = 0
+
+        provider_config: dict[str, object] = {}
+        if self.provider_config:
+            provider_value = (
+                self.provider_config.provider.value
+                if hasattr(self.provider_config.provider, "value")
+                else str(self.provider_config.provider)
+            )
+            provider_config = {
+                "provider": provider_value,
+                "model": self.provider_config.model,
+            }
+            session_id = getattr(self, "_codex_session_id", None)
+            if isinstance(session_id, str) and session_id:
+                provider_config["session_id"] = session_id
+
         return AgentStateSnapshot(
             id=str(uuid.uuid4())[:12],
             agent_id=self.id,
             repo_id=self.repo_id,
-            repo_path=self.repo_path,
+            repo_path=repo_path,
             agent_type=self.agent_type.value if hasattr(self.agent_type, 'value') else str(self.agent_type),
-            provider_config={
-                "provider": self.provider_config.provider if self.provider_config else "unknown",
-                "model": self.provider_config.model if self.provider_config else "unknown",
-            } if self.provider_config else {},
+            provider_config=provider_config,
             custom_prompt=self.custom_prompt,
             status=self.status.value if hasattr(self.status, 'value') else str(self.status),
-            files_analyzed=self.files_analyzed,
+            files_analyzed=files_analyzed,
             total_files=0,
             current_file=None,
             findings=[f.model_dump(mode='json') for f in self.findings],

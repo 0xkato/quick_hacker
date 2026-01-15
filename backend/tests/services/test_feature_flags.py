@@ -7,21 +7,24 @@ def test_feature_flag_enabled():
     """Feature flags should support enable/disable operations"""
     service = FeatureFlagService()
 
-    # Default should be False
-    assert service.is_enabled(FeatureFlag.SPAN_BASED_FLOW) is False
-
-    # Enable flag
-    service.enable(FeatureFlag.SPAN_BASED_FLOW)
+    # Defaults come from the service (SPAN_BASED_FLOW is enabled by default in the app)
     assert service.is_enabled(FeatureFlag.SPAN_BASED_FLOW) is True
 
     # Disable flag
     service.disable(FeatureFlag.SPAN_BASED_FLOW)
     assert service.is_enabled(FeatureFlag.SPAN_BASED_FLOW) is False
 
+    # Enable flag
+    service.enable(FeatureFlag.SPAN_BASED_FLOW)
+    assert service.is_enabled(FeatureFlag.SPAN_BASED_FLOW) is True
+
 
 def test_feature_flag_rollout_percentage():
     """Feature flags should support deterministic percentage-based rollout"""
     service = FeatureFlagService()
+
+    # Disable the global enable so rollout logic is exercised
+    service.disable(FeatureFlag.SPAN_BASED_FLOW)
 
     # Set 50% rollout for SPAN_BASED_FLOW
     service.set_rollout_percentage(FeatureFlag.SPAN_BASED_FLOW, 50)
@@ -52,6 +55,7 @@ def test_user_override():
     service = FeatureFlagService()
 
     # Set 0% rollout (nobody gets it by default)
+    service.disable(FeatureFlag.SPAN_BASED_FLOW)
     service.set_rollout_percentage(FeatureFlag.SPAN_BASED_FLOW, 0)
 
     user_id = "test_user"
@@ -93,6 +97,7 @@ def test_priority_order():
     user_id = "test_user"
 
     # Test 1: Default False
+    service.disable(FeatureFlag.SPAN_BASED_FLOW)
     assert service.is_enabled_for_user(FeatureFlag.SPAN_BASED_FLOW, user_id) is False
 
     # Test 2: Percentage rollout (set 100% so we know user is eligible)
@@ -128,11 +133,11 @@ def test_deterministic_hashing():
 
 
 def test_dual_write_mode_default():
-    """DUAL_WRITE_MODE should default to True, SPAN_BASED_FLOW to False"""
+    """DUAL_WRITE_MODE and SPAN_BASED_FLOW should default to True in the app."""
     service = FeatureFlagService()
 
-    # SPAN_BASED_FLOW defaults to False
-    assert service.is_enabled(FeatureFlag.SPAN_BASED_FLOW) is False
+    # SPAN_BASED_FLOW defaults to True
+    assert service.is_enabled(FeatureFlag.SPAN_BASED_FLOW) is True
 
     # DUAL_WRITE_MODE defaults to True
     assert service.is_enabled(FeatureFlag.DUAL_WRITE_MODE) is True
@@ -158,6 +163,8 @@ def test_remove_user_override():
     service = FeatureFlagService()
 
     user_id = "test_user"
+    service.disable(FeatureFlag.SPAN_BASED_FLOW)
+    service.set_rollout_percentage(FeatureFlag.SPAN_BASED_FLOW, 0)
 
     # Set override
     service.set_user_override(FeatureFlag.SPAN_BASED_FLOW, user_id, True)

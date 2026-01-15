@@ -62,7 +62,7 @@ class TestToolCacheIntegration:
 
         # Should work without caching
         result = await tool_core.read_file(path="test.txt")
-        assert "test content" in result
+        assert "test content" in result["content"]
 
     @pytest.mark.asyncio
     async def test_cache_skipped_when_git_head_unavailable(self, tmp_path):
@@ -78,7 +78,7 @@ class TestToolCacheIntegration:
         result1 = await tool_core.read_file(path="test.txt")
         result2 = await tool_core.read_file(path="test.txt")
 
-        assert "test content" in result1
+        assert "test content" in result1["content"]
         assert result1 == result2
 
         # Verify cache was never used (all reads are neither hits nor misses)
@@ -134,7 +134,7 @@ class TestToolCacheIntegration:
 
         # First read - cache miss
         result1 = await tool_core.read_file(path="test.txt")
-        assert "original content" in result1
+        assert "original content" in result1["content"]
 
         # Modify file and create new commit
         test_file.write_text("updated content")
@@ -143,7 +143,7 @@ class TestToolCacheIntegration:
 
         # Second read - should be cache miss due to HEAD change
         result2 = await tool_core.read_file(path="test.txt")
-        assert "updated content" in result2
+        assert "updated content" in result2["content"]
 
         metrics = cache.get_metrics()
         assert metrics["misses"] == 2  # Both reads are misses

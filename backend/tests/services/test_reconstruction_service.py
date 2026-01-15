@@ -39,8 +39,8 @@ def test_reconstruct_empty_events():
     assert unattributed_span_id in spans
 
     unattributed_span = spans[unattributed_span_id]
-    assert unattributed_span.span_type == SpanType.PLACEHOLDER
-    assert unattributed_span.label == "Unattributed Events"
+    assert unattributed_span.span_type == SpanType.HYPOTHESIS
+    assert unattributed_span.label == "Investigation Root"
     assert unattributed_span.state == SpanState.OPEN
     assert unattributed_span.parent_span_id is None
 

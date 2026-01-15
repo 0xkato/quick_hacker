@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -26,6 +27,7 @@ from agents.quick_audit_agent import QuickAuditAgent
 from agents.react_agent import ReActSecurityAgent
 from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import ClaudeSDKProvider
+from providers.codex_cli_provider import CodexCLIProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
 from services.tool_core import ToolCore
 from services.tool_cache import ToolCache
@@ -182,12 +184,13 @@ class AgentOrchestrator:
                     db
                 )
 
-                if not api_key and provider_name != "ollama":
+                normalized_provider = (provider_name or "").strip().lower()
+                if not api_key and normalized_provider not in ("ollama", "codex_cli"):
                     # Claude SDK mode can authenticate via Claude Code subscription token
                     # (`claude setup-token`) instead of an Anthropic API key.
                     if (
                         use_claude_sdk
-                        and provider_name.strip().lower() == "anthropic"
+                        and normalized_provider == "anthropic"
                         and config_name == "provider_config"
                     ):
                         print(
@@ -271,6 +274,7 @@ class AgentOrchestrator:
             # Check if this agent should use Claude SDK provider
             config = getattr(agent.request, 'provider_config', None)
             use_sdk = False
+            use_codex = False
 
             if config and hasattr(config, 'provider'):
                 provider_name = (
@@ -279,6 +283,9 @@ class AgentOrchestrator:
                     else str(config.provider)
                 )
 
+                if provider_name.lower() == "codex_cli":
+                    use_codex = True
+                # Use SDK if:
                 # Use SDK if:
                 # 1. Provider is explicitly set to "claude_sdk", OR
                 # 2. Provider is "anthropic" and use_claude_sdk flag is True
@@ -288,7 +295,9 @@ class AgentOrchestrator:
                     use_claude_sdk = getattr(agent.request, 'use_claude_sdk', False)
                     use_sdk = use_claude_sdk
 
-            if use_sdk:
+            if use_codex:
+                findings = await self._run_codex_cli_agent(agent)
+            elif use_sdk:
                 findings = await self._run_sdk_agent(agent)
             else:
                 findings = await agent.run()
@@ -1073,6 +1082,620 @@ class AgentOrchestrator:
             # Clean up provider
             await provider.close()
 
+    async def _run_codex_cli_agent(self, agent: BaseAgent) -> list[Finding]:
+        """Run an agent using the local Codex CLI provider (codex exec/resume).
+
+        This implements a budget-governed multi-turn loop and streams events to
+        the existing WebSocket/observability pipeline.
+        """
+        print(f"[Orchestrator] Running Codex CLI agent {agent.id}")
+
+        # Update agent status to RUNNING
+        agent.status = AgentStatus.RUNNING
+        agent.started_at = datetime.utcnow()
+        self._broadcast_message(
+            WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "running"})
+        )
+
+        config = agent.request.provider_config
+        if config is None:
+            raise ValueError("codex_cli provider requires provider_config")
+
+        # Resolve scan budget + time floor rules.
+        scan_budget = resolve_scan_budget(
+            scan_tier=getattr(agent.request, "scan_tier", None),
+            time_budget_seconds=getattr(agent.request, "time_budget_seconds", None),
+        )
+        budget_s = float(scan_budget.time_budget_seconds)
+        from services.claude_sdk_orchestrator import SCAN_TIER_FLOORS
+
+        time_floor_s = float(SCAN_TIER_FLOORS.get(scan_budget.scan_tier, 0))
+        time_floor_s = min(time_floor_s, budget_s)
+
+        start_time = time.monotonic()
+        phase = "scanner"
+        turn_count = 0
+        consecutive_no_tool_turns = 0
+
+        def elapsed_s() -> float:
+            return time.monotonic() - start_time
+
+        def remaining_s() -> float:
+            return max(0.0, budget_s - elapsed_s())
+
+        def time_floor_satisfied() -> bool:
+            return elapsed_s() >= time_floor_s
+
+        def codex_says_done(text: str) -> bool:
+            if not text:
+                return False
+            lowered = text.lower()
+            return any(
+                phrase in lowered
+                for phrase in (
+                    "audit complete",
+                    "scan complete",
+                    "analysis complete",
+                    "no more findings",
+                    "investigation complete",
+                )
+            )
+
+        codex_path = (getattr(config, "codex_path", None) or "").strip() or "codex"
+
+        provider = CodexCLIProvider(
+            repo_path=str(agent.repo_path),
+            project_id=str(agent.repo_id),
+            agent_id=str(agent.id),
+            model=str(config.model),
+            codex_path=codex_path,
+        )
+        agent._codex_provider = provider
+
+        # Resume session if the agent already has one (pause/resume or persisted state reload).
+        resume_session_id = getattr(agent, "_codex_session_id", None)
+        await provider.start_session(resume_session_id=resume_session_id)
+
+        # Set broadcast callback for observability service.
+        observability_service.set_broadcast_callback(self._broadcast_message)
+
+        # Track state for tool call correlation and finding extraction.
+        current_tool_calls: list[dict] = []
+        current_request_id: str | None = None
+        current_tool_node_id: str | None = None
+        codex_findings: list[Finding] = []
+        finding_counter = [0]
+        last_triaged_count = 0
+
+        import json as json_mod
+        import uuid as uuid_mod
+
+        def normalize_tool_name(tool_name: str) -> str:
+            if tool_name.startswith("mcp__"):
+                # mcp__quickhack__read_file -> read_file
+                parts = tool_name.split("__", 2)
+                if len(parts) == 3:
+                    return parts[2]
+            return tool_name
+
+        def on_codex_event(event: dict) -> None:
+            nonlocal current_request_id, current_tool_node_id, consecutive_no_tool_turns
+            event_type_str = event.get("type", "codex_event")
+
+            if event_type_str == "session_started":
+                session_id = event.get("session_id")
+                if isinstance(session_id, str) and session_id:
+                    agent._codex_session_id = session_id
+                self._broadcast_message(
+                    WSMessage(
+                        type=WSMessageType.PROGRESS,
+                        agent_id=agent.id,
+                        data={"type": "session_started", "session_id": session_id},
+                    )
+                )
+                return
+
+            if event_type_str == "llm_request":
+                prompt = event.get("prompt", "")
+                turn = event.get("turn", 0)
+                phase_name = event.get("phase", phase)
+
+                meta_lines = [
+                    f"turn: {turn}",
+                    f"phase: {phase_name}",
+                    f"budget_s: {budget_s:.0f}",
+                    f"remaining_s: {remaining_s():.0f}",
+                    f"time_floor_s: {time_floor_s:.0f}",
+                ]
+                meta = "\n".join(meta_lines)
+
+                current_request_id = observability_service.log_llm_request(
+                    agent_id=agent.id,
+                    messages=[
+                        {"role": "meta", "content": meta},
+                        {"role": "user", "content": prompt},
+                    ],
+                    tools_available=[
+                        "read_file",
+                        "list_directory",
+                        "grep_semantic",
+                        "scan_repo_for_secrets",
+                        "dependency_audit",
+                        "analyze_ast",
+                        "trace_dataflow",
+                        "upsert_sink_signal",
+                        "report_finding",
+                        "promote_finding",
+                    ],
+                    model=str(config.model),
+                    provider="codex_cli",
+                )
+                return
+
+            if event_type_str == "agent_text":
+                text = event.get("text", "")
+                if current_request_id and isinstance(text, str) and text:
+                    observability_service.log_llm_response(
+                        agent_id=agent.id,
+                        request_id=current_request_id,
+                        content=text,
+                        tool_calls=current_tool_calls if current_tool_calls else None,
+                        model=str(config.model),
+                        provider="codex_cli",
+                    )
+                    current_tool_calls.clear()
+                return
+
+            if event_type_str == "tool_call":
+                tool_id = event.get("id", "") or event.get("tool_use_id", "")
+                tool_id = tool_id or str(uuid_mod.uuid4())
+                tool_name = str(event.get("name") or "")
+                tool_args = event.get("args", {}) if isinstance(event.get("args"), dict) else {}
+
+                current_tool_calls.append({"id": tool_id, "name": tool_name, "args": tool_args})
+
+                normalized_name = normalize_tool_name(tool_name)
+                node_type = "tool_call"
+                if normalized_name in ("read_file", "list_directory"):
+                    node_type = "code_read"
+                elif normalized_name in ("search_code", "grep_semantic"):
+                    node_type = "search"
+                elif normalized_name in ("scan_repo_for_secrets", "dependency_audit"):
+                    node_type = "scan"
+                elif normalized_name == "report_finding":
+                    node_type = "finding"
+                elif normalized_name == "upsert_sink_signal":
+                    kind = tool_args.get("kind", "")
+                    node_type = "entry_point" if kind == "entry_point" else "dangerous_sink"
+
+                args_preview = str(tool_args)[:50]
+                label = f"{normalized_name}: {args_preview}..."
+
+                tool_node = flow_service.add_node(agent.id, node_type, label, {"tool": normalized_name, "args": tool_args})
+                flow_service.update_node_status(agent.id, tool_node.id, "running")
+                current_tool_node_id = tool_node.id
+
+                flow = flow_service.get_flow(agent.id)
+                if flow:
+                    self._broadcast_message(
+                        WSMessage(
+                            type=WSMessageType.PROGRESS,
+                            agent_id=agent.id,
+                            data={"type": "flow_update", "flow": flow.to_dict()},
+                        )
+                    )
+                return
+
+            if event_type_str == "tool_result":
+                tool_use_id = event.get("tool_use_id", "") or str(uuid_mod.uuid4())
+                result = event.get("result", "")
+                is_error = bool(event.get("is_error", False))
+
+                tool_name = "unknown"
+                tool_args: dict = {}
+                for tc in current_tool_calls:
+                    if tc.get("id") == tool_use_id:
+                        tool_name = tc.get("name", "unknown")
+                        tool_args = tc.get("args", {})
+                        break
+
+                normalized_name = normalize_tool_name(tool_name)
+
+                observability_service.log_tool_execution(
+                    agent_id=agent.id,
+                    tool_name=normalized_name,
+                    tool_call_id=tool_use_id,
+                    arguments=tool_args,
+                    result=result,
+                    success=not is_error,
+                    duration_ms=0,
+                    error_message=str(result) if is_error else None,
+                )
+
+                if current_tool_node_id:
+                    status = "failed" if is_error else "completed"
+                    flow_service.update_node_status(agent.id, current_tool_node_id, status)
+
+                if normalized_name == "report_finding" and not is_error:
+                    finding_data = None
+                    # Strategy 1: direct dict with finding.
+                    if isinstance(result, dict) and "finding" in result:
+                        finding_data = result
+                    # Strategy 2: MCP-style dict with content array.
+                    elif isinstance(result, dict) and "content" in result:
+                        content = result.get("content", [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get("type") == "text":
+                                    text = item.get("text", "")
+                                    if isinstance(text, str) and text.strip().startswith("{"):
+                                        try:
+                                            parsed = json_mod.loads(text)
+                                            if isinstance(parsed, dict) and "finding" in parsed:
+                                                finding_data = parsed
+                                                break
+                                        except json_mod.JSONDecodeError:
+                                            continue
+                    # Strategy 3: JSON string.
+                    elif isinstance(result, str):
+                        try:
+                            parsed = json_mod.loads(result)
+                            if isinstance(parsed, dict) and "finding" in parsed:
+                                finding_data = parsed
+                        except json_mod.JSONDecodeError:
+                            finding_data = None
+
+                    if isinstance(finding_data, dict) and isinstance(finding_data.get("finding"), dict):
+                        raw_finding = finding_data["finding"]
+                        try:
+                            from models.schemas import Severity
+
+                            severity_str = str(raw_finding.get("severity", "medium"))
+                            severity_enum = Severity(severity_str) if severity_str in Severity._value2member_map_ else Severity.MEDIUM
+
+                            finding_counter[0] += 1
+                            finding_obj = Finding(
+                                id=f"{agent.id}-finding-{finding_counter[0]}",
+                                agent_id=agent.id,
+                                repo_id=agent.repo_id,
+                                severity=severity_enum,
+                                title=str(raw_finding.get("title", "Finding")),
+                                description=str(raw_finding.get("description", "")),
+                                file_path=str(raw_finding.get("file_path", "")),
+                                line_start=int(raw_finding.get("line_start", 1) or 1),
+                                line_end=raw_finding.get("line_end"),
+                                code_snippet=raw_finding.get("vulnerable_code", ""),
+                                vulnerable_code=raw_finding.get("vulnerable_code", ""),
+                                vulnerability_type=str(raw_finding.get("vulnerability_type", "Unknown")),
+                                cwe_id=raw_finding.get("cwe_id"),
+                                attack_scenario=raw_finding.get("attack_scenario"),
+                                proof_of_concept=raw_finding.get("proof_of_concept"),
+                                recommended_fix=raw_finding.get("recommended_fix"),
+                                confidence=float(raw_finding.get("confidence", 0.5) or 0.5),
+                                source_trace=raw_finding.get("source_trace"),
+                                created_at=datetime.utcnow(),
+                                metadata={"source": "codex_cli"},
+                            )
+                            codex_findings.append(finding_obj)
+                            agent.findings = codex_findings
+
+                            self._broadcast_message(
+                                WSMessage(
+                                    type=WSMessageType.FINDING,
+                                    agent_id=agent.id,
+                                    data=finding_obj.model_dump(mode="json"),
+                                )
+                            )
+                        except Exception as e:
+                            print(f"[Orchestrator] Failed to create/broadcast codex finding: {e}")
+
+                current_tool_node_id = None
+                flow = flow_service.get_flow(agent.id)
+                if flow:
+                    self._broadcast_message(
+                        WSMessage(type=WSMessageType.PROGRESS, agent_id=agent.id, data={"type": "flow_update", "flow": flow.to_dict()})
+                    )
+                return
+
+            if event_type_str == "turn_complete":
+                self._broadcast_message(
+                    WSMessage(
+                        type=WSMessageType.PROGRESS,
+                        agent_id=agent.id,
+                        data={
+                            "type": "turn_complete",
+                            "turn": turn_count,
+                            "phase": phase,
+                            "remaining_s": remaining_s(),
+                            "session_id": event.get("session_id") or getattr(agent, "_codex_session_id", None),
+                        },
+                    )
+                )
+                return
+
+            if event_type_str == "error":
+                self._broadcast_message(
+                    WSMessage(type=WSMessageType.ERROR, agent_id=agent.id, data={"error": event.get("message", "Unknown error")})
+                )
+                return
+
+        def build_turn_prompt(*, base: str, phase_name: str, floor_remaining_s: float) -> str:
+            policy_template = (
+                "agents/claude_sdk_orchestrator_analyzer_policy.md"
+                if phase_name == "analyzer"
+                else "agents/claude_sdk_orchestrator_scanner_policy.md"
+            )
+            policy_text = load_prompt(policy_template)
+            profile_text = ""
+            try:
+                if agent.agent_type == AgentType.DEEP_AUDIT:
+                    profile_text = load_prompt("agents/profile_deep_audit_mode.md")
+                elif agent.agent_type == AgentType.ULTRA_STRICT:
+                    profile_text = load_prompt("agents/profile_ultra_strict_mode.md")
+                elif agent.agent_type == AgentType.STRICT_ANALYSIS:
+                    profile_text = load_prompt("agents/profile_strict_mode.md")
+            except Exception:
+                profile_text = ""
+            tool_list = "\n".join(
+                [
+                    "- read_file",
+                    "- list_directory",
+                    "- grep_semantic",
+                    "- scan_repo_for_secrets",
+                    "- dependency_audit",
+                    "- analyze_ast",
+                    "- trace_dataflow",
+                    "- upsert_sink_signal",
+                    "- report_finding",
+                    "- promote_finding",
+                ]
+            )
+            guardrails = "\n".join(
+                [
+                    "CRITICAL GUARDRAILS:",
+                    "- No web requests, no web search, no fetching dependencies.",
+                    "- Do NOT attempt to run shell commands; use only the MCP tools above.",
+                    "- Only claim vulnerabilities with concrete evidence from tool outputs.",
+                    "- Use upsert_sink_signal for leads; use report_finding only for confirmed issues.",
+                ]
+            )
+            floor_note = ""
+            if floor_remaining_s > 0:
+                floor_note = f"\nMinimum scan time remaining: {floor_remaining_s:.0f}s. Keep working."
+
+            return "\n\n".join(
+                [
+                    f"[Phase: {phase_name}]",
+                    "Audit policy:\n" + policy_text,
+                    ("Audit profile:\n" + profile_text) if profile_text else "",
+                    "Available tools:\n" + tool_list,
+                    guardrails + floor_note,
+                    base,
+                ]
+            )
+
+        # Initialize flow root (best-effort).
+        flow_service.initialize_flow(agent.id)
+        flow_service.add_node(agent.id, "user_input", "Start codex_cli audit", {"provider": "codex_cli"})
+
+        initial_prompt = self._build_initial_audit_prompt(agent)
+        current_prompt = initial_prompt
+        last_turn_had_tools = False
+
+        try:
+            while remaining_s() > 0 and not getattr(agent, "_cancelled", False):
+                # Pause handling: interrupt Codex and wait for resume.
+                if agent.status == AgentStatus.PAUSED:
+                    try:
+                        provider.set_cancelled(True)
+                        await provider.interrupt()
+                    except Exception:
+                        pass
+                    # Persist state snapshot while paused (best-effort).
+                    if hasattr(agent, "get_state_snapshot"):
+                        try:
+                            snapshot = agent.get_state_snapshot()
+                            persistence_service.save_agent_state(snapshot)
+                        except Exception:
+                            pass
+                    while agent.status == AgentStatus.PAUSED and not getattr(agent, "_cancelled", False):
+                        await asyncio.sleep(0.2)
+                    provider.set_cancelled(False)
+                    continue
+
+                turn_count += 1
+
+                # Determine per-turn tool runtime budget (25% of remaining time, capped).
+                turn_limits_s = max(5.0, min(60.0, remaining_s() * 0.25))
+                provider.write_turn_limits(max_runtime_s=turn_limits_s)
+                provider.set_cancelled(False)
+
+                floor_remaining = max(0.0, time_floor_s - elapsed_s())
+                prompt_for_turn = build_turn_prompt(base=current_prompt, phase_name=phase, floor_remaining_s=floor_remaining)
+
+                on_codex_event({"type": "llm_request", "prompt": prompt_for_turn, "turn": turn_count, "phase": phase})
+
+                # Collect per-turn stats for steering.
+                turn_text_parts: list[str] = []
+                turn_tool_calls: list[dict] = []
+
+                def collecting_event(ev: dict) -> None:
+                    # Capture tool call density for steering heuristics.
+                    if ev.get("type") == "tool_call":
+                        turn_tool_calls.append(ev)
+                    if ev.get("type") == "agent_text":
+                        text = ev.get("text")
+                        if isinstance(text, str) and text:
+                            turn_text_parts.append(text)
+                    on_codex_event(ev)
+
+                await provider.run_turn(prompt=prompt_for_turn, on_event=collecting_event)
+
+                last_turn_had_tools = len(turn_tool_calls) > 0
+                if last_turn_had_tools:
+                    consecutive_no_tool_turns = 0
+                else:
+                    consecutive_no_tool_turns += 1
+
+                turn_text = "\n".join(turn_text_parts)
+
+                # After each turn, triage any newly reported findings (strict evidence-based).
+                if settings.triage_enabled and len(codex_findings) > last_triaged_count:
+                    new_findings = codex_findings[last_triaged_count:]
+                    try:
+                        from models.schemas import BudgetConfig
+
+                        # Bound triage work to a small slice of remaining time to avoid overruns.
+                        remaining_ms = int(remaining_s() * 1000)
+                        batch_ms = int(
+                            min(
+                                settings.triage_batch_budget_ms,
+                                max(250, remaining_ms * 0.05),
+                            )
+                        )
+                        budgets = BudgetConfig(
+                            batch_ms=batch_ms,
+                            per_finding_ms=min(settings.triage_per_finding_budget_ms, batch_ms),
+                            max_evidence_bytes=settings.triage_max_evidence_bytes,
+                            max_snippet_lines=settings.triage_max_snippet_lines,
+                        )
+
+                        triage_result = await asyncio.to_thread(
+                            triage_service.triage_findings,
+                            repo_root=str(agent.repo_path),
+                            findings=new_findings,
+                            policy_version=settings.triage_policy_version,
+                            budgets=budgets,
+                        )
+
+                        codex_findings[last_triaged_count:] = triage_result.triaged_findings
+                        agent.findings = codex_findings
+                        last_triaged_count = len(codex_findings)
+
+                        self._broadcast_message(
+                            WSMessage(
+                                type=WSMessageType.PROGRESS,
+                                agent_id=agent.id,
+                                data={
+                                    "type": "triage_complete",
+                                    "raw_count": triage_result.metrics.raw_count,
+                                    "triaged_count": triage_result.metrics.triaged_count,
+                                    "reportable_count": triage_result.metrics.reportable_count,
+                                    "by_disposition": triage_result.metrics.by_disposition,
+                                },
+                            )
+                        )
+                    except Exception as triage_err:
+                        # Best-effort: keep raw findings if triage fails.
+                        print(f"[Orchestrator] Codex triage failed: {triage_err}")
+                        last_triaged_count = len(codex_findings)
+
+                # Persist state after each turn for crash resilience (best-effort).
+                if hasattr(agent, "get_state_snapshot"):
+                    try:
+                        snapshot = agent.get_state_snapshot()
+                        persistence_service.save_agent_state(snapshot)
+                    except Exception:
+                        pass
+
+                # Detect completion signal.
+                if codex_says_done(turn_text):
+                    if time_floor_satisfied() or time_floor_s <= 0:
+                        break
+                    current_prompt = render_prompt(
+                        "agents/claude_sdk_orchestrator_steering_prompt_before_floor.md",
+                        floor_remaining_s=f"{max(0.0, time_floor_s - elapsed_s()):.0f}",
+                    )
+                    continue
+
+                # Transition to analyzer if we have findings or we're deep into the budget.
+                if phase == "scanner" and (len(codex_findings) > 0 or elapsed_s() > budget_s * 0.5):
+                    phase = "analyzer"
+                    self._broadcast_message(
+                        WSMessage(type=WSMessageType.PROGRESS, agent_id=agent.id, data={"type": "phase_change", "phase": phase})
+                    )
+                    current_prompt = render_prompt(
+                        "agents/claude_sdk_orchestrator_analyzer_prompt.md",
+                        finding_count=str(len(codex_findings)),
+                    )
+                    continue
+
+                if consecutive_no_tool_turns >= 3:
+                    current_prompt = (
+                        "You have not used tools recently. Use MCP tools to gather evidence and expand coverage."
+                    )
+                    continue
+
+                current_prompt = render_prompt(
+                    "agents/claude_sdk_orchestrator_continue_prompt.md",
+                    remaining_mins=f"{remaining_s() / 60:.1f}",
+                )
+
+            raw_findings = codex_findings
+
+            # === Triage findings (best-effort, same gating as SDK path) ===
+            triaged_findings = raw_findings
+            reportable_count = len(raw_findings)
+
+            from database.schema_checker import is_triage_available
+
+            triage_ready = settings.triage_enabled and is_triage_available()
+            if triage_ready and raw_findings:
+                try:
+                    from models.schemas import BudgetConfig
+
+                    budgets = BudgetConfig(
+                        batch_ms=settings.triage_batch_budget_ms,
+                        per_finding_ms=settings.triage_per_finding_budget_ms,
+                        max_evidence_bytes=settings.triage_max_evidence_bytes,
+                        max_snippet_lines=settings.triage_max_snippet_lines,
+                    )
+                    triage_result = await asyncio.to_thread(
+                        triage_service.triage_findings,
+                        repo_root=str(agent.repo_path),
+                        findings=raw_findings,
+                        policy_version=settings.triage_policy_version,
+                        budgets=budgets,
+                    )
+                    triaged_findings = triage_result.triaged_findings
+                    reportable_count = triage_result.metrics.reportable_count
+                except Exception as triage_err:
+                    print(f"[Orchestrator] Codex triage failed, using raw findings: {triage_err}")
+
+            agent.findings = triaged_findings
+
+            agent.completed_at = datetime.utcnow()
+            agent.status = AgentStatus.COMPLETED
+
+            # Best-effort report generation.
+            try:
+                report_service.generate_report(agent)
+                self._broadcast_message(
+                    WSMessage(
+                        type=WSMessageType.REPORT_READY,
+                        agent_id=agent.id,
+                        data={
+                            "agent_id": agent.id,
+                            "repo_id": agent.repo_id,
+                            "findings_count": reportable_count,
+                            "total_findings": len(triaged_findings),
+                            "message": f"Security audit complete. Found {reportable_count} reportable findings ({len(triaged_findings)} total).",
+                        },
+                    )
+                )
+            except Exception:
+                pass
+
+            return triaged_findings
+        except asyncio.CancelledError:
+            try:
+                provider.set_cancelled(True)
+                await provider.interrupt()
+            except Exception:
+                pass
+            agent.status = AgentStatus.CANCELLED
+            raise
+
     def _build_initial_audit_prompt(self, agent: BaseAgent) -> str:
         """Build the initial prompt for a security audit.
 
@@ -1195,6 +1818,19 @@ class AgentOrchestrator:
 
         agent.pause()
 
+        # If this agent is backed by a long-running subprocess (e.g. codex_cli),
+        # interrupt it immediately so pause takes effect mid-turn.
+        provider = getattr(agent, "_codex_provider", None)
+        if provider is not None:
+            try:
+                if hasattr(provider, "set_cancelled"):
+                    provider.set_cancelled(True)
+                interrupt = getattr(provider, "interrupt", None)
+                if interrupt is not None:
+                    await interrupt()
+            except Exception:
+                pass
+
         # Auto-save state on pause (for ReAct agents)
         if hasattr(agent, 'get_state_snapshot'):
             try:
@@ -1255,6 +1891,14 @@ class AgentOrchestrator:
                 persistence_service.save_agent_state(snapshot)
             except Exception as e:
                 print(f"[Orchestrator] Failed to save state on cancel: {e}")
+
+        # For Codex CLI agents, call interrupt on the provider
+        if hasattr(agent, '_codex_provider') and agent._codex_provider is not None:
+            try:
+                await agent._codex_provider.interrupt()
+                print(f"[Orchestrator] Interrupted Codex provider for agent {agent_id}")
+            except Exception as e:
+                print(f"[Orchestrator] Failed to interrupt Codex provider: {e}")
 
         # For SDK agents, call interrupt on the provider
         if hasattr(agent, '_sdk_provider') and agent._sdk_provider is not None:

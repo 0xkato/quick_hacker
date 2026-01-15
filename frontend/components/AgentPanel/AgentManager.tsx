@@ -78,6 +78,7 @@ const SCAN_TIERS: { value: ScanTier; label: string; icon: React.ReactNode; descr
 const PROVIDERS: { value: ProviderType; label: string }[] = [
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
+  { value: 'codex_cli', label: 'OpenAI Codex CLI (Local)' },
   { value: 'ollama', label: 'Ollama (Local)' },
 ];
 
@@ -95,6 +96,11 @@ const SUGGESTED_MODELS: Record<ProviderType, string[]> = {
     'gpt-4-turbo',
     'o1',
     'o1-mini',
+  ],
+  codex_cli: [
+    'gpt-5.2-codex',
+    'gpt-5.2',
+    'gpt-4o',
   ],
   ollama: [
     'llama3.1',
@@ -173,6 +179,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
   const hasApiKeyConfigured = appSettings?.providers[provider]?.api_key
     && appSettings.providers[provider].api_key !== '****'
     && appSettings.providers[provider].api_key.length > 4;
+  const requiresApiKey = provider !== 'ollama' && provider !== 'codex_cli' && !(provider === 'anthropic' && useClaudeSDK);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -289,10 +296,10 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
               {PROVIDERS.map((p) => {
                 const provSettings = appSettings?.providers[p.value];
                 const hasKey = provSettings?.api_key && provSettings.api_key !== '****' && provSettings.api_key.length > 4;
-                const isOllama = p.value === 'ollama';
+                const isNoKeyProvider = p.value === 'ollama' || p.value === 'codex_cli';
                 return (
                   <option key={p.value} value={p.value}>
-                    {p.label} {hasKey || isOllama ? '✓' : '(no API key)'}
+                    {p.label} {hasKey || isNoKeyProvider ? '✓' : '(no API key)'}
                   </option>
                 );
               })}
@@ -353,7 +360,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
           </div>
 
           {/* API Key - Only show if not configured in settings and not using Claude SDK */}
-          {provider !== 'ollama' && !hasApiKeyConfigured && !(provider === 'anthropic' && useClaudeSDK) && (
+          {requiresApiKey && !hasApiKeyConfigured && (
             <div>
               <label className="block text-vsc-xs text-vsc-text-muted mb-2 uppercase tracking-wider">
                 API Key <span className="text-vsc-text-muted normal-case">(required - not found in settings)</span>

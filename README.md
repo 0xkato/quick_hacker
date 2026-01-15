@@ -114,6 +114,7 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 │  • OpenAI (GPT-4/GPT-3.5)                                                │
 │  • Ollama (Local models)                                                 │
 │  • Claude SDK (MCP-based)                                                │
+│  • Codex CLI (local `codex`, MCP tools)                                  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -313,7 +314,47 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 # Claude SDK
 ANTHROPIC_AUTH_TOKEN=...  # OAuth token for Claude SDK
+
+# Codex CLI (local; no API key by default)
+# `codex login` stores credentials at ~/.codex/auth.json
+CODEX_GLOBAL_HOME=~/.codex  # optional override; defaults to ~/.codex
 ```
+
+## Codex CLI (Local Provider)
+
+quick_hack supports a local `codex` binary as a first-class provider: `provider: "codex_cli"`.
+
+- Runs `codex exec --json` / `codex exec resume ... --json` and streams JSONL events to the existing WebSocket UI.
+- Disables Codex built-in shell + web search and exposes only quick_hack tools via an MCP stdio server.
+
+### Host Setup (recommended)
+
+```bash
+codex --version
+codex login
+ls ~/.codex/auth.json
+```
+
+### Use In quick_hack
+
+Example `provider_config`:
+
+```json
+{
+  "provider": "codex_cli",
+  "model": "gpt-5.2-codex",
+  "codex_path": "codex"
+}
+```
+
+### Docker Compose Notes
+
+- The backend container must have a `codex` binary available in `PATH` (install it in `backend/Dockerfile` or mount it into the container).
+- Mount Codex auth into the backend container so `auth.json` is readable:
+  - `~/.codex:/home/appuser/.codex:ro`
+  - quick_hack runs `codex` with an isolated HOME per agent at `data/projects/<project_id>/.codex_runtime/<agent_id>/`, so Codex reads:
+    - `data/projects/<project_id>/.codex_runtime/<agent_id>/.codex/config.toml`
+    - `data/projects/<project_id>/.codex_runtime/<agent_id>/.codex/auth.json`
 
 ### Agent Settings
 ```bash

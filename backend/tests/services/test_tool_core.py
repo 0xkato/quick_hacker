@@ -137,6 +137,20 @@ class TestToolCoreReadFile:
         with pytest.raises(ValueError, match="escapes"):
             await tool_core.read_file("../../../etc/passwd")
 
+    @pytest.mark.asyncio
+    async def test_read_file_redacts_private_keys(self, tool_core, temp_repo):
+        """Should redact private keys from tool output (no raw secrets to the LLM)."""
+        (temp_repo / "certs").mkdir()
+        (temp_repo / "certs" / "server.key").write_text(
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEpgIBAAKCAQEAzvB5\n"
+            "-----END RSA PRIVATE KEY-----\n"
+        )
+
+        result = await tool_core.read_file("certs/server.key")
+        assert "[REDACTED_PRIVATE_KEY]" in result["content"]
+        assert "MIIEpgIBAAKCAQEAzvB5" not in result["content"]
+
 
 class TestToolCoreListDirectory:
     """Tests for ToolCore.list_directory()."""
@@ -380,6 +394,34 @@ class TestToolCoreReportFinding:
         )
         assert result["reported"]
         assert result["finding"]["severity"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_report_finding_normalizes_abs_path_and_redacts_private_key(self, tool_core, temp_repo):
+        """Should normalize absolute file paths and redact secrets in finding fields."""
+        (temp_repo / "certs").mkdir()
+        secret_path = (temp_repo / "certs" / "server.key").resolve()
+        secret_text = (
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEpgIBAAKCAQEAzvB5\n"
+            "-----END RSA PRIVATE KEY-----\n"
+        )
+        secret_path.write_text(secret_text)
+
+        result = await tool_core.report_finding(
+            severity="high",
+            title="Hardcoded private key",
+            vulnerability_type="hardcoded_secret",
+            file_path=str(secret_path),
+            line_start=1,
+            vulnerable_code=secret_text,
+            description=f"Key material:\n{secret_text}",
+            confidence=0.9,
+        )
+
+        finding = result["finding"]
+        assert finding["file_path"] == "certs/server.key"
+        assert "[REDACTED_PRIVATE_KEY]" in finding["vulnerable_code"]
+        assert "MIIEpgIBAAKCAQEAzvB5" not in finding["vulnerable_code"]
 
 
 class TestReportFindingValidation:

@@ -91,6 +91,7 @@ class ReconstructionService:
         """
         # Step 1: Sort events defensively by timestamp
         sorted_events = sorted(events, key=lambda e: e.get("timestamp", ""))
+        accepted_events: List[Dict] = []
 
         # Step 2: Create data structures
         spans: Dict[str, Span] = {}
@@ -139,6 +140,8 @@ class ReconstructionService:
                 if not isinstance(hypotheses_data, list):
                     logger.error("turn_plan event has invalid hypotheses (not list), skipping event_id=%s", event_id)
                     continue
+
+                accepted_events.append(event)
 
                 # Create hypothesis spans and update routing
                 turn_id = event_data.get("turn_id")
@@ -222,6 +225,7 @@ class ReconstructionService:
                     event_to_span[event_id] = unattributed_span_id
 
             else:
+                accepted_events.append(event)
                 # Route event to span
                 target_span_id = self._route_event_to_span(
                     event=event,
@@ -254,7 +258,7 @@ class ReconstructionService:
         if len(spans) == 1 and unattributed_span_id in spans:
             self._create_fallback_tool_spans(
                 unattributed_span=spans[unattributed_span_id],
-                sorted_events=sorted_events,
+                sorted_events=accepted_events,
                 spans=spans,
                 event_to_span=event_to_span,
                 agent_exec_id=agent_exec_id
@@ -267,7 +271,7 @@ class ReconstructionService:
             artifact_consumer_spans=artifact_consumer_spans,
             artifacts=artifacts,
             event_to_span=event_to_span,
-            sorted_events=sorted_events
+            sorted_events=accepted_events
         )
 
         return spans, edges, event_to_span

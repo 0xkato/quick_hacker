@@ -11,6 +11,8 @@ Tests ensure:
 
 import pytest
 from unittest.mock import Mock, patch
+from datetime import datetime
+import itertools
 from models.schemas import (
     Finding,
     BudgetConfig,
@@ -101,6 +103,73 @@ class TestNeverDropFindings:
         assert len(result.triaged_findings) == 1
         assert result.triaged_findings[0].id == "test-001"
 
+    def test_hardening_disposition_sets_hardening_classification(self, triage_service, budget_config, tmp_path):
+        """Disposition HARDENING should map to FindingClassification.HARDENING for correct UI labels."""
+        from dataclasses import replace
+
+        from models.schemas import ChecklistItem, ChecklistStatus, FindingClassification, ProofChecklist
+        from services.strict_classifier import ClassificationResult
+
+        finding = Finding(
+            id="test-001",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            title="Hardcoded private key",
+            description="Bundled test cert material",
+            file_path="/app/third_party/civetweb/resources/cert/server.key",
+            line_start=1,
+            vulnerability_type="hardcoded_secret",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z",
+        )
+
+        hardening_result = ClassificationResult(
+            disposition=Disposition.HARDENING,
+            classification_confidence=70,
+            exploit_confidence=None,
+            proof_checklist=ProofChecklist(
+                source_controlled_input=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+                sink_present=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+                dataflow_evidenced=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+                reachable=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+                boundary_crossed=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+                not_only_misconfig=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+                security_control_bypassed=ChecklistItem(value=False, status=ChecklistStatus.UNKNOWN, reason="N/A"),
+            ),
+            reasoning=["Hardcoded secret in third_party fixture"],
+            category=None,
+        )
+
+        class FakeGatherer:
+            def __init__(self, repo_root: str, budgets: BudgetConfig):
+                self.repo_root = repo_root
+                self.budgets = budgets
+
+            def gather(self, finding: Finding):
+                from services.evidence_gatherer import EvidenceResult
+
+                return EvidenceResult(snippet="", symbol_info=None, framework=None, matches=[], ssrf_analysis=None, timed_out=False)
+
+        class FakeClassifier:
+            def classify(self, finding: Finding, evidence):
+                return replace(hardening_result)
+
+        with (
+            patch("services.finding_triage_service.EvidenceGatherer", FakeGatherer),
+            patch("services.finding_triage_service.StrictClassifier", FakeClassifier),
+        ):
+            result = triage_service.triage_findings(
+                repo_root=str(tmp_path),
+                findings=[finding],
+                policy_version="1.0.0",
+                budgets=budget_config,
+            )
+
+        assert result.triaged_count == 1
+        assert result.triaged_findings[0].disposition == Disposition.HARDENING
+        assert result.triaged_findings[0].classification == FindingClassification.HARDENING
+
     def test_all_findings_triaged_never_dropped(self, triage_service, budget_config, tmp_path, sample_findings):
         """All findings are triaged, none dropped."""
         raw_count = len(sample_findings)
@@ -129,8 +198,8 @@ class TestBatchTimeout:
     @patch('services.finding_triage_service.time.time')
     def test_timeout_marks_as_speculative(self, mock_time, triage_service, tmp_path, sample_findings):
         """Timeout → remaining findings marked as SPECULATIVE with UNKNOWN checklist."""
-        # Simulate timeout by making time.time() return increasing values
-        mock_time.side_effect = [0, 20000]  # Exceeds 15s budget
+        # Simulate timeout by making time.time() return an initial start time, then a large elapsed time.
+        mock_time.side_effect = itertools.chain([0, 20000], itertools.repeat(20000))
 
         budget = BudgetConfig(
             batch_ms=15000,  # 15 second timeout
@@ -419,7 +488,7 @@ class TestTriagedAtTimestamp:
 
         for finding in result.triaged_findings:
             assert finding.triaged_at is not None
-            assert isinstance(finding.triaged_at, str)
+            assert isinstance(finding.triaged_at, datetime)
 
 
 class TestBudgetEnforcement:

@@ -289,7 +289,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       </div>
 
                       <div className="space-y-3">
-                        {name !== 'ollama' && (
+                        {name !== 'ollama' && name !== 'codex_cli' && (
                           <div>
                             <label className="block text-sm text-vsc-text-muted mb-1">API Key</label>
                             <div className="flex gap-2">
@@ -333,6 +333,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             <p className="text-xs text-vsc-text-muted mt-1">
                               API keys are stored securely per-user. They will be validated before saving.
                             </p>
+                          </div>
+                        )}
+
+                        {name === 'codex_cli' && (
+                          <div className="text-sm text-vsc-text-muted">
+                            Codex CLI uses `codex login` credentials (no API key). Mount or copy `~/.codex/auth.json`
+                            into the environment where the backend runs.
                           </div>
                         )}
 
@@ -495,6 +502,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                           >
                             <option value="openai">OpenAI</option>
                             <option value="anthropic">Anthropic</option>
+                            <option value="codex_cli">OpenAI Codex CLI</option>
                             <option value="ollama">Ollama</option>
                           </select>
                         </div>
@@ -532,6 +540,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                               <option value="gpt-4-turbo" />
                               <option value="o1" />
                               <option value="o1-mini" />
+                            </>
+                          )}
+                          {agentForm.default_provider === 'codex_cli' && (
+                            <>
+                              <option value="gpt-5.2-codex" />
+                              <option value="gpt-5.2" />
+                              <option value="gpt-4o" />
                             </>
                           )}
                           {agentForm.default_provider === 'anthropic' && (

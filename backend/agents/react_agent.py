@@ -209,7 +209,18 @@ class ReActSecurityAgent:
         # Check if using Claude SDK mode (provider creation handled separately)
         self._use_claude_sdk = getattr(request, 'use_claude_sdk', False)
 
-        if self._use_claude_sdk:
+        provider_name = ""
+        if request.provider_config is not None:
+            provider_name = (
+                request.provider_config.provider.value
+                if hasattr(request.provider_config.provider, "value")
+                else str(request.provider_config.provider)
+            )
+            provider_name = provider_name.strip().lower()
+
+        # codex_cli is orchestrator-managed (local Codex CLI subprocess) and should not
+        # attempt to instantiate an API-backed BaseProvider here.
+        if self._use_claude_sdk or provider_name == "codex_cli":
             # SDK mode: provider creation is handled by ClaudeSDKProvider in orchestrator
             # We still need a placeholder provider reference
             self.provider = None
@@ -2002,6 +2013,10 @@ class ReActSecurityAgent:
             }
         else:
             provider_config_dict = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
+
+        session_id = getattr(self, "_codex_session_id", None)
+        if isinstance(session_id, str) and session_id:
+            provider_config_dict["session_id"] = session_id
 
         return AgentStateSnapshot(
             id=str(uuid.uuid4())[:12],

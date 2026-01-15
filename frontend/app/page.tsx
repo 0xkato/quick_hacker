@@ -36,6 +36,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useInvestigationFlow } from '@/hooks/useInvestigationFlow';
 import { featureFlags, FeatureFlag } from '@/lib/featureFlags';
 import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, session as sessionApi, setAuthFunctions, type Project } from '@/lib/api';
+import { autoSelectFindingsAgentId } from '@/lib/findingsSelection';
 import type {
   FileNode,
   FileContent,
@@ -69,6 +70,7 @@ export default function Home() {
   const [agentProgress, setAgentProgress] = useState<Record<string, AgentProgress>>({});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedFindingsAgentId, setSelectedFindingsAgentId] = useState<string | null>(null);
+  const [userSelectedFindingsAgentId, setUserSelectedFindingsAgentId] = useState(false);
   const [agentFlow, setAgentFlow] = useState<InvestigationFlow | null>(null);
   const [diagramMode, setDiagramMode] = useState<'investigation' | 'calltree'>('investigation');
   const [callTreeRoutes, setCallTreeRoutes] = useState<CallTreeRoute[]>([]);
@@ -127,17 +129,21 @@ export default function Home() {
 
   // Auto-select agent for findings view
   useEffect(() => {
-    if (activeView === 'findings' && agents.length > 0) {
-      // If already have an agent selected from another view, use that
-      if (selectedAgentId && !selectedFindingsAgentId) {
-        setSelectedFindingsAgentId(selectedAgentId);
-      }
-      // Otherwise select first agent if nothing selected
-      else if (!selectedFindingsAgentId && !selectedAgentId) {
-        setSelectedFindingsAgentId(agents[0].id);
-      }
+    if (activeView !== 'findings') return;
+    if (agents.length === 0) return;
+
+    const nextSelection = autoSelectFindingsAgentId({
+      agents,
+      findings,
+      selectedAgentId,
+      selectedFindingsAgentId,
+      userSelectedFindingsAgentId,
+    });
+
+    if (nextSelection !== selectedFindingsAgentId) {
+      setSelectedFindingsAgentId(nextSelection);
     }
-  }, [activeView, agents, selectedFindingsAgentId, selectedAgentId]);
+  }, [activeView, agents, findings, selectedAgentId, selectedFindingsAgentId, userSelectedFindingsAgentId]);
 
   // Persist selected agent across refreshes
   useEffect(() => {
@@ -439,6 +445,8 @@ export default function Home() {
     setAgents([]);
     setFindings([]);
     setFileTree(null);
+    setSelectedFindingsAgentId(null);
+    setUserSelectedFindingsAgentId(false);
     await loadProjectData(project);
   };
 
@@ -455,6 +463,8 @@ export default function Home() {
     setAgents([]);
     setFindings([]);
     setFileTree(null);
+    setSelectedFindingsAgentId(null);
+    setUserSelectedFindingsAgentId(false);
   };
 
   const handleThreatModelChange = async (threatModel: ThreatModel) => {
@@ -872,7 +882,10 @@ export default function Home() {
                     <Bug className="w-4 h-4 text-vsc-text-muted" />
                     <select
                       value={selectedFindingsAgentId || ''}
-                      onChange={(e) => setSelectedFindingsAgentId(e.target.value || null)}
+                      onChange={(e) => {
+                        setUserSelectedFindingsAgentId(true);
+                        setSelectedFindingsAgentId(e.target.value || null);
+                      }}
                       className="flex-1 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
                     >
                       {!selectedFindingsAgentId && <option value="">Select an agent...</option>}
@@ -885,6 +898,7 @@ export default function Home() {
                   </div>
                   <div className="flex-1 overflow-hidden">
                     <FindingsList
+                      key={selectedFindingsAgentId || 'none'}
                       findings={
                         selectedFindingsAgentId
                           ? findings.filter(f => f.agent_id === selectedFindingsAgentId)

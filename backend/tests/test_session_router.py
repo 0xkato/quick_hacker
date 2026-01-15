@@ -1,7 +1,7 @@
 """Tests for session router endpoints."""
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
 
 from main import app
@@ -19,8 +19,12 @@ def client():
     """Create test client with mocked auth (module-scoped to avoid event loop issues)."""
     # Override the auth dependency
     app.dependency_overrides[require_auth] = mock_require_auth
-    with TestClient(app) as c:
-        yield c
+    with patch("main.init_db", new=AsyncMock()), \
+        patch("main.initialize_triage_availability", new=AsyncMock()), \
+        patch("main.settings_service.initialize", new=AsyncMock()), \
+        patch("main.project_service.initialize", new=AsyncMock()):
+        with TestClient(app) as c:
+            yield c
     # Clean up after all tests in module
     app.dependency_overrides.clear()
 

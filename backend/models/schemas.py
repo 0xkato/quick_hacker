@@ -3,7 +3,9 @@
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from services.redaction_service import redaction_service
 
 
 # === Enums ===
@@ -37,6 +39,7 @@ class ProviderType(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
+    CODEX_CLI = "codex_cli"
 
 
 class ThinkingMode(str, Enum):
@@ -155,6 +158,10 @@ class ProviderConfig(BaseModel):
     model: str
     api_key: Optional[str] = Field(None, description="API key (uses env if not provided)")
     base_url: Optional[str] = None
+    codex_path: Optional[str] = Field(
+        None,
+        description="Optional path to the local Codex CLI binary (provider=codex_cli only).",
+    )
     temperature: float = 0.0
     max_tokens: int = 4096
 
@@ -275,6 +282,18 @@ class TriageResult(BaseModel):
     metrics: TriageMetrics
     batch_id: str
 
+    @property
+    def triaged_count(self) -> int:
+        return self.metrics.triaged_count
+
+    @property
+    def reportable_count(self) -> int:
+        return self.metrics.reportable_count
+
+    @property
+    def raw_count(self) -> int:
+        return self.metrics.raw_count
+
 
 # === Findings ===
 
@@ -318,6 +337,28 @@ class Finding(BaseModel):
     triaged_at: Optional[datetime] = None
     category: Optional[VulnerabilityCategory] = None
 
+    @field_validator(
+        "description",
+        "code_snippet",
+        "vulnerable_code",
+        "attack_scenario",
+        "proof_of_concept",
+        "recommended_fix",
+        mode="before",
+    )
+    @classmethod
+    def _redact_text_fields(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, str):
+            return value
+        return redaction_service.redact(value)
+
+    @field_validator("source_trace", mode="before")
+    @classmethod
+    def _redact_source_trace(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, list):
+            return value
+        return [redaction_service.redact(str(item)) for item in value]
+
 
 class FindingCreate(BaseModel):
     severity: Severity
@@ -344,6 +385,28 @@ class FindingCreate(BaseModel):
     contradiction_present: bool = False
     fix_type: FixType = "code"
     classification_reasoning: str = ""
+
+    @field_validator(
+        "description",
+        "code_snippet",
+        "vulnerable_code",
+        "attack_scenario",
+        "proof_of_concept",
+        "recommended_fix",
+        mode="before",
+    )
+    @classmethod
+    def _redact_text_fields(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, str):
+            return value
+        return redaction_service.redact(value)
+
+    @field_validator("source_trace", mode="before")
+    @classmethod
+    def _redact_source_trace(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, list):
+            return value
+        return [redaction_service.redact(str(item)) for item in value]
 
 
 # === Dual-Model Handoff ===

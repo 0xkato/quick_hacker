@@ -662,6 +662,25 @@ services:
         # Example files with hardcoded secrets → HARDENING
         assert result.disposition == Disposition.HARDENING
 
+    def test_hardcoded_private_key_in_third_party_cert_bundle_hardening(self, classifier, base_finding, empty_evidence):
+        """Hardcoded private keys in vendored third_party cert bundles → HARDENING (not a product vuln by default)."""
+        finding = base_finding.model_copy()
+        finding.vulnerability_type = "Hardcoded Secret"
+        finding.file_path = "/app/third_party/civetweb/resources/cert/server.key"
+        finding.description = "Bundled test certificate material."
+
+        evidence = replace(empty_evidence)
+        evidence.snippet = """
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpgIBAAKCAQEAzvB5
+-----END RSA PRIVATE KEY-----
+"""
+
+        result = classifier.classify(finding, evidence)
+
+        # Vendored resource certs should not show up as speculative security issues by default.
+        assert result.disposition == Disposition.HARDENING
+
 
 class TestStrictExecEvalFiltering:
     """Tests for aggressive exec/eval filtering logic."""

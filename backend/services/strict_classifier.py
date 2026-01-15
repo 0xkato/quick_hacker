@@ -828,8 +828,14 @@ class StrictClassifier:
 
         # Hardcoded secrets in test/example files
         if category == VulnerabilityCategory.HARDCODED_SECRET:
-            if any(marker in finding.file_path.lower() for marker in [
-                "test", "example", "sample", "demo", "docker-compose", ".env.example"
+            path_lower = finding.file_path.lower()
+            if any(marker in path_lower for marker in [
+                "test", "example", "sample", "demo", "docker-compose", ".env.example",
+                # Vendored / third-party bundles often include demo certs/keys.
+                "third_party", "third-party", "/vendor/", "vendored",
+                # Common cert fixture locations in embedded servers.
+                "resources/cert", "resources/certs", "resources/ssl_cert",
+                "_obsolete",
             ]):
                 return Disposition.HARDENING
 

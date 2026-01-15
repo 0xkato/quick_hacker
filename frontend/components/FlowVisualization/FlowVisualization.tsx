@@ -93,23 +93,23 @@ function getConfidenceBorderColor(confidence?: number): string {
 function getTriageGatewayBorderColor(byDisposition?: Record<string, number>): string {
   if (!byDisposition || typeof byDisposition !== 'object') return '';
 
-  // Priority order: VALID_SECURITY_ISSUE/BUG > MISCONFIGURATION > HARDENING > BY_DESIGN > SPECULATIVE
+  // Priority order: valid_security_issue/bug > misconfiguration > hardening > by_design > speculative
   const dispositionPriority: Record<string, number> = {
-    'VALID_SECURITY_ISSUE': 5,
-    'BUG': 5,
-    'MISCONFIGURATION': 4,
-    'HARDENING': 3,
-    'BY_DESIGN': 2,
-    'SPECULATIVE': 1,
+    valid_security_issue: 5,
+    bug: 5,
+    misconfiguration: 4,
+    hardening: 3,
+    by_design: 2,
+    speculative: 1,
   };
 
   const dispositionColors: Record<string, string> = {
-    'VALID_SECURITY_ISSUE': 'ring-2 ring-sev-critical ring-offset-1 ring-offset-vsc-bg',
-    'BUG': 'ring-2 ring-sev-high ring-offset-1 ring-offset-vsc-bg',
-    'MISCONFIGURATION': 'ring-2 ring-sev-medium ring-offset-1 ring-offset-vsc-bg',
-    'HARDENING': 'ring-2 ring-blue-500 ring-offset-1 ring-offset-vsc-bg',
-    'BY_DESIGN': 'ring-2 ring-vsc-text-muted ring-offset-1 ring-offset-vsc-bg',
-    'SPECULATIVE': 'ring-2 ring-vsc-border ring-offset-1 ring-offset-vsc-bg',
+    valid_security_issue: 'ring-2 ring-sev-critical ring-offset-1 ring-offset-vsc-bg',
+    bug: 'ring-2 ring-sev-high ring-offset-1 ring-offset-vsc-bg',
+    misconfiguration: 'ring-2 ring-sev-medium ring-offset-1 ring-offset-vsc-bg',
+    hardening: 'ring-2 ring-blue-500 ring-offset-1 ring-offset-vsc-bg',
+    by_design: 'ring-2 ring-vsc-text-muted ring-offset-1 ring-offset-vsc-bg',
+    speculative: 'ring-2 ring-vsc-border ring-offset-1 ring-offset-vsc-bg',
   };
 
   // Find dominant disposition by priority
@@ -120,9 +120,10 @@ function getTriageGatewayBorderColor(byDisposition?: Record<string, number>): st
   for (const [disposition, count] of Object.entries(byDisposition)) {
     if (typeof count !== 'number' || count <= 0) continue;
 
-    const priority = dispositionPriority[disposition] || 0;
+    const normalizedDisposition = disposition.toLowerCase();
+    const priority = dispositionPriority[normalizedDisposition] || 0;
     if (priority > highestPriority || (priority === highestPriority && count > highestCount)) {
-      dominantDisposition = disposition;
+      dominantDisposition = normalizedDisposition;
       highestPriority = priority;
       highestCount = count;
     }

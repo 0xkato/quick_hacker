@@ -6,17 +6,17 @@ export type FixType = 'code' | 'config' | 'docs' | 'warning';
 export type AgentStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type AgentType = 'quick_audit' | 'custom' | 'strict_analysis' | 'ultra_strict' | 'deep_audit';
 export type ScanTier = 'quick' | 'medium' | 'advanced' | 'pro' | 'ultra' | 'evil' | 'custom';
-export type ProviderType = 'openai' | 'anthropic' | 'ollama';
+export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'codex_cli';
 
 // === Triage System ===
 
 export type Disposition =
-  | 'VALID_SECURITY_ISSUE'
-  | 'BUG'
-  | 'HARDENING'
-  | 'MISCONFIGURATION'
-  | 'BY_DESIGN'
-  | 'SPECULATIVE';
+  | 'valid_security_issue'
+  | 'bug'
+  | 'hardening'
+  | 'misconfiguration'
+  | 'by_design'
+  | 'speculative';
 
 export type ChecklistStatus = 'PROVEN' | 'DISPROVEN' | 'UNKNOWN';
 
@@ -79,6 +79,7 @@ export interface ProviderConfig {
   model: string;
   api_key?: string;
   base_url?: string;
+  codex_path?: string;
   temperature?: number;
   max_tokens?: number;
 }

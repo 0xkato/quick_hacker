@@ -42,6 +42,7 @@ class FakeCodexCLIProvider:
         self.codex_path = codex_path
         self.mcp_server_name = mcp_server_name
         self.session_id: str | None = None
+        self._turn = 0
 
     async def start_session(self, *, resume_session_id: str | None = None) -> str:
         if resume_session_id:
@@ -59,6 +60,7 @@ class FakeCodexCLIProvider:
 
     async def run_turn(self, *, prompt: str, on_event=None):
         self.__class__.prompts.append(prompt)
+        self._turn += 1
         # Establish a session.
         if not self.session_id:
             self.session_id = "thread-test-123"
@@ -67,43 +69,50 @@ class FakeCodexCLIProvider:
 
         tool_core = ToolCore(repo_path=self.repo_path, project_id=self.project_id, agent_id=self.agent_id)
 
-        # Persist a sink signal via ToolCore (simulating MCP server execution).
-        signal_call_id = "tool_call_signal_1"
-        signal_args = {
-            "kind": "sink",
-            "label": "os.system usage",
-            "file_path": "app.py",
-            "line_number": 10,
-            "llm_risk_tier": "A",
-            "llm_score": 90,
-            "llm_reasoning": "Direct shell execution sink.",
-            "metadata": {"sink_type": "exec"},
-        }
-        if on_event:
-            on_event(
-                {
-                    "type": "tool_call",
-                    "id": signal_call_id,
-                    "name": "mcp__quickhack__upsert_sink_signal",
-                    "args": signal_args,
-                }
-            )
-        signal_result = await tool_core.upsert_sink_signal(**signal_args)
-        if on_event:
-            on_event(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": signal_call_id,
-                    "tool_name": "mcp__quickhack__upsert_sink_signal",
-                    "result": {
-                        "content": [{"type": "text", "text": json.dumps(signal_result)}],
-                        "isError": False,
-                    },
-                    "is_error": False,
-                }
-            )
+        # Turn 1 (scanner): simulate discovery work (sink signal only) and emit SCANNING_COMPLETE.
+        if self._turn == 1:
+            # Persist a sink signal via ToolCore (simulating MCP server execution).
+            signal_call_id = "tool_call_signal_1"
+            signal_args = {
+                "kind": "sink",
+                "label": "os.system usage",
+                "file_path": "app.py",
+                "line_number": 10,
+                "llm_risk_tier": "A",
+                "llm_score": 90,
+                "llm_reasoning": "Direct shell execution sink.",
+                "metadata": {"sink_type": "exec"},
+            }
+            if on_event:
+                on_event(
+                    {
+                        "type": "tool_call",
+                        "id": signal_call_id,
+                        "name": "mcp__quickhack__upsert_sink_signal",
+                        "args": signal_args,
+                    }
+                )
+            signal_result = await tool_core.upsert_sink_signal(**signal_args)
+            if on_event:
+                on_event(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": signal_call_id,
+                        "tool_name": "mcp__quickhack__upsert_sink_signal",
+                        "result": {
+                            "content": [{"type": "text", "text": json.dumps(signal_result)}],
+                            "isError": False,
+                        },
+                        "is_error": False,
+                    }
+                )
 
-        # Emit a report_finding tool call result.
+            if on_event:
+                on_event({"type": "agent_text", "text": "SCANNING_COMPLETE"})
+                on_event({"type": "turn_complete", "session_id": self.session_id, "usage": None})
+            return []
+
+        # Turn 2 (analyzer): report a finding and complete the audit.
         finding_call_id = "tool_call_finding_1"
         finding_args = {
             "severity": "high",
@@ -217,6 +226,8 @@ def test_codex_cli_agent_via_api_creates_sink_signal_and_finding(tmp_path: Path,
             # Codex CLI path runs the strict triage pipeline (disposition populated).
             assert findings_data[0].get("disposition") is not None
             assert any("DEEP AUDIT MODE" in p for p in FakeCodexCLIProvider.prompts)
+            assert any("performing the SCANNING phase" in p for p in FakeCodexCLIProvider.prompts)
+            assert any("performing the ANALYSIS phase" in p for p in FakeCodexCLIProvider.prompts)
 
     # Sink signals are persisted per project.
     sink_path = data_dir / "projects" / "proj_codex_api" / "sink_signals.json"

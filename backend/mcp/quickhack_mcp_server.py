@@ -132,6 +132,84 @@ class QuickHackMCPServer:
                 },
             ),
             ToolSpec(
+                name="track_file_analysis",
+                description="Flow graph: record that a file is being analyzed (for investigation tree).",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string"},
+                        "purpose": {"type": "string"},
+                    },
+                    "required": ["file_path"],
+                },
+            ),
+            ToolSpec(
+                name="track_function_discovered",
+                description="Flow graph: record discovery of an interesting function.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "function_name": {"type": "string"},
+                        "file_path": {"type": "string"},
+                        "line_number": {"type": "integer"},
+                        "signature": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["function_name", "file_path", "line_number"],
+                },
+            ),
+            ToolSpec(
+                name="track_call_chain",
+                description="Flow graph: record a call chain from a function to a list of targets.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "from_function": {"type": "string"},
+                        "calls": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "target": {"type": "string"},
+                                    "file": {"type": "string"},
+                                },
+                                "required": ["target"],
+                            },
+                        },
+                    },
+                    "required": ["from_function", "calls"],
+                },
+            ),
+            ToolSpec(
+                name="track_sink_identified",
+                description="Flow graph: record that a dangerous sink was identified.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "sink_type": {"type": "string"},
+                        "file_path": {"type": "string"},
+                        "line_number": {"type": "integer"},
+                        "code_snippet": {"type": "string"},
+                    },
+                    "required": ["sink_type", "file_path", "line_number"],
+                },
+            ),
+            ToolSpec(
+                name="track_entry_point",
+                description="Flow graph: record an entry point (route/handler) for later analysis.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "entry_type": {"type": "string"},
+                        "file_path": {"type": "string"},
+                        "line_number": {"type": "integer"},
+                        "route": {"type": "string"},
+                        "method": {"type": "string"},
+                    },
+                    "required": ["entry_type", "file_path", "line_number"],
+                },
+            ),
+            ToolSpec(
                 name="upsert_sink_signal",
                 description="Create or update a persistent sink signal (investigation lead).",
                 input_schema={
@@ -261,6 +339,54 @@ class QuickHackMCPServer:
             return await self.tool_core.trace_dataflow(
                 file_path=str(args["file_path"]),
                 line_number=int(args["line_number"]),
+            )
+        if name == "track_file_analysis":
+            return await self.tool_core.track_file_analysis(
+                file_path=str(args["file_path"]),
+                purpose=str(args.get("purpose") or "analyzing"),
+            )
+        if name == "track_function_discovered":
+            return await self.tool_core.track_function_discovered(
+                function_name=str(args["function_name"]),
+                file_path=str(args["file_path"]),
+                line_number=int(args["line_number"]),
+                signature=args.get("signature"),
+                reason=args.get("reason"),
+            )
+        if name == "track_call_chain":
+            calls = args.get("calls") or []
+            if not isinstance(calls, list):
+                raise ValueError("calls must be an array")
+            normalized_calls: list[dict[str, str]] = []
+            for item in calls:
+                if not isinstance(item, dict):
+                    continue
+                target = item.get("target")
+                if not isinstance(target, str) or not target:
+                    continue
+                normalized: dict[str, str] = {"target": target}
+                file_val = item.get("file")
+                if isinstance(file_val, str) and file_val:
+                    normalized["file"] = file_val
+                normalized_calls.append(normalized)
+            return await self.tool_core.track_call_chain(
+                from_function=str(args["from_function"]),
+                calls=normalized_calls,
+            )
+        if name == "track_sink_identified":
+            return await self.tool_core.track_sink_identified(
+                sink_type=str(args["sink_type"]),
+                file_path=str(args["file_path"]),
+                line_number=int(args["line_number"]),
+                code_snippet=args.get("code_snippet"),
+            )
+        if name == "track_entry_point":
+            return await self.tool_core.track_entry_point(
+                entry_type=str(args["entry_type"]),
+                file_path=str(args["file_path"]),
+                line_number=int(args["line_number"]),
+                route=args.get("route"),
+                method=args.get("method"),
             )
         if name == "upsert_sink_signal":
             return await self.tool_core.upsert_sink_signal(

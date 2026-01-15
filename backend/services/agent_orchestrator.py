@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,36 @@ from services.flow_service import flow_service
 from services.observability_service import observability_service
 from services.finding_triage_service import triage_service
 from prompting_loader import load_prompt, render_prompt
+
+
+def _codex_text_signals_handoff_to_analyzer(text: str) -> bool:
+    """Return True if Codex output indicates the scanner phase is complete."""
+    if not text:
+        return False
+    normalized = str(text).strip().lower().replace("_", " ")
+    return any(
+        phrase in normalized
+        for phrase in (
+            "scanning complete",
+            "scan complete",
+        )
+    )
+
+
+def _codex_text_signals_done(text: str) -> bool:
+    """Return True if Codex output indicates the overall audit is complete."""
+    if not text:
+        return False
+    normalized = str(text).strip().lower().replace("_", " ")
+    return any(
+        phrase in normalized
+        for phrase in (
+            "audit complete",
+            "analysis complete",
+            "investigation complete",
+            "no more findings",
+        )
+    )
 
 
 # Agent type to class mapping
@@ -1126,21 +1157,6 @@ class AgentOrchestrator:
         def time_floor_satisfied() -> bool:
             return elapsed_s() >= time_floor_s
 
-        def codex_says_done(text: str) -> bool:
-            if not text:
-                return False
-            lowered = text.lower()
-            return any(
-                phrase in lowered
-                for phrase in (
-                    "audit complete",
-                    "scan complete",
-                    "analysis complete",
-                    "no more findings",
-                    "investigation complete",
-                )
-            )
-
         codex_path = (getattr(config, "codex_path", None) or "").strip() or "codex"
 
         provider = CodexCLIProvider(
@@ -1166,6 +1182,7 @@ class AgentOrchestrator:
         codex_findings: list[Finding] = []
         finding_counter = [0]
         last_triaged_count = 0
+        files_read: list[str] = []
 
         import json as json_mod
         import uuid as uuid_mod
@@ -1223,6 +1240,11 @@ class AgentOrchestrator:
                         "dependency_audit",
                         "analyze_ast",
                         "trace_dataflow",
+                        "track_file_analysis",
+                        "track_function_discovered",
+                        "track_call_chain",
+                        "track_sink_identified",
+                        "track_entry_point",
                         "upsert_sink_signal",
                         "report_finding",
                         "promote_finding",
@@ -1258,6 +1280,10 @@ class AgentOrchestrator:
                 node_type = "tool_call"
                 if normalized_name in ("read_file", "list_directory"):
                     node_type = "code_read"
+                    if normalized_name == "read_file":
+                        path = tool_args.get("path")
+                        if isinstance(path, str) and path:
+                            files_read.append(path)
                 elif normalized_name in ("search_code", "grep_semantic"):
                     node_type = "search"
                 elif normalized_name in ("scan_repo_for_secrets", "dependency_audit"):
@@ -1267,6 +1293,8 @@ class AgentOrchestrator:
                 elif normalized_name == "upsert_sink_signal":
                     kind = tool_args.get("kind", "")
                     node_type = "entry_point" if kind == "entry_point" else "dangerous_sink"
+                elif normalized_name.startswith("track_"):
+                    node_type = "flow"
 
                 args_preview = str(tool_args)[:50]
                 label = f"{normalized_name}: {args_preview}..."
@@ -1420,12 +1448,32 @@ class AgentOrchestrator:
                 return
 
         def build_turn_prompt(*, base: str, phase_name: str, floor_remaining_s: float) -> str:
-            policy_template = (
-                "agents/claude_sdk_orchestrator_analyzer_policy.md"
-                if phase_name == "analyzer"
-                else "agents/claude_sdk_orchestrator_scanner_policy.md"
-            )
-            policy_text = load_prompt(policy_template)
+            base_system = load_prompt("base/base_prompt.md")
+            repo_info = f"Repository root: {agent.repo_path}"
+            try:
+                entries = sorted(Path(agent.repo_path).iterdir())
+                top = []
+                for entry in entries[:25]:
+                    suffix = "/" if entry.is_dir() else ""
+                    top.append(entry.name + suffix)
+                if top:
+                    repo_info += "\nTop-level entries: " + ", ".join(top)
+            except Exception:
+                pass
+
+            if phase_name == "analyzer":
+                scanner_context_parts = []
+                if files_read:
+                    scanner_context_parts.append("Files read (sample):")
+                    for p in files_read[:20]:
+                        scanner_context_parts.append(f"- {p}")
+                if codex_findings:
+                    scanner_context_parts.append(f"\nFindings reported so far: {len(codex_findings)}")
+                scanner_context = "\n".join(scanner_context_parts) if scanner_context_parts else "UNKNOWN (single-model mode)"
+                phase_system = render_prompt("agents/analyzer_system_prompt.md", scanner_context=scanner_context)
+            else:
+                phase_system = render_prompt("agents/scanner_system_prompt.md", repo_info=repo_info)
+
             profile_text = ""
             try:
                 if agent.agent_type == AgentType.DEEP_AUDIT:
@@ -1445,6 +1493,11 @@ class AgentOrchestrator:
                     "- dependency_audit",
                     "- analyze_ast",
                     "- trace_dataflow",
+                    "- track_file_analysis",
+                    "- track_function_discovered",
+                    "- track_call_chain",
+                    "- track_sink_identified",
+                    "- track_entry_point",
                     "- upsert_sink_signal",
                     "- report_finding",
                     "- promote_finding",
@@ -1466,7 +1519,8 @@ class AgentOrchestrator:
             return "\n\n".join(
                 [
                     f"[Phase: {phase_name}]",
-                    "Audit policy:\n" + policy_text,
+                    "Base system:\n" + base_system,
+                    "Phase system:\n" + phase_system,
                     ("Audit profile:\n" + profile_text) if profile_text else "",
                     "Available tools:\n" + tool_list,
                     guardrails + floor_note,
@@ -1598,8 +1652,20 @@ class AgentOrchestrator:
                     except Exception:
                         pass
 
+                # If scanner phase is explicitly complete, hand off even if no findings were reported.
+                if phase == "scanner" and _codex_text_signals_handoff_to_analyzer(turn_text):
+                    phase = "analyzer"
+                    self._broadcast_message(
+                        WSMessage(type=WSMessageType.PROGRESS, agent_id=agent.id, data={"type": "phase_change", "phase": phase})
+                    )
+                    current_prompt = render_prompt(
+                        "agents/claude_sdk_orchestrator_analyzer_prompt.md",
+                        finding_count=str(len(codex_findings)),
+                    )
+                    continue
+
                 # Detect completion signal.
-                if codex_says_done(turn_text):
+                if _codex_text_signals_done(turn_text):
                     if time_floor_satisfied() or time_floor_s <= 0:
                         break
                     current_prompt = render_prompt(

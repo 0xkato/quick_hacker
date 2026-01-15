@@ -23,6 +23,12 @@ async def test_mcp_tools_list_includes_read_file(tmp_path: Path):
     tools = resp["result"]["tools"]
     names = {t["name"] for t in tools}
     assert "read_file" in names
+    # Flow tracking tools referenced by prompting/agents/*_system_prompt.md
+    assert "track_file_analysis" in names
+    assert "track_function_discovered" in names
+    assert "track_call_chain" in names
+    assert "track_sink_identified" in names
+    assert "track_entry_point" in names
 
 
 @pytest.mark.asyncio

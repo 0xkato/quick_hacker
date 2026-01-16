@@ -28,6 +28,7 @@ import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualizat
 import { TreeLayout } from '@/components/InvestigationFlow';
 import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
 import { ReportModal } from '@/components/ReportPanel';
+import { ThreatModelModal } from '@/components/ThreatModel/ThreatModelModal';
 import { AuthModal, AuthScreen } from '@/components/Auth';
 import { SessionControls } from '@/components/SessionControls';
 import { ResumeDialog } from '@/components/ResumeDialog';
@@ -59,7 +60,8 @@ export default function Home() {
   // Project state
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [isProjectLoading, setIsProjectLoading] = useState(true);
-  const [isThreatModelSaving, setIsThreatModelSaving] = useState(false);
+  const [showThreatModelModal, setShowThreatModelModal] = useState(false);
+  const [threatModelPresetPreview, setThreatModelPresetPreview] = useState<ThreatModel | null>(null);
 
   // State
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
@@ -467,16 +469,19 @@ export default function Home() {
     setUserSelectedFindingsAgentId(false);
   };
 
-  const handleThreatModelChange = async (threatModel: ThreatModel) => {
+  const openThreatModelModal = (preset?: ThreatModel) => {
     if (!currentProject) return;
-    setIsThreatModelSaving(true);
+    setThreatModelPresetPreview(preset || (currentProject.threat_model || 'AB'));
+    setShowThreatModelModal(true);
+  };
+
+  const handleThreatModelProfileUpdated = async () => {
+    if (!currentProject) return;
     try {
-      const updated = await projectsApi.update(currentProject.id, { threat_model: threatModel });
-      setCurrentProject(updated);
+      const refreshed = await projectsApi.get(currentProject.id);
+      setCurrentProject(refreshed);
     } catch (err) {
-      console.error('Failed to update threat model:', err);
-    } finally {
-      setIsThreatModelSaving(false);
+      console.error('Failed to refresh project after threat model update:', err);
     }
   };
 
@@ -677,15 +682,23 @@ export default function Home() {
             <span className="text-vsc-xs text-vsc-text-muted">Threat model</span>
             <select
               value={(currentProject.threat_model || 'AB') as ThreatModel}
-              onChange={(e) => handleThreatModelChange(e.target.value as ThreatModel)}
-              disabled={isThreatModelSaving}
-              className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-xs disabled:opacity-50"
-              title="Attacker model used for automated triage"
+              onChange={(e) => openThreatModelModal(e.target.value as ThreatModel)}
+              className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-xs"
+              title="Opens the Project Threat Model editor (changes require explicit reset/save)"
             >
               <option value="A">Internet (A)</option>
               <option value="AB">Internet + Auth (A+B)</option>
               <option value="ABC">Internet + Auth + Insider (A+B+C)</option>
             </select>
+            {currentProject.profile_review_status === 'unreviewed' && (
+              <button
+                onClick={() => openThreatModelModal()}
+                className="px-2 py-0.5 rounded text-vsc-xs bg-yellow-900/40 text-yellow-200 border border-yellow-800 hover:bg-yellow-900/60"
+                title="Preset-derived profile; review to confirm attacker capabilities + repo_checkout semantics"
+              >
+                Unreviewed
+              </button>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -1167,6 +1180,17 @@ export default function Home() {
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
+      />
+
+      <ThreatModelModal
+        isOpen={showThreatModelModal}
+        onClose={() => {
+          setShowThreatModelModal(false);
+          setThreatModelPresetPreview(null);
+        }}
+        projectId={currentProject.id}
+        presetPreview={threatModelPresetPreview}
+        onProfileUpdated={handleThreatModelProfileUpdated}
       />
 
       {/* Report Modal */}

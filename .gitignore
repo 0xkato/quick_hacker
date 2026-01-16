@@ -35,6 +35,7 @@ coverage/
 .coverage
 htmlcov/
 .pytest_cache/
+frontend/test-results/
 
 # Runtime data
 backend/data/

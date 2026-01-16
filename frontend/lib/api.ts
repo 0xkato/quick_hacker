@@ -88,8 +88,12 @@ export interface ObservabilityStats {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-class APIError extends Error {
-  constructor(public status: number, message: string) {
+export class APIError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public details?: unknown
+  ) {
     super(message);
     this.name = 'APIError';
   }
@@ -113,7 +117,13 @@ async function request<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new APIError(response.status, error.detail || 'Request failed');
+    const message =
+      typeof (error as any)?.detail === 'string'
+        ? (error as any).detail
+        : typeof (error as any)?.error_code === 'string'
+          ? (error as any).error_code
+          : 'Request failed';
+    throw new APIError(response.status, message, error);
   }
 
   return response.json();
@@ -614,6 +624,18 @@ export interface Project {
   name: string;
   description: string;
   threat_model?: 'A' | 'AB' | 'ABC';
+  threat_model_preset?: 'A' | 'AB' | 'ABC';
+  threat_model_profile?: {
+    execution_contexts: string[];
+    attacker_capabilities: string[];
+    assets: string[];
+  } | null;
+  profile_source?: 'preset' | 'custom' | 'migrated';
+  profile_review_status?: 'unreviewed' | 'reviewed';
+  profile_reviewed_at?: string | null;
+  profile_mapping_version?: number;
+  input_channel_semantics_version?: number;
+  prompt_threat_model_block_version?: number;
   repo_url: string | null;
   repo_name: string | null;
   repo_branch: string | null;
@@ -629,6 +651,56 @@ export interface ProjectStatus {
   in_project: boolean;
   current_project: Project | null;
 }
+
+export type ThreatModelPreset = 'A' | 'AB' | 'ABC';
+
+export type ExecutionContext =
+  | 'product_runtime'
+  | 'server_runtime'
+  | 'dev_tooling'
+  | 'ci_pipeline'
+  | 'test_harness'
+  | 'test_code'
+  | 'build_release';
+
+export type AttackerCapability =
+  | 'remote_network'
+  | 'remote_web_content'
+  | 'untrusted_file_input'
+  | 'untrusted_repo_content'
+  | 'untrusted_ci_artifact'
+  | 'local_unprivileged_user';
+
+export type Asset =
+  | 'user_data'
+  | 'credentials_secrets'
+  | 'availability'
+  | 'integrity_of_build'
+  | 'integrity_of_release_artifacts'
+  | 'developer_machine_integrity';
+
+export interface ThreatModelProfile {
+  execution_contexts: ExecutionContext[];
+  attacker_capabilities: AttackerCapability[];
+  assets: Asset[];
+}
+
+export interface ThreatModelProfileResponse {
+  threat_model_preset: ThreatModelPreset;
+  profile_source: 'preset' | 'custom' | 'migrated';
+  profile_review_status: 'unreviewed' | 'reviewed';
+  profile_reviewed_at: string | null;
+  profile_mapping_version: number;
+  input_channel_semantics_version: number;
+  prompt_threat_model_block_version: number;
+  threat_model_profile: ThreatModelProfile;
+  profile_hash: string;
+}
+
+export type ThreatModelProfileUpdateRequest =
+  | { action: 'mark_reviewed'; expected_profile_hash: string }
+  | { action: 'reset_to_preset'; preset: ThreatModelPreset; expected_profile_hash: string }
+  | { action: 'save_custom'; preset: ThreatModelPreset; profile: ThreatModelProfile; expected_profile_hash: string };
 
 export const projects = {
   async list(): Promise<Project[]> {
@@ -688,6 +760,20 @@ export const projects = {
 
   async refresh(projectId: string): Promise<Project> {
     return request<Project>(`/api/projects/${projectId}/refresh`, { method: 'POST' });
+  },
+
+  async getThreatModelProfile(projectId: string): Promise<ThreatModelProfileResponse> {
+    return request<ThreatModelProfileResponse>(`/api/projects/${projectId}/threat-model-profile`);
+  },
+
+  async updateThreatModelProfile(
+    projectId: string,
+    payload: ThreatModelProfileUpdateRequest
+  ): Promise<ThreatModelProfileResponse> {
+    return request<ThreatModelProfileResponse>(`/api/projects/${projectId}/threat-model-profile`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
   },
 };
 
@@ -796,4 +882,4 @@ export const cache = {
   },
 };
 
-export { APIError, API_BASE };
+export { API_BASE };

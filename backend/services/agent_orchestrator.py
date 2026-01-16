@@ -27,7 +27,7 @@ from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
 from agents.react_agent import ReActSecurityAgent
 from agents.deep_audit import DeepAuditSupervisor
-from providers.claude_sdk_provider import ClaudeSDKProvider
+from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 from providers.codex_cli_provider import CodexCLIProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
 from services.tool_core import ToolCore
@@ -249,7 +249,13 @@ class AgentOrchestrator:
                     print(f"[Orchestrator] Resolved API key for {config_name}")
 
         if use_claude_sdk:
-            print("[Orchestrator] Using Claude SDK mode")
+            if SDK_AVAILABLE:
+                print("[Orchestrator] Using Claude SDK mode (SDK available)")
+            else:
+                print("[Orchestrator] WARNING: Claude SDK mode requested but SDK not installed")
+                print("[Orchestrator] Agent will fail when started. Install with: pip install claude-agent-sdk")
+                # Note: We don't fail here during create_agent to allow the UI to show the agent
+                # and display the error. The actual RuntimeError will be raised in start_session()
 
         # Use shared cache (all agents share the same cache instance)
         cache = self._shared_cache

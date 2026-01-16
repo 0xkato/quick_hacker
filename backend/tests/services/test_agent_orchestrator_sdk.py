@@ -79,19 +79,21 @@ class TestAgentOrchestratorProviderRouting:
         """Should use ClaudeSDKOrchestrator for claude_sdk provider."""
         from services.agent_orchestrator import AgentOrchestrator
 
-        orchestrator = AgentOrchestrator()
+        # Mock SDK availability to True
+        with patch('services.agent_orchestrator.SDK_AVAILABLE', True):
+            orchestrator = AgentOrchestrator()
 
-        # Add mock agent to orchestrator
-        orchestrator._agents[mock_agent.id] = mock_agent
+            # Add mock agent to orchestrator
+            orchestrator._agents[mock_agent.id] = mock_agent
 
-        # Mock the _run_sdk_agent method to verify it gets called
-        orchestrator._run_sdk_agent = AsyncMock(return_value=[])
+            # Mock the _run_sdk_agent method to verify it gets called
+            orchestrator._run_sdk_agent = AsyncMock(return_value=[])
 
-        # Run the agent - should route to SDK
-        await orchestrator._run_agent(mock_agent)
+            # Run the agent - should route to SDK
+            await orchestrator._run_agent(mock_agent)
 
-        # Verify _run_sdk_agent was called for claude_sdk provider
-        orchestrator._run_sdk_agent.assert_called_once_with(mock_agent)
+            # Verify _run_sdk_agent was called for claude_sdk provider
+            orchestrator._run_sdk_agent.assert_called_once_with(mock_agent)
 
     @pytest.mark.asyncio
     async def test_routes_anthropic_to_react(self, mock_react_agent):
@@ -114,19 +116,21 @@ class TestAgentOrchestratorProviderRouting:
         """Should use SDK for anthropic provider when use_claude_sdk=True."""
         from services.agent_orchestrator import AgentOrchestrator
 
-        orchestrator = AgentOrchestrator()
+        # Mock SDK availability to True
+        with patch('services.agent_orchestrator.SDK_AVAILABLE', True):
+            orchestrator = AgentOrchestrator()
 
-        # Add mock agent to orchestrator
-        orchestrator._agents[mock_anthropic_sdk_agent.id] = mock_anthropic_sdk_agent
+            # Add mock agent to orchestrator
+            orchestrator._agents[mock_anthropic_sdk_agent.id] = mock_anthropic_sdk_agent
 
-        # Mock the _run_sdk_agent method to verify it gets called
-        orchestrator._run_sdk_agent = AsyncMock(return_value=[])
+            # Mock the _run_sdk_agent method to verify it gets called
+            orchestrator._run_sdk_agent = AsyncMock(return_value=[])
 
-        # Run the agent - should route to SDK
-        await orchestrator._run_agent(mock_anthropic_sdk_agent)
+            # Run the agent - should route to SDK
+            await orchestrator._run_agent(mock_anthropic_sdk_agent)
 
-        # Verify _run_sdk_agent was called for anthropic provider with SDK flag
-        orchestrator._run_sdk_agent.assert_called_once_with(mock_anthropic_sdk_agent)
+            # Verify _run_sdk_agent was called for anthropic provider with SDK flag
+            orchestrator._run_sdk_agent.assert_called_once_with(mock_anthropic_sdk_agent)
 
     @pytest.mark.asyncio
     async def test_sdk_agent_cancel_calls_interrupt(self, mock_agent):

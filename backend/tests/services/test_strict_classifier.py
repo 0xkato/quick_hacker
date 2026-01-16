@@ -10,14 +10,13 @@ Tests ensure:
 """
 
 import pytest
-from dataclasses import replace
 from models.schemas import (
     Finding,
     ChecklistStatus,
     Disposition,
 )
-from services.evidence_gatherer import EvidenceResult, EvidenceMatch, SSRFAnalysis, SymbolInfo
 from services.strict_classifier import StrictClassifier
+from models.schemas import Evidence, InputChannel
 
 
 @pytest.fixture
@@ -47,13 +46,22 @@ def base_finding():
 @pytest.fixture
 def empty_evidence():
     """Empty evidence result."""
-    return EvidenceResult(
+    return Evidence(
+        finding_id="test-001",
         snippet="",
+        handler_snippet=None,
         symbol_info=None,
         framework=None,
+        route_registration=None,
+        auth_gates=[],
+        dataflow_snippet=None,
         matches=[],
         ssrf_analysis=None,
         timed_out=False,
+        input_channel=InputChannel.unknown,
+        input_channel_deterministic=False,
+        input_channel_signals=[],
+        input_channel_reason="",
     )
 
 
@@ -71,31 +79,30 @@ class TestCodeExecutionByDesign:
         finding.file_path = "/app/pipelines/data_processor.py"
         finding.description = "Use of exec() function for dynamic code execution"
 
-        evidence = replace(
-            empty_evidence,
-            snippet="""
+        evidence = empty_evidence.model_copy(update={
+            "snippet": """
 class PipelineExecutor:
     def execute_transformation(self, config):
         # Dynamic pipeline execution
         exec(config['transformation_code'])
 """,
-            symbol_info=SymbolInfo(
-                name="PipelineExecutor.execute_transformation",
-                qualified_name="PipelineExecutor.execute_transformation",
-                type="method",
-                line_start=2,
-                line_end=4,
-                file_path="/app/pipelines/data_processor.py"
-            ),
-            matches=[
-                EvidenceMatch(
-                    file="/app/pipelines/data_processor.py",
-                    line=4,
-                    snippet="exec(config['transformation_code'])",
-                    match_type="sink",
-                )
+            "symbol_info": {
+                "name": "PipelineExecutor.execute_transformation",
+                "qualified_name": "PipelineExecutor.execute_transformation",
+                "type": "method",
+                "line_start": 2,
+                "line_end": 4,
+                "file_path": "/app/pipelines/data_processor.py"
+            },
+            "matches": [
+                {
+                    "file": "/app/pipelines/data_processor.py",
+                    "line": 4,
+                    "snippet": "exec(config['transformation_code'])",
+                    "match_type": "sink",
+                }
             ]
-        )
+        })
 
         result = classifier.classify(finding, evidence)
 

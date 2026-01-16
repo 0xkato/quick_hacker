@@ -277,7 +277,7 @@ class StrictClassifier:
             return ChecklistItem(
                 value=True,
                 status=ChecklistStatus.PROVEN,
-                reason=f"Source and sink in same function ({evidence.symbol_info.name})"
+                reason=f"Source and sink in same function ({evidence.symbol_info["name"]})"
             )
 
         # Check proximity
@@ -485,8 +485,8 @@ class StrictClassifier:
         symbol_type = None
 
         if evidence.symbol_info:
-            symbol_name = evidence.symbol_info.name
-            symbol_type = evidence.symbol_info.type
+            symbol_name = evidence.symbol_info["name"]
+            symbol_type = evidence.symbol_info["type"]
 
         # Try AST parsing first (most reliable) - only if we have symbol info
         ast_parse_succeeded = False
@@ -595,14 +595,14 @@ class StrictClassifier:
         # Signal B: Symbol match
         symbol_name = ""
         if evidence.symbol_info:
-            symbol_name = evidence.symbol_info.name.lower()
+            symbol_name = evidence.symbol_info["name"].lower()
 
         symbol_keywords = ['executor', 'pipeline', 'kernel', 'runner', 'block',
                            'execute_', 'run_', 'eval_', 'process_block', 'run_kernel']
         symbol_match = any(kw in symbol_name for kw in symbol_keywords)
 
         if symbol_match:
-            signals.append(f"symbol={evidence.symbol_info.name}")
+            signals.append(f"symbol={evidence.symbol_info["name"]}")
 
         # Signal C: Documentation match
         snippet = evidence.snippet or finding.code_snippet or ""
@@ -865,9 +865,9 @@ class StrictClassifier:
 
         # SSRF with constant URL
         if category == VulnerabilityCategory.SSRF and evidence.ssrf_analysis:
-            if evidence.ssrf_analysis.url_is_constant:
+            if evidence.ssrf_analysis["url_is_constant"]:
                 return Disposition.SPECULATIVE
-            if evidence.ssrf_analysis.url_from_config:
+            if evidence.ssrf_analysis["url_from_config"]:
                 return Disposition.SPECULATIVE
 
         # CSWSH: check_origin alone without ambient creds
@@ -1018,6 +1018,6 @@ class StrictClassifier:
 
         # Add symbol/framework context if available
         if evidence.symbol_info:
-            bullets.append(f"Symbol: {evidence.symbol_info.name} ({evidence.symbol_info.type})")
+            bullets.append(f"Symbol: {evidence.symbol_info["name"]} ({evidence.symbol_info["type"]})")
 
         return bullets[:5]  # Limit to 5 bullets total

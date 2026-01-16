@@ -228,6 +228,7 @@ def test_codex_cli_agent_via_api_creates_sink_signal_and_finding(tmp_path: Path,
             assert any("DEEP AUDIT MODE" in p for p in FakeCodexCLIProvider.prompts)
             assert any("performing the SCANNING phase" in p for p in FakeCodexCLIProvider.prompts)
             assert any("performing the ANALYSIS phase" in p for p in FakeCodexCLIProvider.prompts)
+            assert any("=== THREAT MODEL (AUTHORITATIVE) ===" in p for p in FakeCodexCLIProvider.prompts)
 
     # Sink signals are persisted per project.
     sink_path = data_dir / "projects" / "proj_codex_api" / "sink_signals.json"

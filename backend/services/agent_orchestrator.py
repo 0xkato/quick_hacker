@@ -41,6 +41,7 @@ from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
 from services.observability_service import observability_service
 from services.finding_triage_service import triage_service
+from services.threat_model_prompt_block import build_threat_model_prompt_block
 from prompting_loader import load_prompt, render_prompt
 
 
@@ -1172,6 +1173,41 @@ class AgentOrchestrator:
         resume_session_id = getattr(agent, "_codex_session_id", None)
         await provider.start_session(resume_session_id=resume_session_id)
 
+        # Threat model prompt block (authoritative JSON + summary). If the project record
+        # isn't available (e.g., some tests), fall back to AB preset-derived profile.
+        threat_model_block = ""
+        try:
+            from models.threat_model_profile import ThreatModelProfile, preset_to_profile
+
+            project = None
+            try:
+                project = await project_service.get_project(str(agent.repo_id))
+            except Exception:
+                project = None
+
+            if project and project.threat_model_profile:
+                threat_model_block = build_threat_model_prompt_block(
+                    threat_model_preset=(project.threat_model_preset or project.threat_model),
+                    profile_source=(project.profile_source or "migrated"),
+                    profile_review_status=(project.profile_review_status or "unreviewed"),
+                    profile_mapping_version=project.profile_mapping_version,
+                    input_channel_semantics_version=project.input_channel_semantics_version,
+                    prompt_threat_model_block_version=project.prompt_threat_model_block_version,
+                    threat_model_profile=ThreatModelProfile(**project.threat_model_profile),
+                )
+            else:
+                threat_model_block = build_threat_model_prompt_block(
+                    threat_model_preset="AB",
+                    profile_source="migrated",
+                    profile_review_status="unreviewed",
+                    profile_mapping_version=1,
+                    input_channel_semantics_version=1,
+                    prompt_threat_model_block_version=1,
+                    threat_model_profile=preset_to_profile("AB"),
+                )
+        except Exception:
+            threat_model_block = ""
+
         # Set broadcast callback for observability service.
         observability_service.set_broadcast_callback(self._broadcast_message)
 
@@ -1520,6 +1556,7 @@ class AgentOrchestrator:
                 [
                     f"[Phase: {phase_name}]",
                     "Base system:\n" + base_system,
+                    ("Threat model:\n" + threat_model_block) if threat_model_block else "",
                     "Phase system:\n" + phase_system,
                     ("Audit profile:\n" + profile_text) if profile_text else "",
                     "Available tools:\n" + tool_list,

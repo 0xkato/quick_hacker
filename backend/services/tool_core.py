@@ -978,6 +978,7 @@ class ToolCore:
         attack_scenario: str | None = None,
         proof_of_concept: str | None = None,
         recommended_fix: str | None = None,
+        metadata: dict | None = None,
     ) -> dict[str, Any]:
         """Report a security finding.
 
@@ -1006,6 +1007,25 @@ class ToolCore:
         Raises:
             ValueError: If any input validation fails
         """
+        # Require structured context metadata for explainability + threat model gating.
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata.context is required")
+        ctx = metadata.get("context")
+        if not isinstance(ctx, dict):
+            raise ValueError("metadata.context is required")
+        if not isinstance(ctx.get("execution_context"), str) or not ctx.get("execution_context"):
+            raise ValueError("metadata.context.execution_context is required")
+        if not isinstance(ctx.get("input_channel"), str) or not ctx.get("input_channel"):
+            raise ValueError("metadata.context.input_channel is required")
+        if not isinstance(ctx.get("activation_path"), str) or not ctx.get("activation_path"):
+            raise ValueError("metadata.context.activation_path is required")
+        activation_path = str(ctx.get("activation_path"))
+        if "\n" in activation_path or "\r" in activation_path:
+            raise ValueError("metadata.context.activation_path must be single-line")
+        if len(activation_path) > 300:
+            raise ValueError("metadata.context.activation_path too long")
+        if not any(activation_path.startswith(prefix) for prefix in ("route:", "cli:", "ci:", "import:", "unknown")):
+            raise ValueError("metadata.context.activation_path must start with route:/cli:/ci:/import:/unknown")
         # Validate severity
         severity_lower = severity.lower()
         if severity_lower not in self.VALID_SEVERITIES:
@@ -1093,6 +1113,7 @@ class ToolCore:
             "attack_scenario": attack_scenario,
             "proof_of_concept": proof_of_concept,
             "recommended_fix": recommended_fix,
+            "metadata": metadata,
         }
 
         return {"reported": True, "finding": finding}

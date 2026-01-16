@@ -125,6 +125,13 @@ class FakeCodexCLIProvider:
             "confidence": 0.8,
             "cwe_id": "CWE-78",
             "recommended_fix": "Avoid shell execution or validate/escape input.",
+            "metadata": {
+                "context": {
+                    "execution_context": "server_runtime",
+                    "input_channel": "network",
+                    "activation_path": "unknown",
+                }
+            },
         }
         if on_event:
             on_event(

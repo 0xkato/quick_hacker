@@ -2,6 +2,14 @@
 import pytest
 from services.tool_core import ToolCore
 
+DEFAULT_REPORT_METADATA = {
+    "context": {
+        "execution_context": "unknown",
+        "input_channel": "unknown",
+        "activation_path": "unknown",
+    }
+}
+
 @pytest.fixture
 def temp_repo(tmp_path):
     """Create a temporary repository structure."""
@@ -380,6 +388,21 @@ class TestToolCoreReportFinding:
     """Tests for ToolCore.report_finding()."""
 
     @pytest.mark.asyncio
+    async def test_report_finding_requires_context_metadata(self, tool_core):
+        """Findings must include context.* metadata for explainability and threat-model gating."""
+        with pytest.raises(ValueError, match="context"):
+            await tool_core.report_finding(
+                severity="high",
+                title="SQL Injection",
+                vulnerability_type="SQL Injection",
+                file_path="src/db.py",
+                line_start=42,
+                vulnerable_code="query = f'SELECT * FROM {user_input}'",
+                description="User input concatenated into SQL query",
+                confidence=0.9,
+            )
+
+    @pytest.mark.asyncio
     async def test_report_finding_returns_data(self, tool_core):
         """Should return reported finding data."""
         result = await tool_core.report_finding(
@@ -391,6 +414,7 @@ class TestToolCoreReportFinding:
             vulnerable_code="query = f'SELECT * FROM {user_input}'",
             description="User input concatenated into SQL query",
             confidence=0.9,
+            metadata=DEFAULT_REPORT_METADATA,
         )
         assert result["reported"]
         assert result["finding"]["severity"] == "high"
@@ -416,6 +440,7 @@ class TestToolCoreReportFinding:
             vulnerable_code=secret_text,
             description=f"Key material:\n{secret_text}",
             confidence=0.9,
+            metadata=DEFAULT_REPORT_METADATA,
         )
 
         finding = result["finding"]
@@ -440,6 +465,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=0.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -455,6 +481,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=0.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
             assert result["reported"]
 
@@ -470,6 +497,7 @@ class TestReportFindingValidation:
             vulnerable_code="code",
             description="desc",
             confidence=0.5,
+            metadata=DEFAULT_REPORT_METADATA,
         )
         assert result["reported"]
 
@@ -486,6 +514,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=-0.1,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -501,6 +530,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=1.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -516,6 +546,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=confidence,
+                metadata=DEFAULT_REPORT_METADATA,
             )
             assert result["reported"]
 
@@ -532,6 +563,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=0.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -547,6 +579,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=0.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -563,6 +596,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=0.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -579,6 +613,7 @@ class TestReportFindingValidation:
                 vulnerable_code="code",
                 description="desc",
                 confidence=0.5,
+                metadata=DEFAULT_REPORT_METADATA,
             )
 
     @pytest.mark.asyncio
@@ -594,6 +629,7 @@ class TestReportFindingValidation:
             vulnerable_code="code",
             description="desc",
             confidence=0.5,
+            metadata=DEFAULT_REPORT_METADATA,
         )
         assert result["reported"]
 
@@ -610,6 +646,7 @@ class TestReportFindingValidation:
             vulnerable_code="code",
             description="desc",
             confidence=0.5,
+            metadata=DEFAULT_REPORT_METADATA,
         )
         assert result["reported"]
 

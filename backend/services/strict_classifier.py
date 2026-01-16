@@ -16,9 +16,11 @@ from models.schemas import (
     ChecklistStatus,
     ChecklistItem,
     ProofChecklist,
-    VulnerabilityCategory
+    VulnerabilityCategory,
+    InputChannel,
 )
 from services.evidence_gatherer import EvidenceResult
+from services.threat_model_gating import derive_allowed_input_channels
 
 
 @dataclass
@@ -46,17 +48,25 @@ class StrictClassifier:
     def classify(
         self,
         finding: Finding,
-        evidence: EvidenceResult
+        evidence: EvidenceResult,
+        threat_model_profile: dict | None = None,
     ) -> ClassificationResult:
         """
-        Classify a finding based on evidence.
-        Returns: disposition, confidence, checklist, reasoning
+        Classify a finding based on evidence with threat model gating.
+
+        Args:
+            finding: Finding to classify
+            evidence: Evidence bundle (includes input_channel for Phase 3)
+            threat_model_profile: Per-project threat model (attacker capabilities)
+
+        Returns:
+            ClassificationResult with disposition, confidence, checklist, reasoning
         """
         # Normalize category
         category = self._normalize_category(finding)
 
-        # Build tri-state checklist
-        checklist = self._build_checklist(finding, evidence)
+        # Build tri-state checklist (gating happens here)
+        checklist = self._build_checklist(finding, evidence, threat_model_profile)
 
         # Apply strict disposition rules
         disposition = self._apply_rules(checklist, finding, evidence)
@@ -136,10 +146,54 @@ class StrictClassifier:
 
         return VulnerabilityCategory.GENERIC
 
-    def _build_checklist(self, finding: Finding, evidence: EvidenceResult) -> ProofChecklist:
-        """Build tri-state proof checklist."""
+    def _build_checklist(
+        self,
+        finding: Finding,
+        evidence: EvidenceResult,
+        threat_model_profile: dict | None,
+    ) -> ProofChecklist:
+        """
+        Build tri-state proof checklist with threat model gating applied FIRST.
+
+        This ensures disposition and reasoning are coherent with gated truth.
+        """
+        # Derive allowed channels from profile
+        allowed = derive_allowed_input_channels(threat_model_profile)
+
+        # Check if gating should apply
+        # NOTE: For Phase 3 initial implementation, evidence is still EvidenceResult (dataclass)
+        # Will be migrated to Evidence (Pydantic) in later step
+        # For now, assume evidence doesn't have input_channel fields yet (no gating)
+        gated_off = False
+        if hasattr(evidence, 'input_channel') and hasattr(evidence, 'input_channel_deterministic'):
+            gated_off = (
+                evidence.input_channel_deterministic
+                and evidence.input_channel != InputChannel.unknown
+                and evidence.input_channel not in allowed
+            )
+
+        # Build source_controlled_input item
+        if gated_off:
+            # Force DISPROVEN due to profile
+            source_controlled_input = ChecklistItem(
+                value=False,  # KEEP - required field
+                status=ChecklistStatus.DISPROVEN,
+                reason=(
+                    f"disabled_by_profile: input_channel={evidence.input_channel.value} "
+                    f"allowed={sorted([c.value for c in allowed])}; "
+                    f"signals={getattr(evidence, 'input_channel_signals', [])}; "
+                    f"why={getattr(evidence, 'input_channel_reason', '')}"
+                ),
+                tool_calls=[],
+                reason_code="disabled_by_profile",
+            )
+        else:
+            # Evaluate normally from evidence
+            source_controlled_input = self._evaluate_source_controlled_input(finding, evidence)
+
+        # Build remaining checklist items (normal evaluation)
         return ProofChecklist(
-            source_controlled_input=self._evaluate_source_controlled_input(finding, evidence),
+            source_controlled_input=source_controlled_input,
             sink_present=self._evaluate_sink_present(finding, evidence),
             dataflow_evidenced=self._evaluate_dataflow_evidenced(finding, evidence),
             reachable=self._evaluate_reachable(finding, evidence),
@@ -654,6 +708,14 @@ class StrictClassifier:
         evidence: EvidenceResult
     ) -> Disposition:
         """Apply strict disposition rules in priority order."""
+        # Rule 0: HARDENING (threat-model gated input)
+        # If source_controlled_input is DISPROVEN with reason_code="disabled_by_profile",
+        # the input channel is deterministically outside the threat model.
+        # This overrides all other rules.
+        if (checklist.source_controlled_input.status == ChecklistStatus.DISPROVEN and
+                checklist.source_controlled_input.reason_code == "disabled_by_profile"):
+            return Disposition.HARDENING
+
         # Rule 1: VALID_SECURITY_ISSUE (all A-F PROVEN True)
         if all([
             checklist.source_controlled_input.status == ChecklistStatus.PROVEN and checklist.source_controlled_input.value,

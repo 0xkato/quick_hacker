@@ -115,6 +115,24 @@ class VulnerabilityCategory(str, Enum):
     GENERIC = "generic"
 
 
+class InputChannel(str, Enum):
+    """
+    Input channels represent where attacker-controlled data originates.
+
+    Attacker-control is derived by: (deterministic channel + threat model profile)
+    """
+    network = "network"
+    file_input = "file_input"
+    web_content = "web_content"
+
+    # High-noise channels (only attacker-controlled if enabled by profile)
+    repo_checkout = "repo_checkout"
+    ci_artifact = "ci_artifact"
+    local_unprivileged = "local_unprivileged"
+
+    unknown = "unknown"
+
+
 # === Repository ===
 
 class RepoCloneRequest(BaseModel):
@@ -232,9 +250,13 @@ class AgentUpdate(BaseModel):
 
 class ChecklistItem(BaseModel):
     """A single item in the proof checklist with tri-state status."""
-    value: bool
-    status: ChecklistStatus
-    reason: str
+    value: bool  # KEEP - existing field for stored JSON compatibility
+    status: ChecklistStatus  # PROVEN | DISPROVEN | UNKNOWN
+    reason: str  # Human-readable explanation
+    tool_calls: list[str] = Field(default_factory=list)  # Tool calls that contributed to this determination
+
+    # Phase 3 addition (backward-compatible)
+    reason_code: str | None = None  # Machine-readable code (e.g., "disabled_by_profile")
 
 
 class ProofChecklist(BaseModel):
@@ -263,6 +285,43 @@ class EvidenceBlob(BaseModel):
     snippet: Optional[str] = None
     match_type: Optional[str] = None
     created_at: datetime
+
+
+class Evidence(BaseModel):
+    """
+    Evidence bundle for triage classification.
+
+    Consolidates data from EvidenceGatherer (code snippets, symbol info, framework detection)
+    with input channel inference metadata. Persisted to evidence_json in database.
+    """
+    # Core identification
+    finding_id: str
+
+    # Code context (from EvidenceGatherer)
+    snippet: str | None = None  # ±30 lines around reported line
+    handler_snippet: str | None = None  # Enclosing function/class code
+    symbol_info: dict | None = None  # Enclosing symbol metadata
+    framework: str | None = None  # Detected framework (fastapi, flask, django, etc.)
+
+    # Triage evidence (source/sink/dataflow)
+    route_registration: str | None = None  # @app.route(...) or similar
+    auth_gates: list[str] = Field(default_factory=list)  # Auth decorators/checks
+    dataflow_snippet: str | None = None  # Variable flow evidence
+    matches: list[dict] = Field(default_factory=list)  # EvidenceMatch as dicts
+
+    # SSRF-specific analysis
+    ssrf_analysis: dict | None = None  # SSRFAnalysis as dict
+
+    # Budget tracking
+    timed_out: bool = False
+
+    # Phase 3 additions (input channel inference)
+    input_channel: InputChannel = InputChannel.unknown
+    input_channel_deterministic: bool = False
+
+    # Auditable inference metadata (like checklist reason)
+    input_channel_signals: list[str] = Field(default_factory=list)  # Signal types that contributed
+    input_channel_reason: str = ""  # Human-readable inference explanation
 
 
 class TriageMetrics(BaseModel):

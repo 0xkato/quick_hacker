@@ -6,10 +6,96 @@ from unittest.mock import patch
 
 import pytest
 
-from models.schemas import ChecklistItem, ChecklistStatus, Disposition, Finding, ProofChecklist
+from models.schemas import ChecklistItem, ChecklistStatus, Disposition, Finding, ProofChecklist, InputChannel
 from services.finding_triage_service import FindingTriageService
 from services.strict_classifier import ClassificationResult
+from services.threat_model_gating import derive_allowed_input_channels
 
+
+# === Unit Tests for derive_allowed_input_channels ===
+
+def test_derive_allowed_no_profile_allows_all():
+    """No threat model profile = no gating, all channels allowed."""
+    allowed = derive_allowed_input_channels(None)
+    assert allowed == set(InputChannel)
+
+
+def test_derive_allowed_empty_profile_only_unknown():
+    """Empty profile (no capabilities) = only unknown allowed."""
+    profile = {"attacker_capabilities": []}
+    allowed = derive_allowed_input_channels(profile)
+    assert allowed == {InputChannel.unknown}
+
+
+def test_derive_allowed_remote_network():
+    """remote_network capability enables network channel."""
+    profile = {"attacker_capabilities": ["remote_network"]}
+    allowed = derive_allowed_input_channels(profile)
+    assert InputChannel.network in allowed
+    assert InputChannel.unknown in allowed
+    assert InputChannel.repo_checkout not in allowed
+
+
+def test_derive_allowed_untrusted_file_input():
+    """untrusted_file_input capability enables file_input channel."""
+    profile = {"attacker_capabilities": ["untrusted_file_input"]}
+    allowed = derive_allowed_input_channels(profile)
+    assert InputChannel.file_input in allowed
+    assert InputChannel.unknown in allowed
+    assert InputChannel.network not in allowed
+
+
+def test_derive_allowed_untrusted_repo_content():
+    """untrusted_repo_content capability enables repo_checkout channel."""
+    profile = {"attacker_capabilities": ["untrusted_repo_content"]}
+    allowed = derive_allowed_input_channels(profile)
+    assert InputChannel.repo_checkout in allowed
+    assert InputChannel.unknown in allowed
+    assert InputChannel.network not in allowed
+
+
+def test_derive_allowed_multiple_capabilities():
+    """Multiple capabilities enable multiple channels."""
+    profile = {
+        "attacker_capabilities": [
+            "remote_network",
+            "untrusted_file_input",
+            "remote_web_content",
+        ]
+    }
+    allowed = derive_allowed_input_channels(profile)
+    assert InputChannel.network in allowed
+    assert InputChannel.file_input in allowed
+    assert InputChannel.web_content in allowed
+    assert InputChannel.unknown in allowed
+    assert InputChannel.repo_checkout not in allowed
+    assert InputChannel.ci_artifact not in allowed
+
+
+def test_derive_allowed_unknown_capability_ignored():
+    """Unknown capabilities are silently ignored."""
+    profile = {
+        "attacker_capabilities": [
+            "remote_network",
+            "made_up_capability",
+        ]
+    }
+    allowed = derive_allowed_input_channels(profile)
+    assert InputChannel.network in allowed
+    assert InputChannel.unknown in allowed
+    assert len(allowed) == 2  # network + unknown
+
+
+def test_derive_allowed_local_unprivileged():
+    """local_unprivileged_user capability enables local_unprivileged channel."""
+    profile = {"attacker_capabilities": ["local_unprivileged_user"]}
+    allowed = derive_allowed_input_channels(profile)
+    assert InputChannel.local_unprivileged in allowed
+    assert InputChannel.unknown in allowed
+    assert len(allowed) == 2
+
+
+# === Integration Test ===
 
 def test_triage_gates_repo_checkout_when_untrusted_repo_content_disabled(tmp_path):
     triage_service = FindingTriageService()

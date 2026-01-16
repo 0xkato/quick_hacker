@@ -143,20 +143,26 @@ def test_triage_gates_repo_checkout_when_untrusted_repo_content_disabled(tmp_pat
             self.budgets = budgets
 
         def gather(self, finding: Finding):
-            from services.evidence_gatherer import EvidenceResult
+            from models.schemas import Evidence
 
-            return EvidenceResult(
+            return Evidence(
+                finding_id=finding.id,
                 snippet="",
+                handler_snippet=None,
                 symbol_info=None,
                 framework=None,
+                route_registration=None,
+                auth_gates=[],
+                dataflow_snippet=None,
                 matches=[],
                 ssrf_analysis=None,
                 timed_out=False,
+                # Set input_channel to repo_checkout (deterministic)
+                input_channel=InputChannel.repo_checkout,
+                input_channel_deterministic=True,
+                input_channel_signals=["repo_content_ingested", "repo_content_read_as_data"],
+                input_channel_reason="Repo checkout detected",
             )
-
-    class FakeClassifier:
-        def classify(self, finding: Finding, evidence):
-            return replace(classification)
 
     threat_model_profile = {
         "execution_contexts": ["product_runtime", "server_runtime"],
@@ -164,10 +170,8 @@ def test_triage_gates_repo_checkout_when_untrusted_repo_content_disabled(tmp_pat
         "assets": ["user_data"],
     }
 
-    with (
-        patch("services.finding_triage_service.EvidenceGatherer", FakeGatherer),
-        patch("services.finding_triage_service.StrictClassifier", FakeClassifier),
-    ):
+    # Use real StrictClassifier so gating actually happens
+    with patch("services.finding_triage_service.EvidenceGatherer", FakeGatherer):
         result = triage_service.triage_findings(
             repo_root=str(tmp_path),
             findings=[finding],

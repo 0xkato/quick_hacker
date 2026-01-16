@@ -294,6 +294,32 @@ class TestToolCoreSinkSignals:
         assert "signal" in result
         assert result["signal"]["kind"] == "sink"
 
+    @pytest.mark.asyncio
+    async def test_upsert_sink_signal_coerces_input_channel_for_repo_artifact(self, tool_core, temp_repo):
+        """Discovery signals should be coerced (not failed) when input_channel mismatch is deterministic."""
+        (temp_repo / "docker-compose.yml").write_text("version: '3'\n", encoding="utf-8")
+
+        result = await tool_core.upsert_sink_signal(
+            kind="sink",
+            label="docker compose contains credentials",
+            file_path="docker-compose.yml",
+            line_number=1,
+            metadata={
+                "context": {
+                    "execution_context": "dev_tooling",
+                    "input_channel": "file_input",
+                    "activation_path": "unknown",
+                }
+            },
+        )
+
+        ctx = result["signal"]["metadata"]["context"]
+        assert ctx["input_channel"] == "repo_checkout"
+        assert ctx.get("input_channel_deterministic") is True
+        assert ctx.get("provided_input_channel") == "file_input"
+        assert ctx.get("inferred_input_channel") == "repo_checkout"
+        assert "corrected" in str(ctx.get("validation_warning", "")).lower()
+
 
 class TestUpsertSinkSignalValidation:
     """Tests for upsert_sink_signal() validation edge cases."""
@@ -403,6 +429,60 @@ class TestToolCoreReportFinding:
             )
 
     @pytest.mark.asyncio
+    async def test_report_finding_rejects_input_channel_mismatch_for_repo_artifact(self, tool_core, temp_repo):
+        """Deterministic repo artifacts must use input_channel=repo_checkout (prevents gate bypass)."""
+        (temp_repo / "docker-compose.yml").write_text("version: '3'\n", encoding="utf-8")
+
+        wrong_channel = {
+            "context": {
+                "execution_context": "dev_tooling",
+                "input_channel": "file_input",
+                "activation_path": "unknown",
+            }
+        }
+
+        with pytest.raises(ValueError, match="INPUT_CHANNEL_MISMATCH"):
+            await tool_core.report_finding(
+                severity="medium",
+                title="Hardcoded credential in docker compose",
+                vulnerability_type="hardcoded_secret",
+                file_path="docker-compose.yml",
+                line_start=1,
+                vulnerable_code="POSTGRES_PASSWORD=postgres",
+                description="Repo contains default credentials.",
+                confidence=0.9,
+                metadata=wrong_channel,
+            )
+
+    @pytest.mark.asyncio
+    async def test_report_finding_sets_input_channel_deterministic_for_repo_artifact(self, tool_core, temp_repo):
+        """Deterministic repo artifacts must stamp input_channel_deterministic for triage gating."""
+        (temp_repo / "docker-compose.yml").write_text("version: '3'\n", encoding="utf-8")
+
+        metadata = {
+            "context": {
+                "execution_context": "dev_tooling",
+                "input_channel": "repo_checkout",
+                "activation_path": "unknown",
+            }
+        }
+        result = await tool_core.report_finding(
+            severity="medium",
+            title="Hardcoded credential in docker compose",
+            vulnerability_type="hardcoded_secret",
+            file_path="docker-compose.yml",
+            line_start=1,
+            vulnerable_code="POSTGRES_PASSWORD=postgres",
+            description="Repo contains default credentials.",
+            confidence=0.9,
+            metadata=metadata,
+        )
+        finding = result["finding"]
+        ctx = finding["metadata"]["context"]
+        assert ctx["input_channel"] == "repo_checkout"
+        assert ctx.get("input_channel_deterministic") is True
+
+    @pytest.mark.asyncio
     async def test_report_finding_returns_data(self, tool_core):
         """Should return reported finding data."""
         result = await tool_core.report_finding(
@@ -440,7 +520,13 @@ class TestToolCoreReportFinding:
             vulnerable_code=secret_text,
             description=f"Key material:\n{secret_text}",
             confidence=0.9,
-            metadata=DEFAULT_REPORT_METADATA,
+            metadata={
+                "context": {
+                    "execution_context": "unknown",
+                    "input_channel": "repo_checkout",
+                    "activation_path": "unknown",
+                }
+            },
         )
 
         finding = result["finding"]

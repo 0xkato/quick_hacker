@@ -910,6 +910,38 @@ class ToolCore:
         Returns:
             Dict with created/updated signal
         """
+        # Normalize file_path to a repo-relative, non-escaping path.
+        raw_file_path = file_path
+        file_path_candidate = Path(file_path)
+        if file_path_candidate.is_absolute():
+            try:
+                file_path = file_path_candidate.resolve().relative_to(self.repo_path).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"Path escapes workspace: {raw_file_path}") from exc
+        else:
+            file_path = Path(os.path.normpath(file_path)).as_posix()
+
+        if not file_path or file_path == ".":
+            raise ValueError("file_path must be a non-empty repo-relative path")
+
+        candidate = self.repo_path / file_path
+        normalized = Path(os.path.normpath(str(candidate)))
+        try:
+            normalized.relative_to(self.repo_path)
+        except ValueError as exc:
+            raise ValueError(f"Path escapes workspace: {raw_file_path}") from exc
+
+        for part in Path(file_path).parts:
+            if part in self.DEFAULT_EXCLUDED_DIRS:
+                raise ValueError(f"Path in excluded directory: {file_path}")
+
+        if candidate.exists():
+            ok, reason = self.workspace_policy.validate_path(candidate)
+            if not ok:
+                if reason and "excluded" in reason.lower():
+                    raise ValueError(f"Path in excluded directory: {file_path}")
+                raise ValueError(f"Path rejected: {reason}")
+
         try:
             kind_enum = SinkSignalKind(kind)
         except ValueError:
@@ -933,6 +965,27 @@ class ToolCore:
             if llm_score < 0 or llm_score > 100:
                 raise ValueError("llm_score must be 0-100")
 
+        resolved_metadata = metadata or {}
+        # Deterministic input_channel inference (v1): repo-embedded secret/config artifacts.
+        if isinstance(resolved_metadata, dict):
+            ctx = resolved_metadata.get("context")
+            if isinstance(ctx, dict):
+                inferred_channel = self._infer_repo_artifact_input_channel(file_path)
+                provided_channel = ctx.get("input_channel")
+                if inferred_channel is not None:
+                    if isinstance(provided_channel, str) and provided_channel and provided_channel != inferred_channel:
+                        ctx["provided_input_channel"] = provided_channel
+                        ctx["inferred_input_channel"] = inferred_channel
+                        ctx["input_channel"] = inferred_channel
+                        ctx["input_channel_deterministic"] = True
+                        ctx["validation_warning"] = (
+                            f"input_channel corrected from {provided_channel} -> {inferred_channel} "
+                            f"(repo artifact: {file_path})"
+                        )
+                    else:
+                        ctx["input_channel"] = inferred_channel
+                        ctx["input_channel_deterministic"] = True
+
         signal_id = fingerprint or compute_signal_fingerprint(
             kind=kind_enum.value,
             file_path=file_path,
@@ -951,7 +1004,7 @@ class ToolCore:
             llm_risk_tier=tier_enum,
             llm_score=llm_score,
             llm_reasoning=llm_reasoning.strip() if llm_reasoning else None,
-            metadata=metadata or {},
+            metadata=resolved_metadata,
         )
 
         updated = await sink_signal_service.upsert_signals(
@@ -961,6 +1014,20 @@ class ToolCore:
 
         result_signal = updated[0] if updated else signal
         return {"signal": result_signal.model_dump(mode="json")}
+
+    def _infer_repo_artifact_input_channel(self, repo_relative_path: str) -> str | None:
+        """Deterministically infer repo_checkout for certain repo-embedded artifacts.
+
+        v1 scope: `.env*`, `docker-compose*`, `*.pem`, `*.key`.
+        """
+        name = Path(repo_relative_path).name.lower()
+        if name == ".env" or name.startswith(".env."):
+            return "repo_checkout"
+        if name.startswith("docker-compose"):
+            return "repo_checkout"
+        if Path(repo_relative_path).suffix.lower() in (".pem", ".key"):
+            return "repo_checkout"
+        return None
 
     async def report_finding(
         self,
@@ -1085,6 +1152,18 @@ class ToolCore:
                 if reason and "excluded" in reason.lower():
                     raise ValueError(f"Path in excluded directory: {file_path}")
                 raise ValueError(f"Path rejected: {reason}")
+
+        # Deterministic input_channel inference (v1): repo-embedded secret/config artifacts.
+        inferred_channel = self._infer_repo_artifact_input_channel(file_path)
+        if inferred_channel is not None:
+            provided_channel = ctx.get("input_channel")
+            if provided_channel != inferred_channel:
+                raise ValueError(
+                    f"INPUT_CHANNEL_MISMATCH: provided={provided_channel} inferred={inferred_channel} "
+                    f"(repo artifact: {file_path})"
+                )
+            ctx["input_channel"] = inferred_channel
+            ctx["input_channel_deterministic"] = True
 
         # Redact secrets from user-provided fields (defense-in-depth).
         vulnerable_code = redaction_service.redact(vulnerable_code)

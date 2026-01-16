@@ -17,6 +17,15 @@ from config import settings
 
 
 ThreatModel = Literal["A", "AB", "ABC"]
+PROFILE_MAPPING_VERSION = 1
+INPUT_CHANNEL_SEMANTICS_VERSION = 1
+PROMPT_THREAT_MODEL_BLOCK_VERSION = 1
+
+
+def _default_threat_model_profile(threat_model: ThreatModel):
+    from models.threat_model_profile import preset_to_profile
+
+    return preset_to_profile(threat_model)
 
 
 class Project(BaseModel):
@@ -25,6 +34,14 @@ class Project(BaseModel):
     name: str
     description: str = ""
     threat_model: ThreatModel = "AB"  # A, AB, or ABC
+    threat_model_preset: Optional[ThreatModel] = None
+    threat_model_profile: Optional[dict] = None
+    profile_source: Optional[Literal["preset", "custom", "migrated"]] = None
+    profile_review_status: Optional[Literal["unreviewed", "reviewed"]] = None
+    profile_reviewed_at: Optional[datetime] = None
+    profile_mapping_version: int = PROFILE_MAPPING_VERSION
+    input_channel_semantics_version: int = INPUT_CHANNEL_SEMANTICS_VERSION
+    prompt_threat_model_block_version: int = PROMPT_THREAT_MODEL_BLOCK_VERSION
     repo_url: Optional[str] = None
     repo_name: Optional[str] = None
     repo_branch: Optional[str] = None
@@ -34,6 +51,18 @@ class Project(BaseModel):
     last_accessed: datetime = Field(default_factory=datetime.utcnow)
     is_cloned: bool = False
     path: str = ""
+
+    def ensure_threat_model_profile(self, *, source: Literal["preset", "custom", "migrated"]) -> None:
+        # Hard-invariant: threat_model and threat_model_preset must match.
+        self.threat_model_preset = self.threat_model
+
+        if self.threat_model_profile is None:
+            self.threat_model_profile = _default_threat_model_profile(self.threat_model).model_dump(mode="json")
+
+        if self.profile_source is None:
+            self.profile_source = source
+        if self.profile_review_status is None:
+            self.profile_review_status = "unreviewed"
 
 
 class ProjectService:
@@ -59,6 +88,8 @@ class ProjectService:
                     data = json.load(f)
                     for proj_data in data.get("projects", []):
                         proj = Project(**proj_data)
+                        if proj.threat_model_preset is None or proj.threat_model_profile is None:
+                            proj.ensure_threat_model_profile(source="migrated")
                         self._projects[proj.id] = proj
                     self._current_project_id = data.get("current_project_id")
             except Exception as e:
@@ -91,6 +122,7 @@ class ProjectService:
             description=description,
             path=str(project_path.absolute()),
         )
+        project.ensure_threat_model_profile(source="preset")
 
         self._projects[project_id] = project
         await self._save_projects()
@@ -176,6 +208,7 @@ class ProjectService:
             project.languages = detect_languages(repo_path)
             project.file_count = count_files(repo_path)
             project.is_cloned = True
+            project.ensure_threat_model_profile(source="preset")
 
             await self._save_projects()
             return project
@@ -224,6 +257,7 @@ class ProjectService:
             project.description = description
         if threat_model is not None:
             project.threat_model = threat_model
+            project.ensure_threat_model_profile(source="preset")
 
         await self._save_projects()
         return project

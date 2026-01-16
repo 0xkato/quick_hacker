@@ -9,6 +9,7 @@ import hashlib
 import time
 from datetime import datetime
 from typing import Optional
+from dataclasses import replace
 
 from models.schemas import (
     Finding,
@@ -62,7 +63,8 @@ class FindingTriageService:
         repo_root: str,
         findings: list[Finding],
         policy_version: str = "1.0.0",
-        budgets: Optional[BudgetConfig] = None
+        budgets: Optional[BudgetConfig] = None,
+        threat_model_profile: Optional[dict] = None,
     ) -> TriageResult:
         """
         Triage a batch of findings.
@@ -116,6 +118,11 @@ class FindingTriageService:
 
                 # Classify
                 classification = classifier.classify(finding, evidence)
+                classification = self._apply_threat_model_gate(
+                    finding=finding,
+                    classification=classification,
+                    threat_model_profile=threat_model_profile,
+                )
 
                 # Attach triage metadata
                 triaged_finding = self._attach_triage_metadata(
@@ -154,6 +161,82 @@ class FindingTriageService:
             metrics=metrics,
             batch_id=batch_id
         )
+
+    def _apply_threat_model_gate(
+        self,
+        *,
+        finding: Finding,
+        classification: "ClassificationResult",
+        threat_model_profile: Optional[dict],
+    ) -> "ClassificationResult":
+        """Gate attacker-control based on deterministic input_channel + ThreatModelProfile.
+
+        Policy:
+        - If input_channel is deterministically classified AND the profile does not enable that channel
+          via attacker capabilities → source_controlled_input = DISPROVEN(disabled_by_profile) and
+          disposition defaults to HARDENING (not BY_DESIGN).
+        - If input_channel is unknown or non-deterministic → do not force DISPROVEN.
+        """
+        if not threat_model_profile:
+            return classification
+
+        context = {}
+        if isinstance(finding.metadata, dict):
+            raw = finding.metadata.get("context")
+            if isinstance(raw, dict):
+                context = raw
+
+        input_channel = context.get("input_channel")
+        deterministic = context.get("input_channel_deterministic") is True
+        if not input_channel or not deterministic:
+            return classification
+
+        allowed_channels = self._derive_attacker_controlled_input_channels(threat_model_profile)
+        if input_channel in allowed_channels:
+            return classification
+
+        # Force DISPROVEN for source_controlled_input with explicit reason marker.
+        gated_checklist = classification.proof_checklist.model_copy(deep=True)
+        gated_checklist.source_controlled_input = ChecklistItem(
+            value=False,
+            status=ChecklistStatus.DISPROVEN,
+            reason=f"disabled_by_profile: input_channel={input_channel} not enabled by ThreatModelProfile",
+        )
+
+        # Default disposition: HARDENING (keep MISCONFIGURATION if already determined).
+        new_disposition = classification.disposition
+        if new_disposition != Disposition.MISCONFIGURATION:
+            new_disposition = Disposition.HARDENING
+
+        reasoning = list(classification.reasoning or [])
+        reasoning.insert(0, "Out of threat model: attacker control DISPROVEN by profile (disabled_by_profile).")
+
+        return replace(
+            classification,
+            disposition=new_disposition,
+            proof_checklist=gated_checklist,
+            reasoning=reasoning,
+        )
+
+    def _derive_attacker_controlled_input_channels(self, threat_model_profile: dict) -> set[str]:
+        capabilities = threat_model_profile.get("attacker_capabilities")
+        if not isinstance(capabilities, list):
+            return set()
+
+        cap_to_channels = {
+            "remote_network": {"network"},
+            "remote_web_content": {"web_content"},
+            "untrusted_file_input": {"file_input"},
+            "untrusted_repo_content": {"repo_checkout"},
+            "untrusted_ci_artifact": {"ci_artifact"},
+            "local_unprivileged_user": {"env", "config", "ipc", "file_input"},
+        }
+
+        channels: set[str] = set()
+        for cap in capabilities:
+            if isinstance(cap, str):
+                channels |= cap_to_channels.get(cap, set())
+        return channels
 
     def _generate_batch_id(self) -> str:
         """Generate unique batch ID."""

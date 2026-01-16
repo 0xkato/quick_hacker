@@ -1176,6 +1176,7 @@ class AgentOrchestrator:
         # Threat model prompt block (authoritative JSON + summary). If the project record
         # isn't available (e.g., some tests), fall back to AB preset-derived profile.
         threat_model_block = ""
+        threat_model_profile_for_gating: dict | None = None
         try:
             from models.threat_model_profile import ThreatModelProfile, preset_to_profile
 
@@ -1186,6 +1187,7 @@ class AgentOrchestrator:
                 project = None
 
             if project and project.threat_model_profile:
+                threat_model_profile_for_gating = project.threat_model_profile
                 threat_model_block = build_threat_model_prompt_block(
                     threat_model_preset=(project.threat_model_preset or project.threat_model),
                     profile_source=(project.profile_source or "migrated"),
@@ -1196,6 +1198,8 @@ class AgentOrchestrator:
                     threat_model_profile=ThreatModelProfile(**project.threat_model_profile),
                 )
             else:
+                fallback_profile = preset_to_profile("AB")
+                threat_model_profile_for_gating = fallback_profile.model_dump(mode="json")
                 threat_model_block = build_threat_model_prompt_block(
                     threat_model_preset="AB",
                     profile_source="migrated",
@@ -1203,10 +1207,11 @@ class AgentOrchestrator:
                     profile_mapping_version=1,
                     input_channel_semantics_version=1,
                     prompt_threat_model_block_version=1,
-                    threat_model_profile=preset_to_profile("AB"),
+                    threat_model_profile=fallback_profile,
                 )
         except Exception:
             threat_model_block = ""
+            threat_model_profile_for_gating = None
 
         # Set broadcast callback for observability service.
         observability_service.set_broadcast_callback(self._broadcast_message)
@@ -1657,6 +1662,7 @@ class AgentOrchestrator:
                             findings=new_findings,
                             policy_version=settings.triage_policy_version,
                             budgets=budgets,
+                            threat_model_profile=threat_model_profile_for_gating,
                         )
 
                         codex_findings[last_triaged_count:] = triage_result.triaged_findings

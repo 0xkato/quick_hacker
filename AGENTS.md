@@ -11,7 +11,7 @@
 
 ## Build, Test, and Development Commands
 - `cp .env.example .env`: local env template (API keys are optional; can also be configured via the Settings UI).
-- `docker compose up --build`: run full stack (frontend `http://localhost:3000`, backend `http://localhost:8000`, Ollama `http://localhost:11434`).
+- `docker compose up --build`: run full stack (frontend `http://localhost:3000`, backend `http://localhost:8000`, Ollama `http://localhost:${OLLAMA_HOST_PORT:-11434}`).
 - `docker compose down`: stop services (add `-v` to reset volumes/data).
 - Frontend:
   - `cd frontend && npm install`

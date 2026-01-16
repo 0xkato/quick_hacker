@@ -106,9 +106,9 @@ class CodexCLIProvider:
             pass
 
     def _write_config_toml(self) -> None:
-        # Resolve path to MCP server entrypoint (added in backend/mcp/quickhack_mcp_server.py).
+        # Resolve path to MCP server entrypoint (added in backend/quickhack_mcp/quickhack_mcp_server.py).
         backend_dir = Path(__file__).resolve().parents[1]
-        mcp_server_path = backend_dir / "mcp" / "quickhack_mcp_server.py"
+        mcp_server_path = backend_dir / "quickhack_mcp" / "quickhack_mcp_server.py"
 
         content = "\n".join(
             [

@@ -18,8 +18,8 @@ from models.schemas import (
     ProofChecklist,
     VulnerabilityCategory,
     InputChannel,
+    Evidence,
 )
-from services.evidence_gatherer import EvidenceResult
 from services.threat_model_gating import derive_allowed_input_channels
 
 
@@ -48,7 +48,7 @@ class StrictClassifier:
     def classify(
         self,
         finding: Finding,
-        evidence: EvidenceResult,
+        evidence: Evidence,
         threat_model_profile: dict | None = None,
     ) -> ClassificationResult:
         """
@@ -149,7 +149,7 @@ class StrictClassifier:
     def _build_checklist(
         self,
         finding: Finding,
-        evidence: EvidenceResult,
+        evidence: Evidence,
         threat_model_profile: dict | None,
     ) -> ProofChecklist:
         """
@@ -161,16 +161,11 @@ class StrictClassifier:
         allowed = derive_allowed_input_channels(threat_model_profile)
 
         # Check if gating should apply
-        # NOTE: For Phase 3 initial implementation, evidence is still EvidenceResult (dataclass)
-        # Will be migrated to Evidence (Pydantic) in later step
-        # For now, assume evidence doesn't have input_channel fields yet (no gating)
-        gated_off = False
-        if hasattr(evidence, 'input_channel') and hasattr(evidence, 'input_channel_deterministic'):
-            gated_off = (
-                evidence.input_channel_deterministic
-                and evidence.input_channel != InputChannel.unknown
-                and evidence.input_channel not in allowed
-            )
+        gated_off = (
+            evidence.input_channel_deterministic
+            and evidence.input_channel != InputChannel.unknown
+            and evidence.input_channel not in allowed
+        )
 
         # Build source_controlled_input item
         if gated_off:
@@ -203,11 +198,11 @@ class StrictClassifier:
         )
 
     def _evaluate_source_controlled_input(
-        self, finding: Finding, evidence: EvidenceResult
+        self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if attacker can control the input."""
         # Check for source evidence
-        source_matches = [m for m in evidence.matches if m.match_type == "source"]
+        source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
 
         if source_matches:
             return ChecklistItem(
@@ -231,9 +226,9 @@ class StrictClassifier:
             reason="No clear user input sources found"
         )
 
-    def _evaluate_sink_present(self, finding: Finding, evidence: EvidenceResult) -> ChecklistItem:
+    def _evaluate_sink_present(self, finding: Finding, evidence: Evidence) -> ChecklistItem:
         """Check if dangerous sink exists."""
-        sink_matches = [m for m in evidence.matches if m.match_type == "sink"]
+        sink_matches = [m for m in evidence.matches if m["match_type"] == "sink"]
 
         if sink_matches:
             return ChecklistItem(
@@ -263,11 +258,11 @@ class StrictClassifier:
         )
 
     def _evaluate_dataflow_evidenced(
-        self, finding: Finding, evidence: EvidenceResult
+        self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if data flows from source to sink."""
-        source_matches = [m for m in evidence.matches if m.match_type == "source"]
-        sink_matches = [m for m in evidence.matches if m.match_type == "sink"]
+        source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
+        sink_matches = [m for m in evidence.matches if m["match_type"] == "sink"]
 
         if not source_matches or not sink_matches:
             return ChecklistItem(
@@ -312,9 +307,9 @@ class StrictClassifier:
             reason="No clear dataflow path found"
         )
 
-    def _evaluate_reachable(self, finding: Finding, evidence: EvidenceResult) -> ChecklistItem:
+    def _evaluate_reachable(self, finding: Finding, evidence: Evidence) -> ChecklistItem:
         """Check if code is reachable (STRICT: only route/handler registration)."""
-        route_matches = [m for m in evidence.matches if m.match_type == "route_registration"]
+        route_matches = [m for m in evidence.matches if m["match_type"] == "route_registration"]
 
         if route_matches:
             return ChecklistItem(
@@ -341,7 +336,7 @@ class StrictClassifier:
         )
 
     def _evaluate_boundary_crossed(
-        self, finding: Finding, evidence: EvidenceResult
+        self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if trust boundary is crossed (HTTP/WebSocket)."""
         # Check for HTTP/WebSocket context
@@ -353,7 +348,7 @@ class StrictClassifier:
             )
 
         # Check for source matches that indicate HTTP/WS
-        source_matches = [m for m in evidence.matches if m.match_type == "source"]
+        source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
         if any("request" in m.snippet.lower() or "websocket" in m.snippet.lower()
                for m in source_matches):
             return ChecklistItem(
@@ -389,7 +384,7 @@ class StrictClassifier:
         )
 
     def _evaluate_not_only_misconfig(
-        self, finding: Finding, evidence: EvidenceResult
+        self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if exploitable in default/secure config (STRICT logic)."""
         snippet = (finding.description + " " + evidence.snippet).lower()
@@ -422,7 +417,7 @@ class StrictClassifier:
             )
 
         # Check for local auth presence (but no explicit bypass)
-        auth_matches = [m for m in evidence.matches if m.match_type == "auth_gate"]
+        auth_matches = [m for m in evidence.matches if m["match_type"] == "auth_gate"]
         if auth_matches:
             # Auth present but no explicit bypass = UNKNOWN (could be middleware)
             return ChecklistItem(
@@ -439,7 +434,7 @@ class StrictClassifier:
         )
 
     def _evaluate_security_control_bypassed(
-        self, finding: Finding, evidence: EvidenceResult
+        self, finding: Finding, evidence: Evidence
     ) -> Optional[ChecklistItem]:
         """Check if security control is explicitly bypassed (for BUG)."""
         snippet = (finding.description + " " + evidence.snippet).lower()
@@ -476,7 +471,7 @@ class StrictClassifier:
             reason="No explicit bypass markers found"
         )
 
-    def _is_code_exec_sink(self, finding: Finding, evidence: EvidenceResult) -> Tuple[bool, str]:
+    def _is_code_exec_sink(self, finding: Finding, evidence: Evidence) -> Tuple[bool, str]:
         """
         Detect if finding involves exec/eval/compile sink within symbol range.
 
@@ -568,7 +563,7 @@ class StrictClassifier:
 
         return (False, "No exec/eval/compile sink detected")
 
-    def _feature_intent_proven(self, finding: Finding, evidence: EvidenceResult) -> Tuple[bool, str]:
+    def _feature_intent_proven(self, finding: Finding, evidence: Evidence) -> Tuple[bool, str]:
         """
         Determine if exec/eval is a proven product feature.
 
@@ -630,7 +625,7 @@ class StrictClassifier:
 
         return (False, "Feature intent UNKNOWN: no strong signals found")
 
-    def _auth_bypass_explicitly_proven(self, finding: Finding, evidence: EvidenceResult) -> Tuple[bool, str]:
+    def _auth_bypass_explicitly_proven(self, finding: Finding, evidence: Evidence) -> Tuple[bool, str]:
         """
         Determine if auth bypass is explicitly proven in code.
 
@@ -654,12 +649,12 @@ class StrictClassifier:
             code_snippets.append(evidence.snippet)
 
         # 2. Route snippets (from matches)
-        route_matches = [m for m in evidence.matches if m.match_type == "route_registration"]
+        route_matches = [m for m in evidence.matches if m["match_type"] == "route_registration"]
         for match in route_matches:
             code_snippets.append(match.snippet)
 
         # 3. Auth gate snippets
-        auth_matches = [m for m in evidence.matches if m.match_type == "auth_gate"]
+        auth_matches = [m for m in evidence.matches if m["match_type"] == "auth_gate"]
         for match in auth_matches:
             code_snippets.append(match.snippet)
 
@@ -705,7 +700,7 @@ class StrictClassifier:
         self,
         checklist: ProofChecklist,
         finding: Finding,
-        evidence: EvidenceResult
+        evidence: Evidence
     ) -> Disposition:
         """Apply strict disposition rules in priority order."""
         # Rule 0: HARDENING (threat-model gated input)
@@ -817,7 +812,7 @@ class StrictClassifier:
     def _is_product_feature(
         self,
         finding: Finding,
-        evidence: EvidenceResult,
+        evidence: Evidence,
         checklist: ProofChecklist
     ) -> bool:
         """Check if this is a BY_DESIGN product feature (conservative)."""
@@ -852,7 +847,7 @@ class StrictClassifier:
         self,
         disposition: Disposition,
         finding: Finding,
-        evidence: EvidenceResult,
+        evidence: Evidence,
         checklist: ProofChecklist,
         category: Optional[VulnerabilityCategory]
     ) -> Disposition:
@@ -964,7 +959,7 @@ class StrictClassifier:
         self,
         disposition: Disposition,
         checklist: ProofChecklist,
-        evidence: EvidenceResult,
+        evidence: Evidence,
         category: Optional[VulnerabilityCategory]
     ) -> list[str]:
         """Generate 2-4 reasoning bullets explaining the disposition."""

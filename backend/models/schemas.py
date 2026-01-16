@@ -133,6 +133,29 @@ class InputChannel(str, Enum):
     unknown = "unknown"
 
 
+# === Phase 4: Project Scope ===
+
+class ProjectScope(BaseModel):
+    """
+    Scope configuration for First-Party Focus.
+
+    Defines which code paths are "product code" vs "library code".
+    """
+    primary_code_roots: list[str] = Field(
+        default_factory=lambda: ["src/", "app/", "backend/", "frontend/"]
+    )
+
+    excluded_roots: list[str] = Field(
+        default_factory=lambda: [
+            "vendor/", "third_party/", "node_modules/",
+            ".venv/", "site-packages/", "dist/", "build/",
+            "target/", "out/"
+        ]
+    )
+
+    treat_excluded_as_supporting_evidence_only: bool = True
+
+
 # === Repository ===
 
 class RepoCloneRequest(BaseModel):

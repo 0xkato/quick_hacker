@@ -113,14 +113,13 @@ class FindingTriageService:
                 break
 
             try:
-                # Gather evidence
+                # Gather evidence (includes input channel inference)
                 evidence = gatherer.gather(finding)
 
-                # Classify
-                classification = classifier.classify(finding, evidence)
-                classification = self._apply_threat_model_gate(
+                # Classify (gating happens inside classifier now)
+                classification = classifier.classify(
                     finding=finding,
-                    classification=classification,
+                    evidence=evidence,
                     threat_model_profile=threat_model_profile,
                 )
 

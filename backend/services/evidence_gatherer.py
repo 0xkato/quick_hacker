@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from models.schemas import Finding, BudgetConfig
+from models.schemas import Finding, BudgetConfig, Evidence, InputChannel
+from services.input_channel_inference import infer_input_channel
 
 
 # Excluded directories for ripgrep searches
@@ -83,10 +84,10 @@ class EvidenceGatherer:
         self.max_snippet_lines = budgets.max_snippet_lines
         self.file_cache: dict[str, list[str]] = {}
 
-    def gather(self, finding: Finding) -> EvidenceResult:
+    def gather(self, finding: Finding) -> Evidence:
         """
         Gather evidence for a single finding.
-        Returns: EvidenceResult with matches, snippet, symbol_info
+        Returns: Evidence with matches, snippet, symbol_info, and input channel inference
         """
         start_time = time.time()
 
@@ -95,40 +96,117 @@ class EvidenceGatherer:
             snippet = self._extract_snippet(finding.file_path, finding.line_start)
 
             # Step 2: Identify enclosing symbol
-            symbol_info = self._identify_symbol(finding.file_path, finding.line_start)
+            symbol_info_dataclass = self._identify_symbol(finding.file_path, finding.line_start)
 
             # Step 3: Detect framework
-            framework = self._detect_framework(finding.file_path, symbol_info)
+            framework = self._detect_framework(finding.file_path, symbol_info_dataclass)
 
             # Step 4: Type-specific searches
-            matches = self._gather_type_specific_evidence(
-                finding, symbol_info, framework, start_time
+            matches_dataclasses = self._gather_type_specific_evidence(
+                finding, symbol_info_dataclass, framework, start_time
             )
 
             # Step 5: SSRF-specific analysis
-            ssrf_analysis = None
+            ssrf_analysis_dataclass = None
             if "ssrf" in finding.vulnerability_type.lower():
-                ssrf_analysis = self._analyze_ssrf(finding, snippet, symbol_info)
+                ssrf_analysis_dataclass = self._analyze_ssrf(finding, snippet, symbol_info_dataclass)
 
             elapsed_ms = (time.time() - start_time) * 1000
 
-            return EvidenceResult(
+            # Convert dataclasses to dicts for Pydantic model
+            symbol_info_dict = None
+            if symbol_info_dataclass:
+                symbol_info_dict = {
+                    "name": symbol_info_dataclass.name,
+                    "qualified_name": symbol_info_dataclass.qualified_name,
+                    "type": symbol_info_dataclass.type,
+                    "line_start": symbol_info_dataclass.line_start,
+                    "line_end": symbol_info_dataclass.line_end,
+                    "file_path": symbol_info_dataclass.file_path,
+                }
+
+            matches_dicts = [
+                {
+                    "file": m.file,
+                    "line": m.line,
+                    "snippet": m.snippet,
+                    "match_type": m.match_type,
+                }
+                for m in matches_dataclasses
+            ]
+
+            ssrf_analysis_dict = None
+            if ssrf_analysis_dataclass:
+                ssrf_analysis_dict = {
+                    "url_is_constant": ssrf_analysis_dataclass.url_is_constant,
+                    "url_from_config": ssrf_analysis_dataclass.url_from_config,
+                    "url_expression": ssrf_analysis_dataclass.url_expression,
+                }
+
+            # Extract evidence fields for Evidence model
+            handler_snippet = None
+            route_registration = None
+            auth_gates = []
+            dataflow_snippet = None
+
+            # Handler snippet from symbol
+            if symbol_info_dataclass:
+                handler_snippet = self._extract_handler_snippet(finding.file_path, symbol_info_dataclass)
+
+            # Extract route registration and auth gates from matches
+            for match in matches_dataclasses:
+                if match.match_type == "route_registration":
+                    route_registration = match.snippet
+                elif match.match_type == "auth_gate":
+                    auth_gates.append(match.snippet)
+                elif match.match_type == "dataflow":
+                    dataflow_snippet = match.snippet
+
+            # Create Evidence model
+            evidence = Evidence(
+                finding_id=finding.id,
                 snippet=snippet,
-                symbol_info=symbol_info,
+                handler_snippet=handler_snippet,
+                symbol_info=symbol_info_dict,
                 framework=framework,
-                matches=matches,
-                ssrf_analysis=ssrf_analysis,
-                timed_out=elapsed_ms > self.budget_ms_per_finding
+                route_registration=route_registration,
+                auth_gates=auth_gates,
+                dataflow_snippet=dataflow_snippet,
+                matches=matches_dicts,
+                ssrf_analysis=ssrf_analysis_dict,
+                timed_out=elapsed_ms > self.budget_ms_per_finding,
+                # Phase 3 fields initialized with defaults
+                input_channel=InputChannel.unknown,
+                input_channel_deterministic=False,
+                input_channel_signals=[],
+                input_channel_reason="",
             )
+
+            # Phase 3: Infer input channel
+            infer_input_channel(finding=finding, evidence=evidence)
+
+            return evidence
+
         except Exception as e:
             # On error, return minimal evidence
-            return EvidenceResult(
+            error_evidence = Evidence(
+                finding_id=finding.id,
                 snippet=f"Error gathering evidence: {str(e)}",
+                handler_snippet=None,
                 symbol_info=None,
                 framework=None,
+                route_registration=None,
+                auth_gates=[],
+                dataflow_snippet=None,
                 matches=[],
-                timed_out=(time.time() - start_time) * 1000 > self.budget_ms_per_finding
+                ssrf_analysis=None,
+                timed_out=(time.time() - start_time) * 1000 > self.budget_ms_per_finding,
+                input_channel=InputChannel.unknown,
+                input_channel_deterministic=False,
+                input_channel_signals=[],
+                input_channel_reason=f"Error: {str(e)}",
             )
+            return error_evidence
 
     def _extract_snippet(self, file_path: str, line_number: int, context_lines: int = 30) -> str:
         """Extract ±context_lines around the reported line."""
@@ -147,6 +225,25 @@ class EvidenceGatherer:
             return "\n".join(snippet_lines)
         except Exception:
             return ""
+
+    def _extract_handler_snippet(self, file_path: str, symbol_info: SymbolInfo) -> Optional[str]:
+        """Extract handler/function code from symbol info."""
+        try:
+            lines = self._read_file_lines(file_path)
+            if not lines:
+                return None
+
+            # Extract lines for the symbol
+            start = max(0, symbol_info.line_start - 1)
+            end = min(len(lines), symbol_info.line_end)
+
+            handler_lines = []
+            for i in range(start, end):
+                handler_lines.append(lines[i])
+
+            return "\n".join(handler_lines)
+        except Exception:
+            return None
 
     def _read_file_lines(self, file_path: str) -> list[str]:
         """Read file lines with caching."""

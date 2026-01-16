@@ -147,12 +147,28 @@ class TestNeverDropFindings:
                 self.budgets = budgets
 
             def gather(self, finding: Finding):
-                from services.evidence_gatherer import EvidenceResult
+                from models.schemas import Evidence, InputChannel
 
-                return EvidenceResult(snippet="", symbol_info=None, framework=None, matches=[], ssrf_analysis=None, timed_out=False)
+                return Evidence(
+                    finding_id=finding.id,
+                    snippet="",
+                    handler_snippet=None,
+                    symbol_info=None,
+                    framework=None,
+                    route_registration=None,
+                    auth_gates=[],
+                    dataflow_snippet=None,
+                    matches=[],
+                    ssrf_analysis=None,
+                    timed_out=False,
+                    input_channel=InputChannel.unknown,
+                    input_channel_deterministic=False,
+                    input_channel_signals=[],
+                    input_channel_reason="",
+                )
 
         class FakeClassifier:
-            def classify(self, finding: Finding, evidence):
+            def classify(self, finding: Finding, evidence, threat_model_profile=None):
                 return replace(hardening_result)
 
         with (

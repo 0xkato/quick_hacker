@@ -11,7 +11,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_mcp_tools_list_includes_read_file(tmp_path: Path):
-    from mcp.quickhack_mcp_server import QuickHackMCPServer
+    from quickhack_mcp.quickhack_mcp_server import QuickHackMCPServer
     from services.tool_core import ToolCore
 
     tool_core = ToolCore(repo_path=str(tmp_path), project_id="proj")
@@ -33,7 +33,7 @@ async def test_mcp_tools_list_includes_read_file(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_mcp_read_file_rejects_symlink_escape(tmp_path: Path):
-    from mcp.quickhack_mcp_server import QuickHackMCPServer
+    from quickhack_mcp.quickhack_mcp_server import QuickHackMCPServer
     from services.tool_core import ToolCore
 
     repo = tmp_path / "repo"
@@ -58,7 +58,7 @@ async def test_mcp_read_file_rejects_symlink_escape(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_mcp_read_file_rejects_excluded_directory(tmp_path: Path):
-    from mcp.quickhack_mcp_server import QuickHackMCPServer
+    from quickhack_mcp.quickhack_mcp_server import QuickHackMCPServer
     from services.tool_core import ToolCore
 
     repo = tmp_path / "repo"
@@ -82,7 +82,7 @@ async def test_mcp_read_file_rejects_excluded_directory(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_mcp_read_file_rejects_path_traversal(tmp_path: Path):
-    from mcp.quickhack_mcp_server import QuickHackMCPServer
+    from quickhack_mcp.quickhack_mcp_server import QuickHackMCPServer
     from services.tool_core import ToolCore
 
     repo = tmp_path / "repo"
@@ -105,7 +105,7 @@ async def test_mcp_read_file_rejects_path_traversal(tmp_path: Path):
 
 def test_mcp_server_starts_as_script_and_lists_tools(tmp_path: Path):
     backend_dir = Path(__file__).resolve().parents[2]
-    script_path = backend_dir / "mcp" / "quickhack_mcp_server.py"
+    script_path = backend_dir / "quickhack_mcp" / "quickhack_mcp_server.py"
 
     limits_path = tmp_path / "limits.json"
     limits_path.write_text(json.dumps({"max_runtime_s": 1.0}), encoding="utf-8")

@@ -1,12 +1,15 @@
 """Project management API endpoints."""
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
+from datetime import datetime
 
 from services.project_service import project_service, Project
 from services.sink_signal_service import sink_signal_service
 from models.sink_signals import SinkSignal, SinkSignalStatus
+from models.threat_model_profile import ThreatModelProfile, ThreatModelPreset, compute_profile_hash, preset_to_profile
 
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -36,6 +39,59 @@ class ProjectStatus(BaseModel):
 
 class UpdateSinkSignalStatusRequest(BaseModel):
     status: SinkSignalStatus
+
+
+class ThreatModelProfileResponse(BaseModel):
+    threat_model_preset: ThreatModelPreset
+    profile_source: Literal["preset", "custom", "migrated"]
+    profile_review_status: Literal["unreviewed", "reviewed"]
+    profile_reviewed_at: Optional[datetime] = None
+    profile_mapping_version: int
+    input_channel_semantics_version: int
+    prompt_threat_model_block_version: int
+    threat_model_profile: dict[str, Any]
+    profile_hash: str
+
+
+class ThreatModelProfileUpdateRequest(BaseModel):
+    action: Literal["reset_to_preset", "save_custom", "mark_reviewed"]
+    expected_profile_hash: Optional[str] = None
+    preset: Optional[ThreatModelPreset] = None
+    profile: Optional[ThreatModelProfile] = None
+
+
+def _get_profile_hash(project: Project) -> str:
+    if project.threat_model_preset is None:
+        raise ValueError("Project missing threat_model_preset")
+    if project.profile_source is None:
+        raise ValueError("Project missing profile_source")
+    if project.threat_model_profile is None:
+        raise ValueError("Project missing threat_model_profile")
+
+    profile = ThreatModelProfile(**project.threat_model_profile)
+    return compute_profile_hash(
+        threat_model_preset=project.threat_model_preset,
+        profile_source=project.profile_source,
+        profile_mapping_version=project.profile_mapping_version,
+        input_channel_semantics_version=project.input_channel_semantics_version,
+        prompt_threat_model_block_version=project.prompt_threat_model_block_version,
+        threat_model_profile=profile,
+    )
+
+
+def _profile_response(project: Project) -> ThreatModelProfileResponse:
+    profile_hash = _get_profile_hash(project)
+    return ThreatModelProfileResponse(
+        threat_model_preset=project.threat_model_preset or project.threat_model,
+        profile_source=project.profile_source or "migrated",
+        profile_review_status=project.profile_review_status or "unreviewed",
+        profile_reviewed_at=project.profile_reviewed_at,
+        profile_mapping_version=project.profile_mapping_version,
+        input_channel_semantics_version=project.input_channel_semantics_version,
+        prompt_threat_model_block_version=project.prompt_threat_model_block_version,
+        threat_model_profile=project.threat_model_profile or {},
+        profile_hash=profile_hash,
+    )
 
 
 @router.get("", response_model=list[Project])
@@ -84,6 +140,77 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+
+@router.get("/{project_id}/threat-model-profile", response_model=ThreatModelProfileResponse)
+async def get_threat_model_profile(project_id: str):
+    """Get the canonical ThreatModelProfile for this project (includes profile_hash)."""
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return _profile_response(project)
+
+
+@router.put("/{project_id}/threat-model-profile", response_model=ThreatModelProfileResponse)
+async def update_threat_model_profile(project_id: str, request: ThreatModelProfileUpdateRequest):
+    """Update the project's ThreatModelProfile (optimistic concurrency enforced by expected_profile_hash)."""
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    current = _profile_response(project)
+
+    if not request.expected_profile_hash:
+        return JSONResponse(
+            status_code=400,
+            content={"error_code": "MISSING_EXPECTED_PROFILE_HASH", "retryable": True},
+        )
+
+    if request.expected_profile_hash != current.profile_hash:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error_code": "PROFILE_HASH_MISMATCH",
+                "retryable": True,
+                "current_profile": current.model_dump(mode="json"),
+                "current_profile_hash": current.profile_hash,
+            },
+        )
+
+    if request.action == "mark_reviewed":
+        project.profile_review_status = "reviewed"
+        project.profile_reviewed_at = datetime.utcnow()
+        await project_service._save_projects()
+        return _profile_response(project)
+
+    if request.action == "reset_to_preset":
+        if not request.preset:
+            raise HTTPException(status_code=400, detail="preset is required for reset_to_preset")
+        project.threat_model = request.preset
+        project.threat_model_preset = request.preset
+        project.threat_model_profile = preset_to_profile(request.preset).model_dump(mode="json")
+        project.profile_source = "preset"
+        project.profile_review_status = "unreviewed"
+        project.profile_reviewed_at = None
+        await project_service._save_projects()
+        return _profile_response(project)
+
+    if request.action == "save_custom":
+        if not request.preset:
+            raise HTTPException(status_code=400, detail="preset is required for save_custom")
+        if not request.profile:
+            raise HTTPException(status_code=400, detail="profile is required for save_custom")
+        project.threat_model = request.preset
+        project.threat_model_preset = request.preset
+        project.threat_model_profile = request.profile.model_dump(mode="json")
+        project.profile_source = "custom"
+        project.profile_review_status = "reviewed"
+        project.profile_reviewed_at = datetime.utcnow()
+        await project_service._save_projects()
+        return _profile_response(project)
+
+    raise HTTPException(status_code=400, detail={"error": "unknown_action", "action": request.action})
 
 
 @router.delete("/{project_id}")

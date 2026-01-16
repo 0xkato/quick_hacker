@@ -1329,7 +1329,7 @@ class AgentOrchestrator:
                     node_type = "search"
                 elif normalized_name in ("scan_repo_for_secrets", "dependency_audit"):
                     node_type = "scan"
-                elif normalized_name == "report_finding":
+                elif normalized_name in ("report_finding", "promote_finding"):
                     node_type = "finding"
                 elif normalized_name == "upsert_sink_signal":
                     kind = tool_args.get("kind", "")
@@ -1385,7 +1385,7 @@ class AgentOrchestrator:
                     status = "failed" if is_error else "completed"
                     flow_service.update_node_status(agent.id, current_tool_node_id, status)
 
-                if normalized_name == "report_finding" and not is_error:
+                if normalized_name in ("report_finding", "promote_finding") and not is_error:
                     finding_data = None
                     # Strategy 1: direct dict with finding.
                     if isinstance(result, dict) and "finding" in result:
@@ -1423,6 +1423,9 @@ class AgentOrchestrator:
                             severity_enum = Severity(severity_str) if severity_str in Severity._value2member_map_ else Severity.MEDIUM
 
                             finding_counter[0] += 1
+                            metadata_from_tool = raw_finding.get("metadata") if isinstance(raw_finding.get("metadata"), dict) else {}
+                            merged_metadata = dict(metadata_from_tool)
+                            merged_metadata["source"] = "codex_cli"
                             finding_obj = Finding(
                                 id=f"{agent.id}-finding-{finding_counter[0]}",
                                 agent_id=agent.id,
@@ -1443,7 +1446,7 @@ class AgentOrchestrator:
                                 confidence=float(raw_finding.get("confidence", 0.5) or 0.5),
                                 source_trace=raw_finding.get("source_trace"),
                                 created_at=datetime.utcnow(),
-                                metadata={"source": "codex_cli"},
+                                metadata=merged_metadata,
                             )
                             codex_findings.append(finding_obj)
                             agent.findings = codex_findings

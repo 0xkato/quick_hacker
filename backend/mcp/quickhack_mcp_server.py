@@ -249,6 +249,7 @@ class QuickHackMCPServer:
                         "attack_scenario": {"type": "string"},
                         "proof_of_concept": {"type": "string"},
                         "recommended_fix": {"type": "string"},
+                        "metadata": {"type": "object"},
                     },
                     "required": [
                         "severity",
@@ -259,6 +260,7 @@ class QuickHackMCPServer:
                         "vulnerable_code",
                         "description",
                         "confidence",
+                        "metadata",
                     ],
                 },
             ),
@@ -417,6 +419,7 @@ class QuickHackMCPServer:
                 attack_scenario=args.get("attack_scenario"),
                 proof_of_concept=args.get("proof_of_concept"),
                 recommended_fix=args.get("recommended_fix"),
+                metadata=args.get("metadata"),
             )
         if name == "promote_finding":
             finding = args.get("finding")

@@ -481,9 +481,19 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
         "attack_scenario": str,
         "proof_of_concept": str,
         "recommended_fix": str,
+        "metadata": dict,
     })
     async def report_finding(args: dict[str, Any]) -> dict[str, Any]:
         try:
+            metadata = args.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {
+                    "context": {
+                        "execution_context": "unknown",
+                        "input_channel": "unknown",
+                        "activation_path": "unknown",
+                    }
+                }
             result = await tool_core.report_finding(
                 severity=args["severity"],
                 title=args["title"],
@@ -499,6 +509,7 @@ def _create_sdk_server(tool_core: ToolCore) -> tuple[dict[str, Any], Any]:
                 attack_scenario=args.get("attack_scenario"),
                 proof_of_concept=args.get("proof_of_concept"),
                 recommended_fix=args.get("recommended_fix"),
+                metadata=metadata,
             )
             return _make_response(_truncate_output(json.dumps(result, indent=2)))
         except Exception as e:

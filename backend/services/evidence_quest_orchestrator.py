@@ -365,7 +365,7 @@ Return JSON with discovered evidence.
         """Verify if this is actual shell execution (simplified)."""
         # In real implementation, would use LLM with tools
         # For MVP, check evidence snippet
-        snippet_lower = self.evidence.snippet.lower()
+        snippet_lower = (self.evidence.snippet or "").lower()
         if "shell=true" in snippet_lower or "os.system" in snippet_lower:
             return "shell=True detected in subprocess.run()"
         return None
@@ -373,14 +373,14 @@ Return JSON with discovered evidence.
     async def _trace_dataflow(self) -> Optional[str]:
         """Trace dataflow from source to sink (simplified)."""
         # In real implementation, would use LLM to trace
-        if "request" in self.evidence.snippet.lower():
+        if "request" in (self.evidence.snippet or "").lower():
             return "request parameter flows to subprocess call"
         return None
 
     async def _find_entry_point(self) -> Optional[str]:
         """Find how this function is invoked (simplified)."""
         # In real implementation, would grep for decorators
-        snippet_lower = self.evidence.snippet.lower()
+        snippet_lower = (self.evidence.snippet or "").lower()
         if "@app.route" in snippet_lower or "@router" in snippet_lower:
             return "@app.route decorator found"
         return None

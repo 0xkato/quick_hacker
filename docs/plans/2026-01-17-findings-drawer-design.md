@@ -1,7 +1,7 @@
 # Findings Drawer UI Design
 
 **Date:** 2026-01-17
-**Status:** Approved
+**Status:** Implemented
 **Scope:** Visual presentation improvement - no new features
 
 ## Problem
@@ -161,3 +161,19 @@ Transition: 200ms ease-out
 - No changes to data structure
 - No new API endpoints
 - Pure visual/layout improvement only
+
+## Implementation Status
+
+**Implemented:** 2026-01-17
+
+**Changes:**
+- Created `FindingDrawer.tsx` overlay component (700px wide)
+- Removed inline expansion from `FindingsList.tsx`
+- Added drawer state management to `page.tsx`
+- All interactions working as designed (ESC, click-outside, navigate to file)
+
+**Testing:**
+- Manual testing completed
+- All drawer interactions verified
+- Tested with various finding types and severities
+- Production build successful

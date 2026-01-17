@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from typing import Optional
-import re
 
 from models.schemas import (
     Finding,
@@ -89,7 +88,7 @@ class ProtocolEvaluator:
 
     def _reject_by_disposition(
         self, ctx: EvaluationContext
-    ) -> tuple[SubmissionResult, None]:
+    ) -> Optional[tuple[SubmissionResult, Optional[Disposition]]]:
         """Gate 1: Disposition doesn't meet protocol threshold."""
         # Placeholder - will be implemented in Task 2.2
         pass
@@ -124,7 +123,7 @@ class ProtocolEvaluator:
 
     def _accept_for_submission(
         self, ctx: EvaluationContext
-    ) -> tuple[SubmissionResult, None]:
+    ) -> Optional[tuple[SubmissionResult, Optional[Disposition]]]:
         """All gates passed - recommend submission."""
         # Placeholder - will be implemented in Task 2.2
         pass

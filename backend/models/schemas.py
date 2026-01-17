@@ -112,6 +112,7 @@ class VulnerabilityCategory(str, Enum):
     INFORMATION_DISCLOSURE = "information_disclosure"
     DOS = "dos"
     RACE_CONDITION = "race_condition"
+    INTEGER_OVERFLOW = "integer_overflow"
     GENERIC = "generic"
 
 

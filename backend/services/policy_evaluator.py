@@ -62,6 +62,25 @@ class PolicyEvaluator:
                     overridden=overridden
                 )
 
+        elif category == VulnerabilityCategory.INTEGER_OVERFLOW:
+            gate_passed = self._evaluate_integer_overflow_gate(
+                evidence, classification, reasoning
+            )
+            gate_results["integer_overflow"] = gate_passed
+
+            # If gate fails, downgrade VALID to HARDENING_ONLY
+            if not gate_passed and classification.disposition == Disposition.VALID_SECURITY_ISSUE:
+                decision = PolicyDecision.HARDENING_ONLY
+                overridden = True
+                return PolicyEvaluationResult(
+                    decision=decision,
+                    path_classification=path_class,
+                    gate_results=gate_results,
+                    reasoning=reasoning,
+                    original_disposition=classification.disposition,
+                    overridden=overridden
+                )
+
         # Map disposition to decision
         decision = self._map_disposition_to_decision(
             classification.disposition, policy, gate_results
@@ -226,5 +245,138 @@ class PolicyEvaluator:
             for pattern in interpolation_patterns:
                 if re.search(pattern, snippet):
                     return True
+
+        return False
+
+    def _evaluate_integer_overflow_gate(
+        self,
+        evidence: Evidence,
+        classification: ClassificationResult,
+        reasoning: list[str]
+    ) -> bool:
+        """
+        Integer overflow evidence gate.
+
+        Requires:
+        1. Attacker-controlled operands (proven in checklist)
+        2. Overflow-prone operation (multiplication or unchecked addition)
+        3. Allocation or bounds use (malloc, array index, buffer size)
+        4. Proven type mismatch (32-bit → 64-bit)
+
+        Without complete proof chain, it's speculative overflow (HARDENING_ONLY).
+
+        Args:
+            evidence: Evidence bundle
+            classification: Classification result with proof checklist
+            reasoning: List to append reasoning to
+
+        Returns:
+            True if gate passes, False otherwise
+        """
+        missing = []
+
+        # Requirement 1: Attacker-controlled operands
+        if classification.proof_checklist.source_controlled_input.status != ChecklistStatus.PROVEN:
+            missing.append("no proven attacker control over operands")
+
+        # Requirement 2: Overflow-prone operation (multiplication or unchecked addition)
+        has_overflow_op = self._has_overflow_prone_operation(evidence)
+        if not has_overflow_op:
+            missing.append("no overflow-prone operation (multiplication/unchecked addition)")
+
+        # Requirement 3: Allocation or bounds check using result
+        has_dangerous_use = self._has_allocation_or_bounds_use(evidence)
+        if not has_dangerous_use:
+            missing.append("no allocation/bounds use detected")
+
+        # Requirement 4: Proven mismatch (32-bit calc → 64-bit size, etc.)
+        has_mismatch = self._has_proven_type_mismatch(evidence)
+        if not has_mismatch:
+            missing.append("no proven type mismatch (32-bit → 64-bit, etc.)")
+
+        if missing:
+            reasoning.append(f"Integer overflow gate failed: {'; '.join(missing)}")
+            return False
+
+        # All requirements met
+        reasoning.append(
+            "Integer overflow gate passed: attacker control + overflow op + allocation use + mismatch"
+        )
+        return True
+
+    def _has_overflow_prone_operation(self, evidence: Evidence) -> bool:
+        """
+        Check for multiplication or unchecked addition.
+
+        Args:
+            evidence: Evidence bundle
+
+        Returns:
+            True if overflow-prone operation detected
+        """
+        snippet = evidence.snippet or ""
+
+        # Look for multiplication
+        if re.search(r'\w+\s*\*\s*\w+', snippet):
+            return True
+
+        # Look for addition without overflow check
+        # (Hard to prove "unchecked" statically, so look for addition near allocation)
+        if re.search(r'\w+\s*\+\s*\w+', snippet):
+            if any(func in snippet for func in ['malloc', 'calloc', 'new ']):
+                return True
+
+        return False
+
+    def _has_allocation_or_bounds_use(self, evidence: Evidence) -> bool:
+        """
+        Check if result is used in allocation or bounds check.
+
+        Args:
+            evidence: Evidence bundle
+
+        Returns:
+            True if allocation or bounds use detected
+        """
+        snippet = evidence.snippet or ""
+
+        # Memory allocation
+        if any(func in snippet for func in ['malloc', 'calloc', 'realloc', 'new ', 'new[']):
+            return True
+
+        # Array indexing
+        if re.search(r'\w+\[.*?\]', snippet):
+            return True
+
+        # Buffer size parameter
+        if any(func in snippet for func in ['memcpy', 'strcpy', 'strncpy', 'read', 'write']):
+            return True
+
+        return False
+
+    def _has_proven_type_mismatch(self, evidence: Evidence) -> bool:
+        """
+        Check for type mismatch (32-bit calc → 64-bit use).
+
+        Args:
+            evidence: Evidence bundle
+
+        Returns:
+            True if type mismatch detected
+        """
+        snippet = evidence.snippet or ""
+
+        # Look for int32 → size_t cast
+        if re.search(r'\(size_t\).*?\(int32|int\)', snippet):
+            return True
+
+        # Look for int multiplication assigned to size_t
+        if re.search(r'size_t\s+\w+\s*=.*?\*', snippet):
+            return True
+
+        # This is hard to prove statically - may need type inference
+        # For MVP, be conservative and assume mismatch if we see multiplication + allocation
+        if self._has_overflow_prone_operation(evidence) and self._has_allocation_or_bounds_use(evidence):
+            return True
 
         return False

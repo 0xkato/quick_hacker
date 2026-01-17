@@ -482,3 +482,247 @@ class TestCommandInjectionGate:
         assert result.overridden is True
         assert any("interpolation" in r.lower() or "string manipulation" in r.lower()
                    for r in result.reasoning)
+
+
+class TestIntegerOverflowGate:
+    """Test integer overflow evidence gate."""
+
+    def test_passes_gate_with_all_requirements(self):
+        """Test gate passes with attacker control + operation + allocation + mismatch."""
+        evaluator = PolicyEvaluator()
+        policy = TriagePolicy(name="test")
+
+        # Create finding with integer overflow category
+        finding = Finding(
+            id="f1",
+            agent_id="a1",
+            repo_id="r1",
+            severity="critical",
+            title="Integer Overflow in Image Processing",
+            description="Multiplication of user-controlled dimensions causes overflow in malloc size",
+            file_path="src/image/parser.c",
+            line_start=85,
+            vulnerability_type="integer_overflow",
+            confidence=0.95,
+            created_at="2024-01-01T00:00:00Z",
+            path_classification=PathClassification.runtime,
+            category=VulnerabilityCategory.INTEGER_OVERFLOW
+        )
+
+        # Evidence showing multiplication leading to malloc
+        evidence = Evidence(
+            finding_id="f1",
+            snippet='size_t total = width * height; buf = malloc(total);',
+            input_channel=InputChannel.network
+        )
+
+        # VALID classification with proven attacker control
+        classification = ClassificationResult(
+            disposition=Disposition.VALID_SECURITY_ISSUE,
+            classification_confidence=95,
+            exploit_confidence=90,
+            proof_checklist=ProofChecklist(
+                source_controlled_input=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="Attacker controls width and height from network request"
+                ),
+                sink_present=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="malloc with overflow result"
+                ),
+                dataflow_evidenced=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="width * height flows to malloc"
+                ),
+                reachable=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="API endpoint"
+                ),
+                boundary_crossed=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="network input channel"
+                ),
+                not_only_misconfig=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="requires code change"
+                )
+            ),
+            reasoning=["Integer overflow in multiplication used for allocation size"]
+        )
+
+        # Evaluate - should pass gate
+        result = evaluator.evaluate(finding, evidence, classification, policy)
+
+        # Verify decision
+        assert result.decision == PolicyDecision.REPORT_SECURITY_VRP
+        assert result.original_disposition == Disposition.VALID_SECURITY_ISSUE
+        assert result.gate_results.get("integer_overflow") is True
+        assert result.overridden is False
+        assert any("attacker control + overflow op + allocation use + mismatch" in r.lower()
+                   for r in result.reasoning)
+
+    def test_fails_gate_without_attacker_control(self):
+        """Test gate fails without proven attacker control."""
+        evaluator = PolicyEvaluator()
+        policy = TriagePolicy(name="test")
+
+        # Create finding with integer overflow category
+        finding = Finding(
+            id="f2",
+            agent_id="a1",
+            repo_id="r1",
+            severity="high",
+            title="Potential Integer Overflow",
+            description="Multiplication may overflow",
+            file_path="src/image/parser.c",
+            line_start=90,
+            vulnerability_type="integer_overflow",
+            confidence=0.80,
+            created_at="2024-01-01T00:00:00Z",
+            path_classification=PathClassification.runtime,
+            category=VulnerabilityCategory.INTEGER_OVERFLOW
+        )
+
+        # Evidence showing multiplication + malloc
+        evidence = Evidence(
+            finding_id="f2",
+            snippet='size_t total = width * height; buf = malloc(total);',
+            input_channel=InputChannel.unknown
+        )
+
+        # VALID classification but no proven attacker control
+        classification = ClassificationResult(
+            disposition=Disposition.VALID_SECURITY_ISSUE,
+            classification_confidence=80,
+            exploit_confidence=75,
+            proof_checklist=ProofChecklist(
+                source_controlled_input=ChecklistItem(
+                    value=False,
+                    status=ChecklistStatus.UNKNOWN,
+                    reason="No clear source of width and height"
+                ),
+                sink_present=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="malloc present"
+                ),
+                dataflow_evidenced=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="multiplication flows to malloc"
+                ),
+                reachable=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="reachable code path"
+                ),
+                boundary_crossed=ChecklistItem(
+                    value=False,
+                    status=ChecklistStatus.UNKNOWN,
+                    reason="unknown input source"
+                ),
+                not_only_misconfig=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="requires code change"
+                )
+            ),
+            reasoning=["Overflow possible but source unclear"]
+        )
+
+        # Evaluate - should fail gate and downgrade
+        result = evaluator.evaluate(finding, evidence, classification, policy)
+
+        # Verify downgrade to HARDENING_ONLY
+        assert result.decision == PolicyDecision.HARDENING_ONLY
+        assert result.original_disposition == Disposition.VALID_SECURITY_ISSUE
+        assert result.gate_results.get("integer_overflow") is False
+        assert result.overridden is True
+        assert any("no proven attacker control over operands" in r.lower()
+                   for r in result.reasoning)
+
+    def test_fails_gate_without_allocation(self):
+        """Test gate fails without allocation/bounds use."""
+        evaluator = PolicyEvaluator()
+        policy = TriagePolicy(name="test")
+
+        # Create finding with integer overflow category
+        finding = Finding(
+            id="f3",
+            agent_id="a1",
+            repo_id="r1",
+            severity="medium",
+            title="Integer Overflow Without Dangerous Use",
+            description="Multiplication overflows but result not used dangerously",
+            file_path="src/math/calc.c",
+            line_start=42,
+            vulnerability_type="integer_overflow",
+            confidence=0.85,
+            created_at="2024-01-01T00:00:00Z",
+            path_classification=PathClassification.runtime,
+            category=VulnerabilityCategory.INTEGER_OVERFLOW
+        )
+
+        # Evidence showing multiplication but NO allocation or array access
+        evidence = Evidence(
+            finding_id="f3",
+            snippet='total = width * height;',  # No malloc, no array index
+            input_channel=InputChannel.network
+        )
+
+        # VALID classification with proven attacker control
+        classification = ClassificationResult(
+            disposition=Disposition.VALID_SECURITY_ISSUE,
+            classification_confidence=85,
+            exploit_confidence=80,
+            proof_checklist=ProofChecklist(
+                source_controlled_input=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="Attacker controls width and height"
+                ),
+                sink_present=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="multiplication present"
+                ),
+                dataflow_evidenced=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="user input flows to multiplication"
+                ),
+                reachable=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="API endpoint"
+                ),
+                boundary_crossed=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="network input channel"
+                ),
+                not_only_misconfig=ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="requires code change"
+                )
+            ),
+            reasoning=["Integer overflow in multiplication"]
+        )
+
+        # Evaluate - should fail gate and downgrade
+        result = evaluator.evaluate(finding, evidence, classification, policy)
+
+        # Verify downgrade to HARDENING_ONLY
+        assert result.decision == PolicyDecision.HARDENING_ONLY
+        assert result.original_disposition == Disposition.VALID_SECURITY_ISSUE
+        assert result.gate_results.get("integer_overflow") is False
+        assert result.overridden is True
+        assert any("no allocation/bounds use detected" in r.lower()
+                   for r in result.reasoning)

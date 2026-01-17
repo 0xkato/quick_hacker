@@ -676,6 +676,10 @@ class Finding(BaseModel):
     # Path classification (for pre-triage filtering)
     path_classification: Optional[PathClassification] = None
 
+    # Policy evaluation results
+    policy_decision: Optional[PolicyDecision] = None
+    policy_reasoning: Optional[list[str]] = None
+
     @field_validator(
         "description",
         "code_snippet",

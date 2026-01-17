@@ -23,12 +23,17 @@ from models.schemas import (
     FindingClassification,
     SubmissionDecision,
     ProtocolPolicy,
+    TriagePolicy,
+    PolicyDecision,
 )
 from services.evidence_gatherer import EvidenceGatherer
 from services.strict_classifier import StrictClassifier
 from services.evidence_quest_orchestrator import EvidenceQuestOrchestrator
 from services.protocol_evaluator import ProtocolEvaluator
 from services.protocol_policies import ProtocolPolicyLoader
+from services.deduplicator import deduplicate_findings
+from services.pre_triage_filter import pre_filter_findings
+from services.policy_evaluator import PolicyEvaluator
 
 
 class FindingTriageService:
@@ -45,6 +50,7 @@ class FindingTriageService:
     def __init__(self):
         self.quest_orchestrator: Optional[EvidenceQuestOrchestrator] = None
         self.protocol_evaluator = ProtocolEvaluator()
+        self.policy_evaluator = PolicyEvaluator()
 
     def _classification_from_disposition(
         self, disposition: Disposition | None, current: FindingClassification
@@ -72,10 +78,18 @@ class FindingTriageService:
         policy_version: str = "1.0.0",
         budgets: Optional[BudgetConfig] = None,
         threat_model_profile: Optional[dict] = None,
+        policy: Optional[TriagePolicy] = None,
     ) -> TriageResult:
         """
         Triage a batch of findings.
-        GUARANTEE: len(triaged_findings) == len(findings)
+        GUARANTEE: len(triaged_findings) == len(findings) (after dedup/filter)
+
+        Pipeline with policy:
+        1. Deduplicate (if policy.deduplication.enabled)
+        2. Pre-filter by path (if policy provided)
+        3. Gather evidence
+        4. Classify
+        5. Evaluate policy (if policy provided)
         """
         if not findings:
             return TriageResult(
@@ -95,6 +109,30 @@ class FindingTriageService:
         batch_id = self._generate_batch_id()
         batch_start = time.time()
         budgets = budgets or BudgetConfig()
+
+        # Step 1 - Deduplicate
+        if policy and policy.deduplication.enabled:
+            findings = deduplicate_findings(findings, policy.deduplication)
+
+        # Step 2 - Pre-filter
+        if policy:
+            findings = pre_filter_findings(findings, policy)
+
+        # Early return if all filtered out
+        if not findings:
+            return TriageResult(
+                triaged_findings=[],
+                reportable_findings=[],
+                metrics=TriageMetrics(
+                    raw_count=0,
+                    triaged_count=0,
+                    reportable_count=0,
+                    by_disposition={},
+                    timeout_count=0,
+                    timeout_rate=0.0
+                ),
+                batch_id=batch_id
+            )
 
         gatherer = EvidenceGatherer(repo_root, budgets)
         classifier = StrictClassifier()
@@ -134,14 +172,31 @@ class FindingTriageService:
                 triaged_finding = self._attach_triage_metadata(
                     finding, classification, batch_id, policy_version
                 )
-                triaged.append(triaged_finding)
 
-                # Track reportable
-                if classification.disposition in [
-                    Disposition.VALID_SECURITY_ISSUE,
-                    Disposition.BUG
-                ]:
-                    reportable.append(triaged_finding)
+                # Policy evaluation
+                if policy:
+                    policy_result = self.policy_evaluator.evaluate(
+                        finding, evidence, classification, policy
+                    )
+                    triaged_finding.policy_decision = policy_result.decision
+                    triaged_finding.policy_reasoning = policy_result.reasoning
+                    triaged_finding.path_classification = policy_result.path_classification
+
+                    # Track reportable based on policy decision
+                    if policy_result.decision in [
+                        PolicyDecision.REPORT_SECURITY_VRP,
+                        PolicyDecision.REPORT_SECURITY_LOW_CONFIDENCE
+                    ]:
+                        reportable.append(triaged_finding)
+                else:
+                    # Fallback: use disposition
+                    if classification.disposition in [
+                        Disposition.VALID_SECURITY_ISSUE,
+                        Disposition.BUG
+                    ]:
+                        reportable.append(triaged_finding)
+
+                triaged.append(triaged_finding)
 
                 # Track timeouts from evidence gathering
                 if evidence.timed_out:

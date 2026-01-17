@@ -552,5 +552,138 @@ class TestEmptyRepoHandling:
         assert result.triaged_count == len(sample_findings)
 
 
+class TestTriageServiceWithPolicy:
+    """Test FindingTriageService with policy integration."""
+
+    def test_triage_with_vrp_policy_filters_third_party(self):
+        """Test triage with VRP policy filters third_party findings."""
+        from services.default_policies import VRP_GOOGLE_OSS_STRICT
+
+        service = FindingTriageService()
+
+        findings = [
+            Finding(
+                id="1",
+                agent_id="agent-001",
+                repo_id="repo-001",
+                file_path="third_party/lib.py",
+                line_start=10,
+                vulnerability_type="SQL Injection",
+                title="Test",
+                description="Test",
+                code_snippet="test",
+                severity="high",
+                confidence=0.8,
+                created_at="2026-01-12T00:00:00Z"
+            ),
+            Finding(
+                id="2",
+                agent_id="agent-001",
+                repo_id="repo-001",
+                file_path="src/main.py",
+                line_start=20,
+                vulnerability_type="SQL Injection",
+                title="Test",
+                description="Test",
+                code_snippet="test",
+                severity="high",
+                confidence=0.8,
+                created_at="2026-01-12T00:00:00Z"
+            )
+        ]
+
+        result = service.triage_findings(
+            repo_root="/tmp/test",
+            findings=findings,
+            policy=VRP_GOOGLE_OSS_STRICT
+        )
+
+        # Only src/main.py should remain after filtering
+        assert result.metrics.triaged_count == 1
+        assert result.triaged_findings[0].id == "2"
+
+    def test_triage_with_vrp_policy_deduplicates(self):
+        """Test triage with VRP policy deduplicates findings."""
+        from services.default_policies import VRP_GOOGLE_OSS_STRICT
+
+        service = FindingTriageService()
+
+        findings = [
+            Finding(
+                id="1",
+                agent_id="agent-001",
+                repo_id="repo-001",
+                file_path="src/main.py",
+                line_start=10,
+                vulnerability_type="SQL Injection",
+                title="Unsafe query",
+                description="Test 1",
+                code_snippet="test",
+                severity="high",
+                confidence=0.8,
+                created_at="2026-01-12T00:00:00Z"
+            ),
+            Finding(
+                id="2",
+                agent_id="agent-001",
+                repo_id="repo-001",
+                file_path="src/main.py",
+                line_start=10,
+                vulnerability_type="SQL Injection",
+                title="Unsafe query",
+                description="Test 2",  # Duplicate
+                code_snippet="test",
+                severity="high",
+                confidence=0.8,
+                created_at="2026-01-12T00:00:00Z"
+            )
+        ]
+
+        result = service.triage_findings(
+            repo_root="/tmp/test",
+            findings=findings,
+            policy=VRP_GOOGLE_OSS_STRICT
+        )
+
+        # Should deduplicate to 1 finding
+        assert result.metrics.triaged_count == 1
+
+    def test_triage_with_policy_attaches_policy_decision(self):
+        """Test triage attaches policy decision to findings."""
+        from services.default_policies import VRP_GOOGLE_OSS_STRICT
+        from models.schemas import PolicyDecision
+
+        service = FindingTriageService()
+        policy = VRP_GOOGLE_OSS_STRICT
+
+        finding = Finding(
+            id="1",
+            agent_id="agent-001",
+            repo_id="repo-001",
+            file_path="src/main.py",
+            line_start=10,
+            vulnerability_type="SQL Injection",
+            title="Test",
+            description="Test",
+            code_snippet="test",
+            severity="high",
+            confidence=0.8,
+            created_at="2026-01-12T00:00:00Z"
+        )
+
+        result = service.triage_findings(
+            repo_root="/tmp/test",
+            findings=[finding],
+            policy=policy
+        )
+
+        triaged = result.triaged_findings[0]
+
+        # Should have policy fields attached
+        assert hasattr(triaged, 'policy_decision')
+        assert hasattr(triaged, 'policy_reasoning')
+        assert hasattr(triaged, 'path_classification')
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

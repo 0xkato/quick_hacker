@@ -21,6 +21,7 @@ import { MonacoEditor } from '@/components/Editor/MonacoEditor';
 import { FileTree } from '@/components/FileExplorer/FileTree';
 import { AgentManager } from '@/components/AgentPanel/AgentManager';
 import { FindingsList } from '@/components/FindingsPanel/FindingsList';
+import { FindingDrawer } from '@/components/FindingsPanel/FindingDrawer';
 import { ChatPanel } from '@/components/ChatPanel/ChatPanel';
 import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
 import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
@@ -101,6 +102,9 @@ export default function Home() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('active');
   const [snapshotInfo, setSnapshotInfo] = useState<SnapshotInfo | null>(null);
   const [showResumeDialog, setShowResumeDialog] = useState(false);
+
+  // Drawer state
+  const [selectedFindingForDrawer, setSelectedFindingForDrawer] = useState<Finding | null>(null);
 
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
@@ -499,9 +503,14 @@ export default function Home() {
     }
   };
 
-  // Finding click - navigate to file
-  const handleFindingClick = async (finding: Finding) => {
-    await handleFileSelect(finding.file_path);
+  // Finding click - open drawer
+  const handleFindingClick = (finding: Finding) => {
+    setSelectedFindingForDrawer(finding);
+  };
+
+  // Navigate to file from drawer
+  const handleNavigateToFile = async (filePath: string) => {
+    await handleFileSelect(filePath);
   };
 
   // Agent callbacks
@@ -918,6 +927,7 @@ export default function Home() {
                           : []
                       }
                       onFindingClick={handleFindingClick}
+                      onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
                     />
                   </div>
                 </div>
@@ -1117,6 +1127,7 @@ export default function Home() {
               <FindingsList
                 findings={findings.filter((f) => f.file_path === currentFile?.path)}
                 onFindingClick={handleFindingClick}
+                onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
               />
             </div>
           </aside>
@@ -1219,6 +1230,15 @@ export default function Home() {
           onRestore={handleRestoreSession}
           onKeepCurrent={handleKeepCurrent}
           onClose={() => setShowResumeDialog(false)}
+        />
+      )}
+
+      {/* Finding Drawer */}
+      {selectedFindingForDrawer && (
+        <FindingDrawer
+          finding={selectedFindingForDrawer}
+          onClose={() => setSelectedFindingForDrawer(null)}
+          onNavigateToFile={handleNavigateToFile}
         />
       )}
     </div>

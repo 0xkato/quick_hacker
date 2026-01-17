@@ -16,7 +16,6 @@ import {
 import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
-import { DownloadReportButton } from './DownloadReportButton';
 import { FindingsReportView } from './FindingsReportView';
 
 // Classification badge colors and labels
@@ -263,9 +262,6 @@ export function FindingsList({ findings, onFindingClick, onNavigateToFile }: Fin
               {viewMode === 'list' ? <FileText className="w-3 h-3" /> : <List className="w-3 h-3" />}
               <span>{viewMode === 'list' ? 'Report' : 'List'}</span>
             </button>
-
-            {/* Download Report button */}
-            <DownloadReportButton agentId={findings[0]?.agent_id || ''} />
 
             {/* Show Filtered toggle */}
             {triageFilteredCount > 0 && (

@@ -115,6 +115,13 @@ class VulnerabilityCategory(str, Enum):
     GENERIC = "generic"
 
 
+class SubmissionDecision(str, Enum):
+    """Protocol evaluation decision for reportability."""
+    submit = "submit"
+    dont_submit = "dont_submit"
+    needs_more_info = "needs_more_info"
+
+
 class InputChannel(str, Enum):
     """
     Input channels represent where attacker-controlled data originates.
@@ -298,6 +305,96 @@ class ProofChecklist(BaseModel):
     auth_bypass_reason: Optional[str] = None
 
 
+class SubmissionResult(BaseModel):
+    """
+    Protocol-aware reportability evaluation result.
+
+    Represents the 'worth submitting' decision for a finding based on
+    protocol-specific rules (VRP, bug bounty, internal disclosure, etc.).
+    """
+    protocol_id: str  # e.g., "osvrp_strict", "hackerone_strict", "internal"
+    decision: SubmissionDecision
+    reasons: list[str] = Field(
+        default_factory=list,
+        description="Human-readable reasons for the decision (2-4 bullets)"
+    )
+    missing_evidence: list[str] = Field(
+        default_factory=list,
+        description="Specific evidence gaps if decision=needs_more_info"
+    )
+    suggested_next_steps: list[str] = Field(
+        default_factory=list,
+        description="Actionable steps to resolve evidence gaps"
+    )
+
+    # Quest tracking
+    quest_run: bool = False
+    quest_id: Optional[str] = None
+    quest_findings: Optional[dict] = None
+
+    # Disposition override
+    disposition_modified: bool = False
+    disposition_reason: Optional[str] = None
+
+
+class ProtocolPolicy(BaseModel):
+    """Protocol-specific submission rules."""
+    id: str
+    display_name: str
+
+    # Threat model defaults
+    default_threat_model_preset: str = "AB"
+
+    # Disposition gates
+    min_disposition_to_submit: set[Disposition] = Field(
+        default_factory=lambda: {Disposition.VALID_SECURITY_ISSUE}
+    )
+
+    # Submission heuristics
+    require_cross_boundary_for_local_bugs: bool = True
+    reject_social_engineering_only: bool = True
+    require_repro_steps: bool = True
+    require_impact_statement: bool = True
+    require_realistic_attacker_model: bool = True
+
+    # Category-specific rules
+    category_rules: dict[VulnerabilityCategory, dict] = Field(
+        default_factory=dict
+    )
+
+    # Evidence quality gates
+    min_checklist_proven_count: int = 4
+    allow_unknown_in_checklist: bool = False
+
+    # Quest behavior
+    enable_evidence_quests: bool = True
+    quest_categories: list[VulnerabilityCategory] = Field(default_factory=list)
+
+
+class EvidenceQuest(BaseModel):
+    """Configuration for autonomous evidence gathering agent."""
+    id: str
+    finding_id: str
+    category: VulnerabilityCategory
+
+    # What evidence is missing
+    missing_items: list[str]
+
+    # Quest prompt template
+    quest_type: str
+
+    # Status
+    status: AgentStatus
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    # Results
+    evidence_found: dict[str, Any] = Field(default_factory=dict)
+    new_checklist_items: dict[str, ChecklistItem] = Field(default_factory=dict)
+    success: bool = False
+    error_message: Optional[str] = None
+
+
 class EvidenceBlob(BaseModel):
     """Evidence snippet gathered during triage."""
     id: str
@@ -418,6 +515,13 @@ class Finding(BaseModel):
     triage_policy_version: Optional[str] = None
     triaged_at: Optional[datetime] = None
     category: Optional[VulnerabilityCategory] = None
+
+    # Protocol evaluation result
+    submission_result: Optional[SubmissionResult] = None
+
+    # Quest tracking
+    evidence_quest_id: Optional[str] = None
+    evidence_quest_completed: bool = False
 
     @field_validator(
         "description",

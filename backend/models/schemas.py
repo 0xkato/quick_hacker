@@ -339,11 +339,11 @@ class SubmissionResult(BaseModel):
 
 class ProtocolPolicy(BaseModel):
     """Protocol-specific submission rules."""
-    id: str
-    display_name: str
+    id: str = Field(..., description="Unique protocol identifier")
+    display_name: str = Field(..., description="Human-readable protocol name")
 
     # Threat model defaults
-    default_threat_model_preset: str = "AB"
+    default_threat_model_preset: str = Field("AB", description="Default threat model preset (e.g., 'AB', 'ABC')")
 
     # Disposition gates
     min_disposition_to_submit: set[Disposition] = Field(
@@ -358,7 +358,7 @@ class ProtocolPolicy(BaseModel):
     require_realistic_attacker_model: bool = True
 
     # Category-specific rules
-    category_rules: dict[VulnerabilityCategory, dict] = Field(
+    category_rules: dict[VulnerabilityCategory, dict[str, Any]] = Field(
         default_factory=dict
     )
 
@@ -373,15 +373,15 @@ class ProtocolPolicy(BaseModel):
 
 class EvidenceQuest(BaseModel):
     """Configuration for autonomous evidence gathering agent."""
-    id: str
-    finding_id: str
+    id: str = Field(..., description="Unique quest identifier")
+    finding_id: str = Field(..., description="ID of the finding this quest is gathering evidence for")
     category: VulnerabilityCategory
 
     # What evidence is missing
     missing_items: list[str]
 
     # Quest prompt template
-    quest_type: str
+    quest_type: str = Field(..., description="Type of evidence quest to run")
 
     # Status
     status: AgentStatus
@@ -519,7 +519,7 @@ class Finding(BaseModel):
     # Protocol evaluation result
     submission_result: Optional[SubmissionResult] = None
 
-    # Quest tracking
+    # Quest tracking (also stored in submission_result.quest_id if quest ran during protocol evaluation)
     evidence_quest_id: Optional[str] = None
     evidence_quest_completed: bool = False
 

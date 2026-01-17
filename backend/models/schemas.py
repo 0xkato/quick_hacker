@@ -237,6 +237,58 @@ class EvidenceGates(BaseModel):
     dos: DosGate = Field(default_factory=DosGate)
 
 
+class DeduplicationConfig(BaseModel):
+    """Deduplication strategy configuration."""
+    enabled: bool = True
+    strategy: str = "exact"  # "exact" | "fuzzy" | "symbol"
+    exact_match_fields: list[str] = Field(
+        default_factory=lambda: ["file_path", "line_start", "vulnerability_type", "title"]
+    )
+
+
+class TriagePolicy(BaseModel):
+    """
+    VRP triage policy configuration.
+
+    Encodes "what do we bother reporting given strictness, scope, and evidence?"
+    Separate from ThreatModelProfile (attacker capabilities).
+    """
+    name: str  # e.g., "vrp-google-oss-strict", "internal-audit"
+
+    # Path classification and filtering
+    path_classification: PathClassificationConfig = Field(
+        default_factory=PathClassificationConfig
+    )
+    filter_third_party: bool = True  # Drop findings from third_party_roots
+    filter_tests: bool = True  # Drop findings from test_roots
+    filter_ci: bool = True  # Drop findings from ci_roots
+    filter_docs: bool = True  # Drop findings from docs_roots
+    filter_migrations: bool = True  # Drop findings from migration_roots
+
+    # Tooling findings require stronger boundary (not auto-filtered)
+    tooling_requires_ci_boundary: bool = True
+
+    # Evidence gates per vulnerability type
+    evidence_gates: EvidenceGates = Field(default_factory=EvidenceGates)
+
+    # Deduplication
+    deduplication: DeduplicationConfig = Field(default_factory=DeduplicationConfig)
+
+    # Disposition overrides
+    report_hardening: bool = False  # Default: don't report HARDENING findings
+    report_by_design: bool = False  # Default: don't report BY_DESIGN findings
+
+
+class PolicyEvaluationResult(BaseModel):
+    """Result from policy evaluation."""
+    decision: PolicyDecision
+    path_classification: PathClassification
+    gate_results: dict[str, bool]  # Which gates passed/failed
+    reasoning: list[str]  # Why this decision was made
+    original_disposition: Disposition  # From StrictClassifier
+    overridden: bool  # True if policy changed the classification
+
+
 # === Phase 4: Project Scope ===
 
 class ProjectScope(BaseModel):

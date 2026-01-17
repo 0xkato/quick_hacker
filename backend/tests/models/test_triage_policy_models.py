@@ -1,6 +1,6 @@
 """Tests for TriagePolicy models."""
 import pytest
-from models.schemas import PathClassification, PolicyDecision, PathClassificationConfig, CommandInjectionGate, IntegerOverflowGate, EvidenceGates, MemoryCorruptionGate, DosGate
+from models.schemas import PathClassification, PolicyDecision, PathClassificationConfig, CommandInjectionGate, IntegerOverflowGate, EvidenceGates, MemoryCorruptionGate, DosGate, DeduplicationConfig, TriagePolicy, PolicyEvaluationResult, Disposition
 
 
 class TestPathClassification:
@@ -181,3 +181,85 @@ class TestEvidenceGates:
         assert gates.command_injection.require_shell_execution is False
         # Others still use defaults
         assert gates.integer_overflow.require_attacker_controlled_operands is True
+
+
+class TestDeduplicationConfig:
+    def test_deduplication_config_defaults(self):
+        """Test DeduplicationConfig has sensible defaults."""
+        config = DeduplicationConfig()
+
+        assert config.enabled is True
+        assert config.strategy == "exact"
+        assert "file_path" in config.exact_match_fields
+        assert "line_start" in config.exact_match_fields
+        assert "vulnerability_type" in config.exact_match_fields
+        assert "title" in config.exact_match_fields
+
+    def test_deduplication_config_can_be_disabled(self):
+        """Test DeduplicationConfig can be disabled."""
+        config = DeduplicationConfig(enabled=False)
+        assert config.enabled is False
+
+
+class TestTriagePolicy:
+    def test_triage_policy_minimal_creation(self):
+        """Test TriagePolicy can be created with just a name."""
+        policy = TriagePolicy(name="test-policy")
+
+        assert policy.name == "test-policy"
+        assert isinstance(policy.path_classification, PathClassificationConfig)
+        assert isinstance(policy.evidence_gates, EvidenceGates)
+        assert isinstance(policy.deduplication, DeduplicationConfig)
+
+    def test_triage_policy_filter_defaults(self):
+        """Test TriagePolicy has strict filter defaults."""
+        policy = TriagePolicy(name="test")
+
+        assert policy.filter_third_party is True
+        assert policy.filter_tests is True
+        assert policy.filter_ci is True
+        assert policy.filter_docs is True
+        assert policy.filter_migrations is True
+        assert policy.tooling_requires_ci_boundary is True
+
+    def test_triage_policy_report_defaults(self):
+        """Test TriagePolicy doesn't report hardening/by_design by default."""
+        policy = TriagePolicy(name="test")
+
+        assert policy.report_hardening is False
+        assert policy.report_by_design is False
+
+    def test_triage_policy_custom_config(self):
+        """Test TriagePolicy accepts custom configuration."""
+        policy = TriagePolicy(
+            name="custom",
+            filter_third_party=False,
+            report_hardening=True,
+            path_classification=PathClassificationConfig(
+                runtime_roots=["custom/"]
+            )
+        )
+
+        assert policy.filter_third_party is False
+        assert policy.report_hardening is True
+        assert policy.path_classification.runtime_roots == ["custom/"]
+
+
+class TestPolicyEvaluationResult:
+    def test_policy_evaluation_result_creation(self):
+        """Test PolicyEvaluationResult can be created."""
+        result = PolicyEvaluationResult(
+            decision=PolicyDecision.REPORT_SECURITY_VRP,
+            path_classification=PathClassification.runtime,
+            gate_results={"command_injection": True},
+            reasoning=["All gates passed"],
+            original_disposition=Disposition.VALID_SECURITY_ISSUE,
+            overridden=False
+        )
+
+        assert result.decision == PolicyDecision.REPORT_SECURITY_VRP
+        assert result.path_classification == PathClassification.runtime
+        assert result.gate_results["command_injection"] is True
+        assert "All gates passed" in result.reasoning
+        assert result.original_disposition == Disposition.VALID_SECURITY_ISSUE
+        assert result.overridden is False

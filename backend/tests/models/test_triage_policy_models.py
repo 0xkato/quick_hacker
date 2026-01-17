@@ -127,6 +127,41 @@ class TestIntegerOverflowGate:
         assert gate.require_attacker_controlled_operands is True
 
 
+class TestMemoryCorruptionGate:
+    def test_memory_corruption_gate_defaults(self):
+        """Test MemoryCorruptionGate has correct defaults."""
+        gate = MemoryCorruptionGate()
+
+        assert gate.require_asan_trace is False
+        assert gate.require_release_config is True
+        assert gate.require_untrusted_input_path is True
+
+    def test_memory_corruption_gate_custom_config(self):
+        """Test MemoryCorruptionGate accepts custom config."""
+        gate = MemoryCorruptionGate(
+            require_asan_trace=True,
+            require_release_config=False
+        )
+
+        assert gate.require_asan_trace is True
+        assert gate.require_release_config is False
+        assert gate.require_untrusted_input_path is True
+
+
+class TestDosGate:
+    def test_dos_gate_defaults(self):
+        """Test DosGate has strict defaults."""
+        gate = DosGate()
+
+        assert gate.require_service_boundary is True
+
+    def test_dos_gate_custom_config(self):
+        """Test DosGate accepts custom config."""
+        gate = DosGate(require_service_boundary=False)
+
+        assert gate.require_service_boundary is False
+
+
 class TestEvidenceGates:
     def test_evidence_gates_defaults(self):
         """Test EvidenceGates initializes all gate types."""

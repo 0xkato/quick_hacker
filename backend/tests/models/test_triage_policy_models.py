@@ -200,6 +200,17 @@ class TestDeduplicationConfig:
         config = DeduplicationConfig(enabled=False)
         assert config.enabled is False
 
+    def test_deduplication_config_custom_strategy(self):
+        """Test DeduplicationConfig accepts valid strategy values."""
+        config_exact = DeduplicationConfig(strategy="exact")
+        assert config_exact.strategy == "exact"
+
+        config_fuzzy = DeduplicationConfig(strategy="fuzzy")
+        assert config_fuzzy.strategy == "fuzzy"
+
+        config_symbol = DeduplicationConfig(strategy="symbol")
+        assert config_symbol.strategy == "symbol"
+
 
 class TestTriagePolicy:
     def test_triage_policy_minimal_creation(self):

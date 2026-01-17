@@ -240,7 +240,7 @@ class EvidenceGates(BaseModel):
 class DeduplicationConfig(BaseModel):
     """Deduplication strategy configuration."""
     enabled: bool = True
-    strategy: str = "exact"  # "exact" | "fuzzy" | "symbol"
+    strategy: Literal["exact", "fuzzy", "symbol"] = "exact"
     exact_match_fields: list[str] = Field(
         default_factory=lambda: ["file_path", "line_start", "vulnerability_type", "title"]
     )

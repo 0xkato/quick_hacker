@@ -1,6 +1,7 @@
 """Semgrep-based vulnerability pattern scanner."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -111,6 +112,90 @@ class SemgrepScanner:
         cmd.append(scan_path)
 
         return cmd
+
+    def _map_severity(self, semgrep_severity: str) -> Severity:
+        """Map Semgrep severity to scanner Severity enum.
+
+        Args:
+            semgrep_severity: Semgrep severity (INFO, WARNING, ERROR)
+
+        Returns:
+            Mapped Severity enum value
+        """
+        severity_map = {
+            "ERROR": Severity.CRITICAL,
+            "WARNING": Severity.HIGH,
+            "INFO": Severity.MEDIUM,
+        }
+        return severity_map.get(semgrep_severity.upper(), Severity.MEDIUM)
+
+    def _extract_category(self, rule_id: str) -> str:
+        """Extract vulnerability category from rule ID.
+
+        Args:
+            rule_id: Semgrep rule identifier
+
+        Returns:
+            Category string (e.g., "sql-injection")
+        """
+        # Extract from rule ID pattern like "python-sql-injection-fstring"
+        parts = rule_id.lower().split("-")
+
+        # Common patterns
+        if "sql" in parts:
+            return "sql-injection"
+        elif "command" in parts:
+            return "command-injection"
+        elif "xss" in parts:
+            return "xss"
+        elif "buffer" in parts:
+            return "buffer-overflow"
+        elif "deserial" in parts:
+            return "deserialization"
+
+        # Fallback: use rule ID as category
+        return rule_id
+
+    def _parse_semgrep_output(self, output: str) -> list[ScanFinding]:
+        """Parse Semgrep JSON output into ScanFinding objects.
+
+        Args:
+            output: Semgrep JSON output string
+
+        Returns:
+            List of ScanFinding objects
+        """
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            return []
+
+        findings = []
+        for result in data.get("results", []):
+            # Extract rich context
+            extra = result.get("extra", {})
+            metadata = extra.get("metadata", {})
+
+            finding = ScanFinding(
+                tool=ScannerTool.SEMGREP,
+                severity=self._map_severity(extra.get("severity", "WARNING")),
+                title=result.get("check_id", "Unknown"),
+                file_path=result.get("path", ""),
+                line_start=result.get("start", {}).get("line", 0),
+                line_end=result.get("end", {}).get("line", 0),
+                snippet=extra.get("lines", ""),
+                confidence=0.9,  # Semgrep rules are high confidence
+                details={
+                    "rule_id": result.get("check_id"),
+                    "category": self._extract_category(result.get("check_id", "")),
+                    "message": extra.get("message", ""),
+                    "cwe": metadata.get("cwe"),
+                    "owasp": metadata.get("owasp"),
+                },
+            )
+            findings.append(finding)
+
+        return findings
 
     def scan(
         self,

@@ -156,3 +156,45 @@ def test_build_command_with_language_filter(tmp_path):
         config_idx = cmd.index("--config")
         config_path = cmd[config_idx + 1]
         assert "python" in config_path.lower()
+
+
+def test_parse_semgrep_output():
+    """Verify Semgrep JSON output parsing."""
+    # Sample Semgrep JSON output
+    semgrep_json = """{
+      "results": [
+        {
+          "check_id": "python-sql-injection-fstring",
+          "path": "app/db.py",
+          "start": {"line": 10, "col": 5},
+          "end": {"line": 10, "col": 60},
+          "extra": {
+            "message": "SQL injection via f-string",
+            "severity": "WARNING",
+            "metadata": {
+              "cwe": "CWE-89",
+              "owasp": "A03:2021",
+              "confidence": "HIGH"
+            },
+            "lines": "    cursor.execute(f\\"SELECT * FROM users WHERE id={user_id}\\")"
+          }
+        }
+      ],
+      "errors": []
+    }"""
+
+    with mock.patch('subprocess.run', return_value=mock.Mock(returncode=0)):
+        scanner = SemgrepScanner(workspace_root="/tmp")
+        findings = scanner._parse_semgrep_output(semgrep_json)
+
+        assert len(findings) == 1
+        finding = findings[0]
+
+        assert finding.tool == ScannerTool.SEMGREP
+        assert finding.file_path == "app/db.py"
+        assert finding.line_start == 10
+        assert finding.line_end == 10
+        assert finding.severity == Severity.HIGH
+        assert "sql" in finding.title.lower()
+        assert "cwe" in finding.details
+        assert finding.details["cwe"] == "CWE-89"

@@ -2,7 +2,7 @@
 import pytest
 from unittest import mock
 import subprocess
-from services.security_scanners.base import ScannerTool
+from services.security_scanners.base import ScannerTool, ScanResult
 from services.security_scanners.semgrep import SemgrepScanner, SemgrepNotAvailableError
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
 from pathlib import Path
@@ -55,3 +55,28 @@ def test_semgrep_raises_on_timeout(tmp_path):
     with mock.patch('subprocess.run', side_effect=subprocess.TimeoutExpired("semgrep", 5)):
         with pytest.raises(SemgrepNotAvailableError, match="timed out"):
             SemgrepScanner(workspace_root=str(tmp_path))
+
+
+def test_scan_method_exists(tmp_path):
+    """Verify scan method signature."""
+    with mock.patch('subprocess.run', return_value=mock.Mock(returncode=0)):
+        scanner = SemgrepScanner(workspace_root=str(tmp_path))
+
+        policy = WorkspacePolicy(
+            workspace_root=str(tmp_path),
+            max_file_size=10_000_000,
+            excluded_dirs={"node_modules", ".git"}
+        )
+        limits = ScanLimits()
+
+        # Should accept all parameters
+        result = scanner.scan(
+            workspace_policy=policy,
+            limits=limits,
+            language="python",
+            severity=["high", "critical"],
+            category="sql-injection",
+            path="app/"
+        )
+
+        assert isinstance(result, ScanResult)

@@ -4,7 +4,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from services.security_scanners.base import ScannerTool
+from services.security_scanners.base import (
+    ScannerTool,
+    WorkspacePolicy,
+    ScanLimits,
+    ScanResult,
+    ScanFinding,
+    Severity,
+)
 
 
 class SemgrepNotAvailableError(Exception):
@@ -56,3 +63,35 @@ class SemgrepScanner:
     def get_tool_name(self) -> ScannerTool:
         """Return the scanner tool identifier."""
         return ScannerTool.SEMGREP
+
+    def scan(
+        self,
+        workspace_policy: WorkspacePolicy,
+        limits: ScanLimits,
+        language: str | None = None,
+        severity: list[str] | None = None,
+        category: str | None = None,
+        path: str | None = None,
+    ) -> ScanResult:
+        """Run Semgrep scan with filters.
+
+        Args:
+            workspace_policy: Security boundaries (inherits excluded_dirs)
+            limits: Timeout and cancellation support
+            language: Filter by language (python, javascript, c, cpp, java)
+            severity: Filter by severity (default: ["high", "critical"])
+            category: Filter by category (sql-injection, command-injection, etc.)
+            path: Specific file/directory to scan (relative to workspace_root)
+
+        Returns:
+            ScanResult with findings containing rich context
+        """
+        # Minimal stub - return empty successful result
+        return ScanResult(
+            success=True,
+            findings=[],
+            files_scanned=0,
+            files_skipped=0,
+            bytes_scanned=0,
+            duration_ms=0,
+        )

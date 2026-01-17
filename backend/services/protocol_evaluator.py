@@ -1,5 +1,6 @@
 """Protocol-aware reportability evaluation service."""
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -209,8 +210,13 @@ class ProtocolEvaluator:
         self, ctx: EvaluationContext
     ) -> Optional[tuple[SubmissionResult, Optional[Disposition]]]:
         """Gate 4: Apply category-specific validation rules."""
-        # Placeholder - will be implemented in Task 2.3
-        pass
+        category = ctx.classification.category
+
+        if category in self.category_evaluators:
+            evaluator = self.category_evaluators[category]
+            return evaluator(ctx)
+
+        return None
 
     def _check_local_boundary(
         self, ctx: EvaluationContext
@@ -220,7 +226,7 @@ class ProtocolEvaluator:
             return None
 
         # Check if input channel is local without automation
-        if ctx.evidence.input_channel == InputChannel.LOCAL_UNPRIVILEGED:
+        if ctx.evidence.input_channel == InputChannel.local_unprivileged:
             # Look for automation signals
             automation_signals = [
                 "route_registration",
@@ -283,12 +289,83 @@ class ProtocolEvaluator:
         self, ctx: EvaluationContext
     ) -> Optional[tuple[SubmissionResult, Optional[Disposition]]]:
         """Command injection specific rules."""
-        # Placeholder - will be implemented in Task 2.3
-        pass
+        category_rules = ctx.policy.category_rules.get(
+            VulnerabilityCategory.COMMAND_INJECTION,
+            {}
+        )
+
+        requires_shell = category_rules.get("requires_shell", False)
+        if not requires_shell:
+            return None
+
+        snippet = (ctx.evidence.snippet or "").lower()
+
+        # Check for shell indicators
+        shell_indicators = [
+            "shell=true",
+            "shell = true",
+            "os.system",
+            "os.popen",
+            "/bin/sh -c",
+            "cmd.exe /c"
+        ]
+        has_shell = any(indicator in snippet for indicator in shell_indicators)
+
+        # Check for shell=False with argv
+        has_shell_false = "shell=false" in snippet or "shell = false" in snippet
+        has_argv_list = bool(re.search(r'\.split\(\s*["\']', snippet))
+
+        is_arg_injection = (has_shell_false or has_argv_list) and not has_shell
+
+        if category_rules.get("reject_argument_injection") and is_arg_injection:
+            new_disposition = Disposition.HARDENING
+            result = SubmissionResult(
+                protocol_id=ctx.policy.id,
+                decision=SubmissionDecision.DONT_SUBMIT,
+                reasons=[
+                    "Subprocess call uses shell=False with argument list",
+                    "This is argument injection, not arbitrary command execution",
+                    "No shell metacharacter expansion possible",
+                    f"Disposition downgraded: {ctx.classification.disposition.value} → {new_disposition.value}"
+                ],
+                disposition_modified=True,
+                disposition_reason="Not true command injection - argv parsing issue"
+            )
+            return (result, new_disposition)
+
+        if requires_shell and not has_shell:
+            result = SubmissionResult(
+                protocol_id=ctx.policy.id,
+                decision=SubmissionDecision.NEEDS_MORE_INFO,
+                reasons=[
+                    "Cannot confirm shell execution context",
+                    "Command injection requires shell=True or equivalent"
+                ],
+                missing_evidence=[
+                    "Is this using shell=True or os.system()?",
+                    "Show the exact subprocess invocation"
+                ],
+                suggested_next_steps=[
+                    "Read the sink function to verify shell usage"
+                ]
+            )
+            return (result, None)
+
+        return None
 
     def _evaluate_sql_injection(
         self, ctx: EvaluationContext
     ) -> Optional[tuple[SubmissionResult, Optional[Disposition]]]:
         """SQL injection specific rules."""
-        # Placeholder - will be implemented in Task 2.3
-        pass
+        checklist = ctx.classification.proof_checklist
+
+        # Check if already mitigated by StrictClassifier
+        if (checklist.dataflow_evidenced.status == ChecklistStatus.DISPROVEN and
+            checklist.dataflow_evidenced.reason_code in [
+                "mitigated_by_parameterization",
+                "mitigated_by_allowlist"
+            ]):
+            # Already handled correctly
+            return None
+
+        return None

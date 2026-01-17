@@ -152,6 +152,11 @@ class Finding(Base):
     triaged_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    # Protocol layer fields
+    submission_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    evidence_quest_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    evidence_quest_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Relationships
     evidence_blobs: Mapped[list["EvidenceBlob"]] = relationship(
         "EvidenceBlob",
@@ -196,3 +201,58 @@ class EvidenceBlob(Base):
 
     def __repr__(self) -> str:
         return f"<EvidenceBlob(id={self.id}, type={self.evidence_type}, match_type={self.match_type})>"
+
+
+class ProtocolPolicy(Base):
+    """Protocol policy configuration for submission evaluation."""
+    __tablename__ = "protocol_policies"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<ProtocolPolicy(id={self.id}, display_name={self.display_name})>"
+
+
+class EvidenceQuest(Base):
+    """Evidence gathering quest for findings."""
+    __tablename__ = "evidence_quests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("findings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    quest_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    missing_items: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    evidence_found: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    new_checklist_items: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    success: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<EvidenceQuest(id={self.id}, finding_id={self.finding_id}, status={self.status})>"

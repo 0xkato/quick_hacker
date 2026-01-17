@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-01-17",
+  "rules": {
+    "python-sql-injection-fstring": {
+      "severity": "high",
+      "category": "sql-injection",
+      "validity_checklist": "sql_injection",
+      "sink_type": "sql_execution",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "source": "custom",
+      "curated_date": "2026-01-17",
+      "notes": "Detects f-string SQL queries"
+    },
+    "python-sql-injection-format": {
+      "severity": "high",
+      "category": "sql-injection",
+      "validity_checklist": "sql_injection",
+      "sink_type": "sql_execution",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "source": "custom",
+      "curated_date": "2026-01-17",
+      "notes": "Detects .format() SQL queries"
+    },
+    "python-sql-injection-concat": {
+      "severity": "high",
+      "category": "sql-injection",
+      "validity_checklist": "sql_injection",
+      "sink_type": "sql_execution",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "source": "custom",
+      "curated_date": "2026-01-17",
+      "notes": "Detects concatenated SQL queries"
+    }
+  },
+  "categories": {
+    "sql-injection": {
+      "description": "SQL query construction with user input",
+      "sink_types": ["sql_execution", "orm_raw_query"]
+    }
+  }
+}

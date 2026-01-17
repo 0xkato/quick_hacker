@@ -1,0 +1,61 @@
+rules:
+  - id: python-sql-injection-fstring
+    pattern-either:
+      - pattern: $CURSOR.execute(f"...{$VAR}...")
+      - pattern: $CURSOR.execute(f'...{$VAR}...')
+    message: |
+      SQL query constructed using f-string with variable interpolation.
+      This could lead to SQL injection if $VAR contains user input.
+      Use parameterized queries instead: cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    languages:
+      - python
+    severity: WARNING
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+      category: security
+      subcategory: vuln
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+
+  - id: python-sql-injection-format
+    pattern-either:
+      - pattern: $CURSOR.execute("...".format(...))
+      - pattern: $CURSOR.execute('...'.format(...))
+      - pattern: $CURSOR.execute($STR.format(...))
+    message: |
+      SQL query constructed using .format() method.
+      This could lead to SQL injection if format arguments contain user input.
+      Use parameterized queries instead.
+    languages:
+      - python
+    severity: WARNING
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+      category: security
+      subcategory: vuln
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+
+  - id: python-sql-injection-concat
+    pattern-either:
+      - pattern: $CURSOR.execute("..." + $VAR + "...")
+      - pattern: $CURSOR.execute('...' + $VAR + '...')
+    message: |
+      SQL query constructed using string concatenation.
+      This could lead to SQL injection if $VAR contains user input.
+      Use parameterized queries instead.
+    languages:
+      - python
+    severity: WARNING
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+      category: security
+      subcategory: vuln
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH

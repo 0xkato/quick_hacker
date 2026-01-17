@@ -14,6 +14,7 @@ import {
 import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
+import { DownloadReportButton } from './DownloadReportButton';
 
 // Classification badge colors and labels
 const CLASSIFICATION_COLORS: Record<FindingClassification, string> = {
@@ -242,25 +243,31 @@ export function FindingsList({ findings, onFindingClick, onNavigateToFile }: Fin
               </span>
             )}
           </span>
-          {/* Show Filtered toggle */}
-          {triageFilteredCount > 0 && (
-            <button
-              onClick={() => {
-                setUserToggledShowFiltered(true);
-                setShowFiltered(!showFiltered);
-              }}
-              className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover"
-              style={{
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--vsc-border)',
-                color: showFiltered ? 'var(--vsc-accent)' : 'var(--vsc-text-muted)',
-              }}
-              title={showFiltered ? 'Hide filtered findings' : 'Show filtered findings'}
-            >
-              {showFiltered ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-              <span>{showFiltered ? 'Hide Filtered' : 'Show Filtered'}</span>
-            </button>
-          )}
+          {/* Right side controls */}
+          <div className="flex items-center gap-2">
+            {/* Download Report button */}
+            <DownloadReportButton agentId={findings[0]?.agent_id || ''} />
+
+            {/* Show Filtered toggle */}
+            {triageFilteredCount > 0 && (
+              <button
+                onClick={() => {
+                  setUserToggledShowFiltered(true);
+                  setShowFiltered(!showFiltered);
+                }}
+                className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--vsc-border)',
+                  color: showFiltered ? 'var(--vsc-accent)' : 'var(--vsc-text-muted)',
+                }}
+                title={showFiltered ? 'Hide filtered findings' : 'Show filtered findings'}
+              >
+                {showFiltered ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                <span>{showFiltered ? 'Hide Filtered' : 'Show Filtered'}</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Severity filter */}

@@ -140,6 +140,22 @@ class InputChannel(str, Enum):
     unknown = "unknown"
 
 
+class PathClassification(str, Enum):
+    """File path classification for scope filtering."""
+    runtime = "runtime"          # Production code
+    tooling = "tooling"          # Developer tools, may run on CI
+    third_party = "third_party"  # Vendored dependencies
+    unknown = "unknown"
+
+
+class PolicyDecision(str, Enum):
+    """Policy evaluation decision for VRP reporting."""
+    REPORT_SECURITY_VRP = "report_security_vrp"           # High confidence, VRP-reportable
+    REPORT_SECURITY_LOW_CONFIDENCE = "report_security_low" # Valid but needs review
+    HARDENING_ONLY = "hardening_only"                     # Not security issue, hardening opp
+    DO_NOT_REPORT = "do_not_report"                       # Filtered out
+
+
 # === Phase 4: Project Scope ===
 
 class ProjectScope(BaseModel):

@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   AlertCircle,
   Info,
-  ChevronRight,
   FileCode,
   ExternalLink,
   Shield,
@@ -56,6 +55,7 @@ const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['valid_security_issue', 'b
 interface FindingsListProps {
   findings: Finding[];
   onFindingClick?: (finding: Finding) => void;
+  onNavigateToFile?: (finding: Finding) => void;
 }
 
 const SEVERITY_ICONS: Record<Severity, React.ReactNode> = {
@@ -68,27 +68,19 @@ const SEVERITY_ICONS: Record<Severity, React.ReactNode> = {
 
 interface FindingCardProps {
   finding: Finding;
-  isExpanded: boolean;
-  onToggle: () => void;
   onClick: () => void;
+  onNavigateToFile: () => void;
 }
 
-function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProps) {
+function FindingCard({ finding, onClick, onNavigateToFile }: FindingCardProps) {
   return (
     <div className="soft-card" style={{ padding: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div
         className="flex items-start gap-2 p-3 cursor-pointer hover:bg-vsc-hover"
-        onClick={onToggle}
+        onClick={onClick}
         style={{ transition: 'var(--transition-default)' }}
       >
-        <button
-          className="mt-0.5 text-vsc-text-muted hover:text-vsc-text"
-          style={{ transition: 'transform 150ms ease-out', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             {/* Disposition badge (always shown if present) */}
@@ -183,7 +175,7 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onClick();
+            onNavigateToFile();
           }}
           className="btn-icon"
           title="Go to file"
@@ -191,141 +183,11 @@ function FindingCard({ finding, isExpanded, onToggle, onClick }: FindingCardProp
           <ExternalLink className="w-4 h-4" />
         </button>
       </div>
-
-      {/* Expanded content */}
-      {isExpanded && (
-        <div className="border-t border-vsc-border-subtle p-3 space-y-3 text-vsc-sm bg-vsc-sidebar overflow-y-auto" style={{ maxHeight: '400px' }}>
-          {/* Type */}
-          <div className="flex items-center gap-2">
-            <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">Type</span>
-            <span className="text-vsc-text">{finding.vulnerability_type}</span>
-          </div>
-
-          {/* Description */}
-          <div>
-            <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
-              Description
-            </h4>
-            <p className="text-vsc-text leading-relaxed">{finding.description}</p>
-          </div>
-
-          {/* Code snippet */}
-          {finding.code_snippet && (
-            <div>
-              <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
-                Code
-              </h4>
-              <pre
-                className="code-snippet whitespace-pre-wrap"
-                style={{ borderRadius: 'var(--radius-md)' }}
-              >
-                {finding.code_snippet}
-              </pre>
-            </div>
-          )}
-
-          {/* Attack scenario */}
-          {finding.attack_scenario && (
-            <div>
-              <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
-                Attack Scenario
-              </h4>
-              <p className="text-vsc-text leading-relaxed">{finding.attack_scenario}</p>
-            </div>
-          )}
-
-          {/* Recommended fix */}
-          {finding.recommended_fix && (
-            <div>
-              <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
-                Recommended Fix
-              </h4>
-              <p className="text-vsc-text leading-relaxed">{finding.recommended_fix}</p>
-            </div>
-          )}
-
-          {/* Confidence */}
-          <div className="flex items-center gap-2">
-            <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
-              Confidence
-            </span>
-            <div className="flex-1 max-w-24">
-              <div className="progress-bar">
-                <div
-                  className="progress-bar-fill"
-                  style={{ width: `${finding.confidence * 100}%` }}
-                />
-              </div>
-            </div>
-            <span className="text-vsc-xs text-vsc-text">{Math.round(finding.confidence * 100)}%</span>
-          </div>
-
-          {/* Triage reasoning */}
-          {finding.reasoning && finding.reasoning.length > 0 && (
-            <div>
-              <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-1">
-                Triage Reasoning
-              </h4>
-              <ul className="text-vsc-text leading-relaxed space-y-1 list-disc list-inside">
-                {finding.reasoning.map((reason, idx) => (
-                  <li key={idx}>{reason}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Proof checklist */}
-          {finding.proof_checklist && (
-            <div className="mt-4">
-              <ProofChecklistView checklist={finding.proof_checklist} />
-            </div>
-          )}
-
-          {/* Triage confidence scores */}
-          {(finding.classification_confidence !== undefined || finding.exploit_confidence !== undefined) && (
-            <div className="space-y-2">
-              {finding.classification_confidence !== undefined && (
-                <div className="flex items-center gap-2">
-                  <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
-                    Classification Confidence
-                  </span>
-                  <div className="flex-1 max-w-24">
-                    <div className="progress-bar">
-                      <div
-                        className="progress-bar-fill"
-                        style={{ width: `${finding.classification_confidence}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="text-vsc-xs text-vsc-text">{finding.classification_confidence}%</span>
-                </div>
-              )}
-              {finding.exploit_confidence !== undefined && (
-                <div className="flex items-center gap-2">
-                  <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
-                    Exploit Confidence
-                  </span>
-                  <div className="flex-1 max-w-24">
-                    <div className="progress-bar">
-                      <div
-                        className="progress-bar-fill"
-                        style={{ width: `${finding.exploit_confidence}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="text-vsc-xs text-vsc-text">{finding.exploit_confidence}%</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
-export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+export function FindingsList({ findings, onFindingClick, onNavigateToFile }: FindingsListProps) {
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
 
   const isTriageFiltered = useCallback(
@@ -347,18 +209,6 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
       setShowFiltered(true);
     }
   }, [findings, isReportable, showFiltered, userToggledShowFiltered]);
-
-  const toggleExpanded = (id: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
 
   // Filter by reportability (if triage system is enabled)
   const visibleFindings = showFiltered ? findings : findings.filter(isReportable);
@@ -468,9 +318,8 @@ export function FindingsList({ findings, onFindingClick }: FindingsListProps) {
             <FindingCard
               key={finding.id}
               finding={finding}
-              isExpanded={expandedIds.has(finding.id)}
-              onToggle={() => toggleExpanded(finding.id)}
               onClick={() => onFindingClick?.(finding)}
+              onNavigateToFile={() => onNavigateToFile?.(finding)}
             />
           ))
         )}

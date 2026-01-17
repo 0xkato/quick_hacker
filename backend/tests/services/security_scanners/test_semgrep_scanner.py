@@ -2,10 +2,11 @@
 import pytest
 from unittest import mock
 import subprocess
-from services.security_scanners.base import ScannerTool, ScanResult
+import shutil
+from pathlib import Path
+from services.security_scanners.base import ScannerTool, ScanResult, Severity
 from services.security_scanners.semgrep import SemgrepScanner, SemgrepNotAvailableError
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
-from pathlib import Path
 
 
 def test_semgrep_tool_enum_exists():
@@ -80,3 +81,41 @@ def test_scan_method_exists(tmp_path):
         )
 
         assert isinstance(result, ScanResult)
+
+
+@pytest.mark.skipif(not shutil.which("semgrep"), reason="Semgrep not installed")
+def test_semgrep_finds_sql_injection(tmp_path):
+    """Verify Semgrep detects SQL injection patterns (REAL SCAN)."""
+    # Copy fixture to tmp workspace
+    fixture_src = Path("tests/fixtures/vulnerable_code/python/sql_injection.py")
+    fixture_dst = tmp_path / "sql_injection.py"
+    shutil.copy(fixture_src, fixture_dst)
+
+    scanner = SemgrepScanner(workspace_root=str(tmp_path))
+
+    policy = WorkspacePolicy(
+        workspace_root=str(tmp_path),
+        max_file_size=10_000_000,
+        excluded_dirs=set()
+    )
+    limits = ScanLimits()
+
+    result = scanner.scan(
+        workspace_policy=policy,
+        limits=limits,
+        language="python",
+        severity=["high", "critical"]
+    )
+
+    # Should find at least 3 SQL injection vulnerabilities
+    assert result.success is True
+    assert len(result.findings) >= 3
+
+    # Check finding properties
+    finding = result.findings[0]
+    assert finding.tool == ScannerTool.SEMGREP
+    assert finding.severity in [Severity.HIGH, Severity.CRITICAL]
+    assert "sql" in finding.title.lower() or "injection" in finding.title.lower()
+    assert finding.file_path == "sql_injection.py"
+    assert finding.line_start > 0
+    assert len(finding.snippet) > 0

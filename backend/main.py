@@ -14,6 +14,7 @@ from routers import graph as graph_router
 from routers import session as session_router
 from routers import protocol_routes
 from routers import findings
+from routers import reports
 from routers.websocket import set_main_loop
 from database import init_db
 from database.connection import engine
@@ -151,6 +152,10 @@ app.include_router(
 )
 app.include_router(
     findings.router,
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    reports.router,
     dependencies=[Depends(require_auth)],
 )
 

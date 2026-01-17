@@ -10,7 +10,6 @@ import {
   Shield,
   Eye,
   EyeOff,
-  List,
   FileText,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -192,7 +191,7 @@ function FindingCard({ finding, onClick, onNavigateToFile }: FindingCardProps) {
 
 export function FindingsList({ findings, onFindingClick, onNavigateToFile }: FindingsListProps) {
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
-  const [viewMode, setViewMode] = useState<'list' | 'report'>('list');
+  const [showReportView, setShowReportView] = useState(false);
 
   const isTriageFiltered = useCallback(
     (finding: Finding) => Boolean(finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition)),
@@ -248,19 +247,19 @@ export function FindingsList({ findings, onFindingClick, onNavigateToFile }: Fin
           </span>
           {/* Right side controls */}
           <div className="flex items-center gap-2">
-            {/* View Mode Toggle */}
+            {/* Report View Button */}
             <button
-              onClick={() => setViewMode(viewMode === 'list' ? 'report' : 'list')}
+              onClick={() => setShowReportView(true)}
               className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover"
               style={{
                 borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--vsc-border)',
-                color: viewMode === 'report' ? 'var(--vsc-accent)' : 'var(--vsc-text-muted)',
+                color: 'var(--vsc-text-muted)',
               }}
-              title={viewMode === 'list' ? 'Show full report view' : 'Show list view'}
+              title="Show all findings in report view"
             >
-              {viewMode === 'list' ? <FileText className="w-3 h-3" /> : <List className="w-3 h-3" />}
-              <span>{viewMode === 'list' ? 'Report' : 'List'}</span>
+              <FileText className="w-3 h-3" />
+              <span>Report</span>
             </button>
 
             {/* Show Filtered toggle */}
@@ -323,39 +322,37 @@ export function FindingsList({ findings, onFindingClick, onNavigateToFile }: Fin
         </div>
       </div>
 
-      {/* Conditional view rendering */}
-      {viewMode === 'report' ? (
-        /* Full Report View */
-        <div className="flex-1 overflow-hidden">
-          <FindingsReportView
-            findings={filteredFindings}
-            onNavigateToFile={onNavigateToFile}
-          />
-        </div>
-      ) : (
-        /* List View */
-        <div className="flex-1 overflow-auto p-2 space-y-2">
-          {filteredFindings.length === 0 ? (
-            <div className="empty-state">
-              <Shield className="empty-state-icon" />
-              <p className="empty-state-text">
-                {findings.length === 0 ? 'No findings yet' : 'No findings match filter'}
-              </p>
-              {findings.length === 0 && (
-                <p className="text-vsc-xs mt-1">Run an agent to scan for vulnerabilities</p>
-              )}
-            </div>
-          ) : (
-            filteredFindings.map((finding) => (
-              <FindingCard
-                key={finding.id}
-                finding={finding}
-                onClick={() => onFindingClick?.(finding)}
-                onNavigateToFile={() => onNavigateToFile?.(finding)}
-              />
-            ))
-          )}
-        </div>
+      {/* List View */}
+      <div className="flex-1 overflow-auto p-2 space-y-2">
+        {filteredFindings.length === 0 ? (
+          <div className="empty-state">
+            <Shield className="empty-state-icon" />
+            <p className="empty-state-text">
+              {findings.length === 0 ? 'No findings yet' : 'No findings match filter'}
+            </p>
+            {findings.length === 0 && (
+              <p className="text-vsc-xs mt-1">Run an agent to scan for vulnerabilities</p>
+            )}
+          </div>
+        ) : (
+          filteredFindings.map((finding) => (
+            <FindingCard
+              key={finding.id}
+              finding={finding}
+              onClick={() => onFindingClick?.(finding)}
+              onNavigateToFile={() => onNavigateToFile?.(finding)}
+            />
+          ))
+        )}
+      </div>
+
+      {/* Report View Drawer */}
+      {showReportView && (
+        <FindingsReportView
+          findings={filteredFindings}
+          onClose={() => setShowReportView(false)}
+          onNavigateToFile={onNavigateToFile}
+        />
       )}
     </div>
   );

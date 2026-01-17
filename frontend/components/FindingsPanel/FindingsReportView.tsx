@@ -1,6 +1,7 @@
 'use client';
 
-import { FileCode } from 'lucide-react';
+import { useEffect } from 'react';
+import { X, FileCode, ExternalLink } from 'lucide-react';
 import type { Finding } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
 import { SubmissionBadge } from '@/components/FindingsList/SubmissionBadge';
@@ -8,6 +9,7 @@ import { SubmissionPanel } from '@/components/FindingDrawer/SubmissionPanel';
 
 interface FindingsReportViewProps {
   findings: Finding[];
+  onClose: () => void;
   onNavigateToFile?: (finding: Finding) => void;
 }
 
@@ -45,7 +47,25 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
 
 const REPORTABLE_DISPOSITIONS = new Set(['valid_security_issue', 'bug']);
 
-export function FindingsReportView({ findings, onNavigateToFile }: FindingsReportViewProps) {
+export function FindingsReportView({ findings, onClose, onNavigateToFile }: FindingsReportViewProps) {
+  // ESC key handler
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
+  // Body scroll lock
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, []);
   // Sort by severity
   const sortedFindings = [...findings].sort((a, b) => {
     const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -55,25 +75,51 @@ export function FindingsReportView({ findings, onNavigateToFile }: FindingsRepor
   const handleGoToFile = (finding: Finding) => {
     if (onNavigateToFile) {
       onNavigateToFile(finding);
+      onClose();
     }
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-vsc-bg">
-      {/* Header */}
-      <div className="sticky top-0 bg-vsc-sidebar border-b border-vsc-border-subtle px-6 py-4 z-10">
-        <h2 className="text-lg font-semibold text-vsc-text mb-1">All Findings Report</h2>
-        <p className="text-sm text-vsc-text-muted">
-          {findings.length} {findings.length === 1 ? 'finding' : 'findings'}
-        </p>
-      </div>
+    <>
+      {/* Overlay backdrop */}
+      <div
+        className="fixed inset-0 bg-black/60 z-40"
+        onClick={onClose}
+        style={{ backdropFilter: 'blur(2px)' }}
+      />
 
-      {/* Findings */}
-      {sortedFindings.length === 0 ? (
-        <div className="text-center py-12 text-vsc-text-muted">
-          No findings to display
+      {/* Drawer panel */}
+      <div
+        className="fixed top-0 right-0 bottom-0 z-50 bg-vsc-sidebar border-l border-vsc-border flex flex-col"
+        style={{
+          width: '700px',
+          boxShadow: '-4px 0 16px rgba(0, 0, 0, 0.3)',
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-vsc-border-subtle">
+          <div>
+            <h2 className="text-vsc-base text-vsc-text font-medium">All Findings Report</h2>
+            <p className="text-vsc-sm text-vsc-text-muted mt-1">
+              {findings.length} {findings.length === 1 ? 'finding' : 'findings'}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="btn-icon ml-4"
+            title="Close (Esc)"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
-      ) : (
+
+        {/* Findings - scrollable */}
+        <div className="flex-1 overflow-y-auto">
+          {sortedFindings.length === 0 ? (
+            <div className="text-center py-12 text-vsc-text-muted">
+              No findings to display
+            </div>
+          ) : (
         sortedFindings.map((finding, index) => (
           <div key={finding.id} className="border-b border-vsc-border-subtle">
             {/* Finding Header */}
@@ -332,7 +378,9 @@ export function FindingsReportView({ findings, onNavigateToFile }: FindingsRepor
             </div>
           </div>
         ))
-      )}
-    </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }

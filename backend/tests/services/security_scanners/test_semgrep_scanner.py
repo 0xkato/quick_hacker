@@ -198,3 +198,49 @@ def test_parse_semgrep_output():
         assert "sql" in finding.title.lower()
         assert "cwe" in finding.details
         assert finding.details["cwe"] == "CWE-89"
+
+
+def test_scan_execution_with_mock(tmp_path):
+    """Verify scan executes Semgrep and parses results."""
+    # Mock Semgrep execution
+    mock_output = """{
+      "results": [
+        {
+          "check_id": "test-rule",
+          "path": "test.py",
+          "start": {"line": 1, "col": 1},
+          "end": {"line": 1, "col": 10},
+          "extra": {
+            "message": "Test finding",
+            "severity": "WARNING",
+            "metadata": {},
+            "lines": "test code"
+          }
+        }
+      ]
+    }"""
+
+    with mock.patch('subprocess.run', return_value=mock.Mock(returncode=0)):
+        scanner = SemgrepScanner(workspace_root=str(tmp_path))
+
+    with mock.patch('subprocess.Popen') as mock_popen:
+        mock_process = mock.Mock()
+        mock_process.poll.side_effect = [None, None, 0]  # Running, then done
+        mock_process.communicate.return_value = (mock_output, "")
+        mock_popen.return_value = mock_process
+
+        policy = WorkspacePolicy(
+            workspace_root=str(tmp_path),
+            max_file_size=10_000_000,
+            excluded_dirs=set()
+        )
+        limits = ScanLimits()
+
+        result = scanner.scan(
+            workspace_policy=policy,
+            limits=limits,
+        )
+
+        assert result.success is True
+        assert len(result.findings) == 1
+        assert result.findings[0].file_path == "test.py"

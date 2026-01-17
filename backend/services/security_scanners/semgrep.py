@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from services.security_scanners.base import (
@@ -219,12 +220,66 @@ class SemgrepScanner:
         Returns:
             ScanResult with findings containing rich context
         """
-        # Minimal stub - return empty successful result
-        return ScanResult(
-            success=True,
-            findings=[],
-            files_scanned=0,
-            files_skipped=0,
-            bytes_scanned=0,
-            duration_ms=0,
-        )
+        severity = severity or ["high", "critical"]
+        scan_path = path or str(self.workspace_root)
+        if not os.path.isabs(scan_path):
+            scan_path = str(self.workspace_root / scan_path)
+
+        start_time = time.time()
+
+        # Build Semgrep command
+        cmd = self._build_command(language, severity, category, scan_path)
+
+        # Execute with timeout and cancellation support
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            findings = []
+            while process.poll() is None:
+                # Check cancellation
+                if limits.is_cancelled():
+                    process.terminate()
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    return ScanResult(
+                        success=False,
+                        findings=findings,
+                        files_scanned=0,
+                        files_skipped=0,
+                        bytes_scanned=0,
+                        duration_ms=duration_ms,
+                        cancelled=True,
+                    )
+
+                time.sleep(0.1)
+
+            # Parse results
+            stdout, stderr = process.communicate()
+            findings = self._parse_semgrep_output(stdout)
+
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            return ScanResult(
+                success=True,
+                findings=findings,
+                files_scanned=len(findings),  # Approximate
+                files_skipped=0,
+                bytes_scanned=0,
+                duration_ms=duration_ms,
+            )
+
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            return ScanResult(
+                success=False,
+                findings=[],
+                files_scanned=0,
+                files_skipped=0,
+                bytes_scanned=0,
+                duration_ms=duration_ms,
+                error=str(e),
+            )

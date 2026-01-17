@@ -12,6 +12,7 @@ from routers import settings as settings_router
 from routers import chat as chat_router
 from routers import graph as graph_router
 from routers import session as session_router
+from routers import protocol_routes
 from routers.websocket import set_main_loop
 from database import init_db
 from database.connection import engine
@@ -141,6 +142,10 @@ app.include_router(
     feature_flags.router,
     prefix="/api",
     tags=["FeatureFlags"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    protocol_routes.router,
     dependencies=[Depends(require_auth)],
 )
 

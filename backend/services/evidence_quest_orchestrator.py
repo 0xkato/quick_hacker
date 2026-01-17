@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -14,6 +15,50 @@ from models.schemas import (
     ChecklistItem,
     ChecklistStatus,
 )
+
+
+@dataclass
+class QuestResult:
+    """Result from a quest execution."""
+    success: bool
+    evidence_found: dict
+    new_checklist_items: dict[str, ChecklistItem]
+    error_message: Optional[str] = None
+
+
+class QuestPlaybook:
+    """
+    Base class for evidence quest playbooks.
+
+    Subclasses implement category-specific evidence gathering strategies.
+    """
+
+    def __init__(
+        self,
+        repo_root: str,
+        llm_client,
+        finding: Finding,
+        evidence: Evidence,
+        missing_items: list[str]
+    ):
+        self.repo_root = repo_root
+        self.llm_client = llm_client
+        self.finding = finding
+        self.evidence = evidence
+        self.missing_items = missing_items
+
+    async def execute(self) -> QuestResult:
+        """
+        Execute the quest playbook.
+
+        Returns:
+            QuestResult with discovered evidence
+        """
+        raise NotImplementedError
+
+    def _build_quest_prompt(self) -> str:
+        """Build LLM prompt for this quest."""
+        raise NotImplementedError
 
 
 class EvidenceQuestOrchestrator:
@@ -228,32 +273,30 @@ class EvidenceQuestOrchestrator:
         await self.db.commit()
 
 
-# Placeholder imports - will be implemented in Tasks 3.2-3.3
+# Placeholder quest classes - will be properly implemented in Task 3.3
 class CommandInjectionQuest:
     """Placeholder for Task 3.3."""
     def __init__(self, repo_root, llm_client, finding, evidence, missing_items):
         pass
-    async def execute(self):
-        from dataclasses import dataclass
-        @dataclass
-        class QuestResult:
-            success: bool = False
-            evidence_found: dict = None
-            new_checklist_items: dict = None
-            error_message: str = "Not yet implemented"
-        return QuestResult()
+
+    async def execute(self) -> QuestResult:
+        return QuestResult(
+            success=False,
+            evidence_found={},
+            new_checklist_items={},
+            error_message="Not yet implemented"
+        )
 
 
 class SQLInjectionQuest:
     """Placeholder for Task 3.3."""
     def __init__(self, repo_root, llm_client, finding, evidence, missing_items):
         pass
-    async def execute(self):
-        from dataclasses import dataclass
-        @dataclass
-        class QuestResult:
-            success: bool = False
-            evidence_found: dict = None
-            new_checklist_items: dict = None
-            error_message: str = "Not yet implemented"
-        return QuestResult()
+
+    async def execute(self) -> QuestResult:
+        return QuestResult(
+            success=False,
+            evidence_found={},
+            new_checklist_items={},
+            error_message="Not yet implemented"
+        )

@@ -1,5 +1,8 @@
 """Default protocol policies for submission evaluation."""
 
+import json
+import aiosqlite
+
 from models.schemas import (
     ProtocolPolicy,
     Disposition,
@@ -158,59 +161,64 @@ def get_research_disclosure_policy() -> ProtocolPolicy:
 class ProtocolPolicyLoader:
     """Load and manage protocol policies."""
 
-    def __init__(self, db_conn):
+    def __init__(self, db_conn: aiosqlite.Connection) -> None:
         self.db = db_conn
 
-    async def seed_default_policies(self):
+    async def seed_default_policies(self) -> None:
         """Seed database with default policies."""
-        import json
+        try:
+            policies = get_default_policies()
 
-        policies = get_default_policies()
+            for policy_id, policy in policies.items():
+                # Check if exists
+                cursor = await self.db.execute(
+                    "SELECT id FROM protocol_policies WHERE id = ?",
+                    (policy_id,)
+                )
+                existing = await cursor.fetchone()
 
-        for policy_id, policy in policies.items():
-            # Check if exists
-            cursor = await self.db.execute(
-                "SELECT id FROM protocol_policies WHERE id = ?",
-                (policy_id,)
-            )
-            existing = await cursor.fetchone()
+                # Convert to JSON-serializable format (sets -> lists)
+                config_json = json.dumps(policy.model_dump(mode='json'))
 
-            # Convert to JSON-serializable format (sets -> lists)
-            config_json = json.dumps(policy.model_dump(mode='json'))
+                if existing:
+                    # Update
+                    await self.db.execute("""
+                        UPDATE protocol_policies
+                        SET config = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    """, (config_json, policy_id))
+                else:
+                    # Insert
+                    await self.db.execute("""
+                        INSERT INTO protocol_policies (id, display_name, config, is_default)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        policy.id,
+                        policy.display_name,
+                        config_json,
+                        policy.id == "internal"
+                    ))
 
-            if existing:
-                # Update
-                await self.db.execute("""
-                    UPDATE protocol_policies
-                    SET config = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (config_json, policy_id))
-            else:
-                # Insert
-                await self.db.execute("""
-                    INSERT INTO protocol_policies (id, display_name, config, is_default)
-                    VALUES (?, ?, ?, ?)
-                """, (
-                    policy.id,
-                    policy.display_name,
-                    config_json,
-                    policy.id == "internal"
-                ))
-
-        await self.db.commit()
+            await self.db.commit()
+        except Exception as e:
+            await self.db.rollback()
+            raise RuntimeError(f"Failed to seed policies: {e}") from e
 
     async def get_policy(self, policy_id: str) -> ProtocolPolicy:
         """Load policy from database."""
-        import json
+        try:
+            cursor = await self.db.execute(
+                "SELECT config FROM protocol_policies WHERE id = ?",
+                (policy_id,)
+            )
+            row = await cursor.fetchone()
 
-        cursor = await self.db.execute(
-            "SELECT config FROM protocol_policies WHERE id = ?",
-            (policy_id,)
-        )
-        row = await cursor.fetchone()
+            if not row:
+                raise ValueError(f"Protocol policy not found: {policy_id}")
 
-        if not row:
-            raise ValueError(f"Protocol policy not found: {policy_id}")
-
-        config = json.loads(row[0])
-        return ProtocolPolicy(**config)
+            config = json.loads(row[0])
+            return ProtocolPolicy(**config)
+        except ValueError:
+            raise  # Re-raise ValueError for not found
+        except Exception as e:
+            raise RuntimeError(f"Failed to load policy {policy_id}: {e}") from e

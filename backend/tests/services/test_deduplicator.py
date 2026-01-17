@@ -2,7 +2,7 @@
 import pytest
 from models.schemas import Finding, DeduplicationConfig, Severity
 from services.deduplicator import deduplicate_findings
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class TestDeduplicateFindings:
@@ -22,7 +22,7 @@ class TestDeduplicateFindings:
                 title="Unsafe SQL query",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             ),
             Finding(
                 id="2",
@@ -35,7 +35,7 @@ class TestDeduplicateFindings:
                 title="Unsafe SQL query",
                 description="Different description",  # Only diff is description
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             ),
             Finding(
                 id="3",
@@ -48,7 +48,7 @@ class TestDeduplicateFindings:
                 title="Unsafe SQL query",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
         ]
 
@@ -75,7 +75,7 @@ class TestDeduplicateFindings:
                 title="Test 1",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             ),
             Finding(
                 id="2",
@@ -88,7 +88,7 @@ class TestDeduplicateFindings:
                 title="Test 2",  # Different title
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             ),
             Finding(
                 id="3",
@@ -101,7 +101,7 @@ class TestDeduplicateFindings:
                 title="Test 1",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
         ]
 
@@ -126,7 +126,7 @@ class TestDeduplicateFindings:
                 title="Test",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
         ]
 
@@ -150,7 +150,7 @@ class TestDeduplicateFindings:
                 title="Unsafe SQL query",
                 description="Test 1",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             ),
             Finding(
                 id="2",
@@ -163,7 +163,7 @@ class TestDeduplicateFindings:
                 title="Unsafe SQL query",
                 description="Test 2",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
         ]
 
@@ -188,7 +188,7 @@ class TestDeduplicateFindings:
                 title="Test",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
         ]
 
@@ -213,7 +213,7 @@ class TestDeduplicateFindings:
                 title="Test 1",
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             ),
             Finding(
                 id="2",
@@ -226,7 +226,7 @@ class TestDeduplicateFindings:
                 title="Test 2",  # Different title (but not in match fields)
                 description="Test",
                 confidence=0.9,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
         ]
 

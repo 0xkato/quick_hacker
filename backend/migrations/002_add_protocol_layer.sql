@@ -2,7 +2,12 @@
 -- Date: 2026-01-17
 
 -- Add protocol_id to projects
+-- Note: This column references protocol_policies(id) but SQLite's ALTER TABLE does not support
+-- adding FOREIGN KEY constraints. This relationship must be enforced at the application level.
 ALTER TABLE projects ADD COLUMN protocol_id TEXT DEFAULT 'internal';
+
+-- Add index for protocol_id lookups
+CREATE INDEX idx_projects_protocol ON projects(protocol_id);
 
 -- Create protocol_policies table
 CREATE TABLE IF NOT EXISTS protocol_policies (
@@ -16,8 +21,18 @@ CREATE TABLE IF NOT EXISTS protocol_policies (
 
 CREATE INDEX idx_protocol_policies_default ON protocol_policies(is_default);
 
+-- Add trigger to update updated_at timestamp on protocol_policies
+CREATE TRIGGER update_protocol_policies_timestamp
+AFTER UPDATE ON protocol_policies
+BEGIN
+    UPDATE protocol_policies SET updated_at = CURRENT_TIMESTAMP
+    WHERE id = NEW.id;
+END;
+
 -- Add submission fields to findings
 ALTER TABLE findings ADD COLUMN submission_result JSON;
+-- Note: evidence_quest_id references evidence_quests(id) but SQLite's ALTER TABLE does not support
+-- adding FOREIGN KEY constraints. This relationship must be enforced at the application level.
 ALTER TABLE findings ADD COLUMN evidence_quest_id TEXT;
 ALTER TABLE findings ADD COLUMN evidence_quest_completed BOOLEAN DEFAULT FALSE;
 

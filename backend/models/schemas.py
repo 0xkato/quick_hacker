@@ -156,6 +156,35 @@ class PolicyDecision(str, Enum):
     DO_NOT_REPORT = "do_not_report"                       # Filtered out
 
 
+class PathClassificationConfig(BaseModel):
+    """Path classification rules for scope filtering."""
+    runtime_roots: list[str] = Field(
+        default_factory=lambda: ["src/", "app/", "backend/", "frontend/", "lib/", "libs/"]
+    )
+    tooling_roots: list[str] = Field(
+        default_factory=lambda: ["tools/", "scripts/", "examples/", "samples/"]
+    )
+    third_party_roots: list[str] = Field(
+        default_factory=lambda: [
+            "third_party/", "vendor/", "node_modules/",
+            ".venv/", "site-packages/", "dist/", "build/",
+            "target/", "out/"
+        ]
+    )
+    test_roots: list[str] = Field(
+        default_factory=lambda: ["test/", "tests/", "__tests__/"]
+    )
+    ci_roots: list[str] = Field(
+        default_factory=lambda: [".github/", ".gitlab/", "ci/"]
+    )
+    docs_roots: list[str] = Field(
+        default_factory=lambda: ["docs/", "documentation/"]
+    )
+    migration_roots: list[str] = Field(
+        default_factory=lambda: ["migrations/", "migrate/"]
+    )
+
+
 # === Phase 4: Project Scope ===
 
 class ProjectScope(BaseModel):

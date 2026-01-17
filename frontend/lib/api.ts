@@ -24,6 +24,10 @@ import type {
   GraphStats,
   GraphNode,
 } from '@/types';
+import type {
+  ProtocolPolicy,
+  EvidenceQuest,
+} from '@/types/protocol';
 
 // Token management
 let getAccessToken: (() => string | null) | null = null;
@@ -862,6 +866,45 @@ export const session = {
 
   async deleteSnapshot(): Promise<void> {
     await request('/api/session/snapshot', { method: 'DELETE' });
+  },
+};
+
+// === Protocol Policy API ===
+
+export const protocolPolicies = {
+  async list(): Promise<ProtocolPolicy[]> {
+    const response = await request<{ policies: ProtocolPolicy[] }>('/api/protocol-policies');
+    return response.policies;
+  },
+
+  async get(policyId: string): Promise<ProtocolPolicy> {
+    return request<ProtocolPolicy>(`/api/protocol-policies/${policyId}`);
+  },
+
+  async updateProjectProtocol(projectId: string, protocolId: string): Promise<void> {
+    await request(`/api/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ protocol_id: protocolId }),
+    });
+  },
+};
+
+// === Evidence Quest API ===
+
+export const evidenceQuests = {
+  async trigger(findingId: string): Promise<void> {
+    await request(`/api/findings/${findingId}/quests`, {
+      method: 'POST',
+    });
+  },
+
+  async listForFinding(findingId: string): Promise<EvidenceQuest[]> {
+    const response = await request<{ quests: EvidenceQuest[] }>(`/api/findings/${findingId}/quests`);
+    return response.quests;
+  },
+
+  async get(questId: string): Promise<EvidenceQuest> {
+    return request<EvidenceQuest>(`/api/quests/${questId}`);
   },
 };
 

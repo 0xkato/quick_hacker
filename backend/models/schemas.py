@@ -200,6 +200,43 @@ class PathClassificationConfig(BaseModel):
         return v
 
 
+class CommandInjectionGate(BaseModel):
+    """Evidence requirements for command injection to be VRP-reportable."""
+    require_shell_execution: bool = True  # shell=True or os.system
+    require_attacker_controls_shell_string: bool = True  # Not just arguments
+    credible_boundaries: list[str] = Field(
+        default_factory=lambda: ["network", "ci_artifact", "repo_checkout", "file_input"]
+    )
+
+
+class IntegerOverflowGate(BaseModel):
+    """Evidence requirements for integer overflow to be VRP-reportable."""
+    require_attacker_controlled_operands: bool = True
+    require_overflow_prone_operation: bool = True  # Multiplication or unchecked addition
+    require_allocation_or_bounds_use: bool = True  # malloc, array index, buffer size
+    require_proven_mismatch: bool = True  # 32-bit calc → 64-bit size, etc.
+
+
+class MemoryCorruptionGate(BaseModel):
+    """Evidence requirements for memory corruption to be VRP-reportable."""
+    require_asan_trace: bool = False  # Prefer but don't require
+    require_release_config: bool = True  # Must trigger in NDEBUG/release
+    require_untrusted_input_path: bool = True
+
+
+class DosGate(BaseModel):
+    """Evidence requirements for DoS to be VRP-reportable."""
+    require_service_boundary: bool = True  # Network service, not local script
+
+
+class EvidenceGates(BaseModel):
+    """Per-vulnerability-type evidence requirements."""
+    command_injection: CommandInjectionGate = Field(default_factory=CommandInjectionGate)
+    integer_overflow: IntegerOverflowGate = Field(default_factory=IntegerOverflowGate)
+    memory_corruption: MemoryCorruptionGate = Field(default_factory=MemoryCorruptionGate)
+    dos: DosGate = Field(default_factory=DosGate)
+
+
 # === Phase 4: Project Scope ===
 
 class ProjectScope(BaseModel):

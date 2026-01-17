@@ -1,6 +1,6 @@
 """Tests for TriagePolicy models."""
 import pytest
-from models.schemas import PathClassification, PolicyDecision, PathClassificationConfig
+from models.schemas import PathClassification, PolicyDecision, PathClassificationConfig, CommandInjectionGate, IntegerOverflowGate, EvidenceGates, MemoryCorruptionGate, DosGate
 
 
 class TestPathClassification:
@@ -83,3 +83,66 @@ class TestPathClassificationConfig:
         """Test PathClassificationConfig requires paths to end with '/'."""
         with pytest.raises(ValueError, match="Path must end with '/'"):
             PathClassificationConfig(runtime_roots=["src"])
+
+
+class TestCommandInjectionGate:
+    def test_command_injection_gate_defaults(self):
+        """Test CommandInjectionGate has strict defaults."""
+        gate = CommandInjectionGate()
+
+        assert gate.require_shell_execution is True
+        assert gate.require_attacker_controls_shell_string is True
+        assert "network" in gate.credible_boundaries
+        assert "ci_artifact" in gate.credible_boundaries
+
+    def test_command_injection_gate_custom_config(self):
+        """Test CommandInjectionGate accepts custom config."""
+        gate = CommandInjectionGate(
+            require_shell_execution=False,
+            credible_boundaries=["network"]
+        )
+
+        assert gate.require_shell_execution is False
+        assert gate.credible_boundaries == ["network"]
+
+
+class TestIntegerOverflowGate:
+    def test_integer_overflow_gate_defaults(self):
+        """Test IntegerOverflowGate has strict defaults."""
+        gate = IntegerOverflowGate()
+
+        assert gate.require_attacker_controlled_operands is True
+        assert gate.require_overflow_prone_operation is True
+        assert gate.require_allocation_or_bounds_use is True
+        assert gate.require_proven_mismatch is True
+
+    def test_integer_overflow_gate_custom_config(self):
+        """Test IntegerOverflowGate accepts custom config."""
+        gate = IntegerOverflowGate(
+            require_proven_mismatch=False
+        )
+
+        assert gate.require_proven_mismatch is False
+        # Others still default to True
+        assert gate.require_attacker_controlled_operands is True
+
+
+class TestEvidenceGates:
+    def test_evidence_gates_defaults(self):
+        """Test EvidenceGates initializes all gate types."""
+        gates = EvidenceGates()
+
+        assert isinstance(gates.command_injection, CommandInjectionGate)
+        assert isinstance(gates.integer_overflow, IntegerOverflowGate)
+        assert isinstance(gates.memory_corruption, MemoryCorruptionGate)
+        assert isinstance(gates.dos, DosGate)
+
+    def test_evidence_gates_custom_gates(self):
+        """Test EvidenceGates accepts custom gate configs."""
+        gates = EvidenceGates(
+            command_injection=CommandInjectionGate(require_shell_execution=False)
+        )
+
+        assert gates.command_injection.require_shell_execution is False
+        # Others still use defaults
+        assert gates.integer_overflow.require_attacker_controlled_operands is True

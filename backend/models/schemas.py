@@ -184,6 +184,21 @@ class PathClassificationConfig(BaseModel):
         default_factory=lambda: ["migrations/", "migrate/"]
     )
 
+    @field_validator('runtime_roots', 'tooling_roots', 'third_party_roots', 'test_roots', 'ci_roots', 'docs_roots', 'migration_roots')
+    @classmethod
+    def validate_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("Path roots cannot be empty")
+        return v
+
+    @field_validator('runtime_roots', 'tooling_roots', 'third_party_roots', 'test_roots', 'ci_roots', 'docs_roots', 'migration_roots')
+    @classmethod
+    def validate_trailing_slash(cls, v: list[str]) -> list[str]:
+        for path in v:
+            if not path.endswith('/'):
+                raise ValueError(f"Path must end with '/': {path}")
+        return v
+
 
 # === Phase 4: Project Scope ===
 

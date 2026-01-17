@@ -73,3 +73,13 @@ class TestPathClassificationConfig:
         assert config.tooling_roots == ["custom/tools/"]
         # Defaults preserved for others
         assert "third_party/" in config.third_party_roots
+
+    def test_path_classification_config_rejects_empty_lists(self):
+        """Test PathClassificationConfig rejects empty root lists."""
+        with pytest.raises(ValueError, match="Path roots cannot be empty"):
+            PathClassificationConfig(runtime_roots=[])
+
+    def test_path_classification_config_requires_trailing_slash(self):
+        """Test PathClassificationConfig requires paths to end with '/'."""
+        with pytest.raises(ValueError, match="Path must end with '/'"):
+            PathClassificationConfig(runtime_roots=["src"])

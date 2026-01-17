@@ -1,3 +1,7 @@
+// === Imports ===
+
+import { SubmissionResult } from './protocol';
+
 // === Enums ===
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -216,6 +220,10 @@ export interface Finding {
   triage_policy_version?: string;
   triaged_at?: string;
   category?: string;
+  // Protocol evaluation
+  submission_result?: SubmissionResult;
+  evidence_quest_id?: string;
+  evidence_quest_completed?: boolean;
 }
 
 // === WebSocket ===

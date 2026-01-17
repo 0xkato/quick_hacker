@@ -1,28 +1,49 @@
 'use client';
 
-import { AlertTriangle, AlertCircle, Info, FileCode } from 'lucide-react';
-import type { Finding, Severity } from '@/types';
+import { FileCode } from 'lucide-react';
+import type { Finding } from '@/types';
+import ProofChecklistView from './ProofChecklistView';
+import { SubmissionBadge } from '@/components/FindingsList/SubmissionBadge';
+import { SubmissionPanel } from '@/components/FindingDrawer/SubmissionPanel';
 
 interface FindingsReportViewProps {
   findings: Finding[];
   onNavigateToFile?: (finding: Finding) => void;
 }
 
-const SEVERITY_ICONS: Record<Severity, React.ReactNode> = {
-  critical: <AlertTriangle className="w-5 h-5 text-sev-critical" />,
-  high: <AlertTriangle className="w-5 h-5 text-sev-high" />,
-  medium: <AlertCircle className="w-5 h-5 text-sev-medium" />,
-  low: <Info className="w-5 h-5 text-sev-low" />,
-  info: <Info className="w-5 h-5 text-sev-info" />,
+const DISPOSITION_COLORS: Record<string, string> = {
+  valid_security_issue: 'rgba(220, 38, 38, 0.85)',
+  bug: 'rgba(234, 88, 12, 0.85)',
+  misconfiguration: 'rgba(234, 179, 8, 0.85)',
+  hardening: 'rgba(59, 130, 246, 0.85)',
+  by_design: 'rgba(107, 114, 128, 0.85)',
+  speculative: 'rgba(156, 163, 175, 0.85)',
 };
 
-const SEVERITY_COLORS: Record<Severity, string> = {
-  critical: 'border-sev-critical bg-sev-critical/10',
-  high: 'border-sev-high bg-sev-high/10',
-  medium: 'border-sev-medium bg-sev-medium/10',
-  low: 'border-sev-low bg-sev-low/10',
-  info: 'border-vsc-border bg-vsc-sidebar',
+const DISPOSITION_LABELS: Record<string, string> = {
+  valid_security_issue: 'Valid Issue',
+  bug: 'Bug',
+  misconfiguration: 'Misconfiguration',
+  hardening: 'Hardening',
+  by_design: 'By Design',
+  speculative: 'Speculative',
 };
+
+const CLASSIFICATION_COLORS: Record<string, string> = {
+  security_issue: 'rgba(220, 38, 38, 0.85)',
+  bug: 'rgba(202, 138, 4, 0.85)',
+  misconfiguration: 'rgba(234, 88, 12, 0.85)',
+  hardening: 'rgba(59, 130, 246, 0.85)',
+};
+
+const CLASSIFICATION_LABELS: Record<string, string> = {
+  security_issue: 'Security Issue',
+  bug: 'Bug',
+  misconfiguration: 'Misconfiguration',
+  hardening: 'Hardening',
+};
+
+const REPORTABLE_DISPOSITIONS = new Set(['valid_security_issue', 'bug']);
 
 export function FindingsReportView({ findings, onNavigateToFile }: FindingsReportViewProps) {
   // Sort by severity
@@ -31,159 +52,287 @@ export function FindingsReportView({ findings, onNavigateToFile }: FindingsRepor
     return severityOrder[a.severity] - severityOrder[b.severity];
   });
 
-  // Count by severity
-  const severityCounts = findings.reduce((acc, f) => {
-    acc[f.severity] = (acc[f.severity] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+  const handleGoToFile = (finding: Finding) => {
+    if (onNavigateToFile) {
+      onNavigateToFile(finding);
+    }
+  };
 
   return (
-    <div className="h-full overflow-auto bg-vsc-bg">
+    <div className="h-full overflow-y-auto bg-vsc-bg">
       {/* Header */}
-      <div className="sticky top-0 bg-vsc-sidebar border-b border-vsc-border-subtle p-4 z-10">
-        <h2 className="text-lg font-semibold text-vsc-text mb-2">Security Findings Report</h2>
-        <div className="flex items-center gap-4 text-sm text-vsc-text-muted">
-          <span>Total: {findings.length}</span>
-          {severityCounts.critical > 0 && (
-            <span className="text-sev-critical">Critical: {severityCounts.critical}</span>
-          )}
-          {severityCounts.high > 0 && (
-            <span className="text-sev-high">High: {severityCounts.high}</span>
-          )}
-          {severityCounts.medium > 0 && (
-            <span className="text-sev-medium">Medium: {severityCounts.medium}</span>
-          )}
-          {severityCounts.low > 0 && (
-            <span className="text-sev-low">Low: {severityCounts.low}</span>
-          )}
-        </div>
+      <div className="sticky top-0 bg-vsc-sidebar border-b border-vsc-border-subtle px-6 py-4 z-10">
+        <h2 className="text-lg font-semibold text-vsc-text mb-1">All Findings Report</h2>
+        <p className="text-sm text-vsc-text-muted">
+          {findings.length} {findings.length === 1 ? 'finding' : 'findings'}
+        </p>
       </div>
 
       {/* Findings */}
-      <div className="p-4 space-y-6">
-        {sortedFindings.length === 0 ? (
-          <div className="text-center py-12 text-vsc-text-muted">
-            No findings to display
-          </div>
-        ) : (
-          sortedFindings.map((finding, index) => (
-            <div
-              key={finding.id}
-              className={`border-l-4 rounded-r-lg p-4 ${SEVERITY_COLORS[finding.severity]}`}
-            >
-              {/* Finding header */}
-              <div className="flex items-start gap-3 mb-3">
-                <div className="mt-0.5">{SEVERITY_ICONS[finding.severity]}</div>
-                <div className="flex-1">
-                  <h3 className="text-base font-semibold text-vsc-text mb-1">
-                    {index + 1}. {finding.title}
-                  </h3>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="px-2 py-0.5 text-xs font-medium uppercase bg-vsc-bg border border-vsc-border rounded">
-                      {finding.severity}
-                    </span>
-                    {finding.vulnerability_type && (
-                      <span className="px-2 py-0.5 text-xs bg-vsc-bg border border-vsc-border rounded">
-                        {finding.vulnerability_type}
-                      </span>
-                    )}
-                    {finding.cwe_id && (
-                      <span className="px-2 py-0.5 text-xs bg-vsc-bg border border-vsc-border rounded">
-                        CWE-{finding.cwe_id}
-                      </span>
-                    )}
-                    {finding.disposition && (
-                      <span className="px-2 py-0.5 text-xs bg-vsc-bg border border-vsc-border rounded">
-                        {finding.disposition}
-                      </span>
-                    )}
-                  </div>
-                </div>
+      {sortedFindings.length === 0 ? (
+        <div className="text-center py-12 text-vsc-text-muted">
+          No findings to display
+        </div>
+      ) : (
+        sortedFindings.map((finding, index) => (
+          <div key={finding.id} className="border-b border-vsc-border-subtle">
+            {/* Finding Header */}
+            <div className="px-6 py-4 bg-vsc-sidebar">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-vsc-text-muted text-vsc-sm font-semibold">
+                  #{index + 1}
+                </span>
+                {/* Disposition badge */}
+                {finding.disposition && (
+                  <span
+                    className="text-vsc-xs px-2 py-0.5 font-medium text-white"
+                    style={{
+                      borderRadius: 'var(--radius-sm)',
+                      background: DISPOSITION_COLORS[finding.disposition],
+                    }}
+                    title={`Triage disposition: ${DISPOSITION_LABELS[finding.disposition]}`}
+                  >
+                    {DISPOSITION_LABELS[finding.disposition]}
+                  </span>
+                )}
+                {/* Severity badge */}
+                {finding.severity && finding.disposition && REPORTABLE_DISPOSITIONS.has(finding.disposition) && (
+                  <span
+                    className="text-vsc-xs px-2 py-0.5 font-medium"
+                    style={{
+                      borderRadius: 'var(--radius-sm)',
+                      background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
+                        : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
+                        : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
+                        : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
+                        : 'rgba(117, 190, 255, 0.25)',
+                      color: finding.severity === 'critical' ? 'var(--sev-critical)'
+                        : finding.severity === 'high' ? 'var(--sev-high)'
+                        : finding.severity === 'medium' ? 'var(--sev-medium)'
+                        : finding.severity === 'low' ? 'var(--sev-low)'
+                        : 'var(--sev-info)',
+                    }}
+                  >
+                    {finding.severity.toUpperCase()}
+                  </span>
+                )}
+                {/* Legacy: Show severity if no disposition */}
+                {finding.severity && !finding.disposition && (
+                  <span
+                    className="text-vsc-xs px-2 py-0.5 font-medium"
+                    style={{
+                      borderRadius: 'var(--radius-sm)',
+                      background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
+                        : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
+                        : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
+                        : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
+                        : 'rgba(117, 190, 255, 0.25)',
+                      color: finding.severity === 'critical' ? 'var(--sev-critical)'
+                        : finding.severity === 'high' ? 'var(--sev-high)'
+                        : finding.severity === 'medium' ? 'var(--sev-medium)'
+                        : finding.severity === 'low' ? 'var(--sev-low)'
+                        : 'var(--sev-info)',
+                    }}
+                  >
+                    {finding.severity.toUpperCase()}
+                  </span>
+                )}
+                {/* Classification badge */}
+                {finding.classification && (
+                  <span
+                    className="text-vsc-xs px-2 py-0.5 font-medium text-white"
+                    style={{
+                      borderRadius: 'var(--radius-sm)',
+                      background: CLASSIFICATION_COLORS[finding.classification],
+                    }}
+                  >
+                    {CLASSIFICATION_LABELS[finding.classification]}
+                  </span>
+                )}
+                {/* Non-reportable notice */}
+                {finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition) && (
+                  <span
+                    className="text-vsc-xs px-2 py-0.5 font-medium text-vsc-text-muted"
+                    style={{
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(107, 114, 128, 0.2)',
+                    }}
+                    title="This finding was filtered by triage"
+                  >
+                    Filtered by triage
+                  </span>
+                )}
+                {/* Submission badge */}
+                {finding.submission_result && (
+                  <SubmissionBadge submissionResult={finding.submission_result} />
+                )}
               </div>
+              <h3 className="text-vsc-base text-vsc-text font-medium">{finding.title}</h3>
+            </div>
 
-              {/* Location */}
-              {finding.file_path && (
-                <div className="mb-3">
-                  <div className="flex items-center gap-2 text-sm">
-                    <FileCode className="w-4 h-4 text-vsc-text-muted" />
-                    <button
-                      onClick={() => onNavigateToFile?.(finding)}
-                      className="text-vsc-textLink hover:underline font-mono"
-                    >
-                      {finding.file_path}
-                      {finding.line_start && `:${finding.line_start}`}
-                      {finding.line_end && finding.line_end !== finding.line_start && `-${finding.line_end}`}
-                    </button>
-                  </div>
-                </div>
+            {/* File path */}
+            <div className="flex items-center justify-between px-6 py-3 bg-vsc-bg border-b border-vsc-border-subtle">
+              <div className="flex items-center gap-2 text-vsc-sm text-vsc-text-muted min-w-0">
+                <FileCode className="w-4 h-4 flex-shrink-0" />
+                <span className="truncate">{finding.file_path}</span>
+                <span className="text-vsc-text-link flex-shrink-0">L{finding.line_start}</span>
+              </div>
+              {onNavigateToFile && (
+                <button
+                  onClick={() => handleGoToFile(finding)}
+                  className="btn-primary ml-4 flex-shrink-0"
+                  title="Go to file"
+                >
+                  Go to File
+                </button>
               )}
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 space-y-6 text-vsc-sm">
+              {/* Type */}
+              <div className="flex items-center gap-2">
+                <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">Type</span>
+                <span className="text-vsc-text">{finding.vulnerability_type}</span>
+              </div>
 
               {/* Description */}
-              {finding.description && (
-                <div className="mb-3">
-                  <h4 className="text-sm font-semibold text-vsc-text mb-1">Description</h4>
-                  <p className="text-sm text-vsc-text-muted leading-relaxed whitespace-pre-wrap">
-                    {finding.description}
-                  </p>
-                </div>
-              )}
-
-              {/* Vulnerable Code */}
-              {(finding.vulnerable_code || finding.code_snippet) && (
-                <div className="mb-3">
-                  <h4 className="text-sm font-semibold text-vsc-text mb-1">Vulnerable Code</h4>
-                  <pre className="bg-vsc-bg border border-vsc-border rounded p-3 overflow-x-auto text-xs">
-                    <code>{finding.vulnerable_code || finding.code_snippet}</code>
-                  </pre>
-                </div>
-              )}
-
-              {/* Attack Scenario */}
-              {finding.attack_scenario && (
-                <div className="mb-3">
-                  <h4 className="text-sm font-semibold text-vsc-text mb-1">Attack Scenario</h4>
-                  <p className="text-sm text-vsc-text-muted leading-relaxed whitespace-pre-wrap">
-                    {finding.attack_scenario}
-                  </p>
-                </div>
-              )}
-
-              {/* Proof of Concept */}
-              {finding.proof_of_concept && (
-                <div className="mb-3">
-                  <h4 className="text-sm font-semibold text-vsc-text mb-1">Proof of Concept</h4>
-                  <pre className="bg-vsc-bg border border-vsc-border rounded p-3 overflow-x-auto text-xs">
-                    <code>{finding.proof_of_concept}</code>
-                  </pre>
-                </div>
-              )}
-
-              {/* Recommended Fix */}
-              {finding.recommended_fix && (
-                <div className="mb-3">
-                  <h4 className="text-sm font-semibold text-vsc-text mb-1">Recommended Fix</h4>
-                  <p className="text-sm text-vsc-text-muted leading-relaxed whitespace-pre-wrap">
-                    {finding.recommended_fix}
-                  </p>
-                </div>
-              )}
-
-              {/* Additional metadata */}
-              <div className="flex items-center gap-4 text-xs text-vsc-text-muted pt-2 border-t border-vsc-border-subtle">
-                {finding.confidence !== undefined && (
-                  <span>Confidence: {(finding.confidence * 100).toFixed(0)}%</span>
-                )}
-                {finding.classification_confidence !== undefined && (
-                  <span>Classification: {finding.classification_confidence}/100</span>
-                )}
-                {finding.created_at && (
-                  <span>Found: {new Date(finding.created_at).toLocaleString()}</span>
-                )}
+              <div>
+                <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                  Description
+                </h4>
+                <p className="text-vsc-text leading-relaxed">{finding.description}</p>
               </div>
+
+              {/* Code snippet */}
+              {finding.code_snippet && (
+                <div>
+                  <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                    Code
+                  </h4>
+                  <pre
+                    className="code-snippet whitespace-pre-wrap"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                  >
+                    {finding.code_snippet}
+                  </pre>
+                </div>
+              )}
+
+              {/* Attack scenario */}
+              {finding.attack_scenario && (
+                <div>
+                  <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                    Attack Scenario
+                  </h4>
+                  <p className="text-vsc-text leading-relaxed">{finding.attack_scenario}</p>
+                </div>
+              )}
+
+              {/* Recommended fix */}
+              {finding.recommended_fix && (
+                <div>
+                  <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                    Recommended Fix
+                  </h4>
+                  <p className="text-vsc-text leading-relaxed">{finding.recommended_fix}</p>
+                </div>
+              )}
+
+              {/* Confidence */}
+              <div className="flex items-center gap-2">
+                <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
+                  Confidence
+                </span>
+                <div className="flex-1 max-w-48">
+                  <div className="progress-bar">
+                    <div
+                      className="progress-bar-fill"
+                      style={{ width: `${finding.confidence * 100}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="text-vsc-xs text-vsc-text">{Math.round(finding.confidence * 100)}%</span>
+              </div>
+
+              {/* Triage reasoning */}
+              {finding.reasoning && finding.reasoning.length > 0 && (
+                <div>
+                  <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                    Triage Reasoning
+                  </h4>
+                  <ul className="text-vsc-text leading-relaxed space-y-1 list-disc list-inside">
+                    {finding.reasoning.map((reason, idx) => (
+                      <li key={idx}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Proof checklist */}
+              {finding.proof_checklist && (
+                <div>
+                  <ProofChecklistView checklist={finding.proof_checklist} />
+                </div>
+              )}
+
+              {/* Triage confidence scores */}
+              {(finding.classification_confidence !== undefined || finding.exploit_confidence !== undefined) && (
+                <div className="space-y-3">
+                  {finding.classification_confidence !== undefined && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
+                        Classification Confidence
+                      </span>
+                      <div className="flex-1 max-w-48">
+                        <div className="progress-bar">
+                          <div
+                            className="progress-bar-fill"
+                            style={{ width: `${finding.classification_confidence}%` }}
+                          />
+                        </div>
+                      </div>
+                      <span className="text-vsc-xs text-vsc-text">{finding.classification_confidence}%</span>
+                    </div>
+                  )}
+                  {finding.exploit_confidence !== undefined && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider">
+                        Exploit Confidence
+                      </span>
+                      <div className="flex-1 max-w-48">
+                        <div className="progress-bar">
+                          <div
+                            className="progress-bar-fill"
+                            style={{ width: `${finding.exploit_confidence}%` }}
+                          />
+                        </div>
+                      </div>
+                      <span className="text-vsc-xs text-vsc-text">{finding.exploit_confidence}%</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Submission Panel */}
+              {finding.submission_result && (
+                <div>
+                  <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                    Submission Evaluation
+                  </h4>
+                  <SubmissionPanel
+                    submissionResult={finding.submission_result}
+                    findingId={finding.id}
+                    onRetriggerQuest={() => {
+                      console.log('Quest retriggered for finding:', finding.id);
+                    }}
+                  />
+                </div>
+              )}
             </div>
-          ))
-        )}
-      </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }

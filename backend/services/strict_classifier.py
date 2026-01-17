@@ -281,8 +281,8 @@ class StrictClassifier:
             )
 
         # Check proximity
-        source_lines = [m.line for m in source_matches]
-        sink_lines = [m.line for m in sink_matches]
+        source_lines = [m["line"] for m in source_matches]
+        sink_lines = [m["line"] for m in sink_matches]
 
         min_distance = min(abs(s - k) for s in source_lines for k in sink_lines)
 
@@ -349,7 +349,7 @@ class StrictClassifier:
 
         # Check for source matches that indicate HTTP/WS
         source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
-        if any("request" in m.snippet.lower() or "websocket" in m.snippet.lower()
+        if any("request" in m["snippet"].lower() or "websocket" in m["snippet"].lower()
                for m in source_matches):
             return ChecklistItem(
                 value=True,
@@ -651,12 +651,12 @@ class StrictClassifier:
         # 2. Route snippets (from matches)
         route_matches = [m for m in evidence.matches if m["match_type"] == "route_registration"]
         for match in route_matches:
-            code_snippets.append(match.snippet)
+            code_snippets.append(match["snippet"])
 
         # 3. Auth gate snippets
         auth_matches = [m for m in evidence.matches if m["match_type"] == "auth_gate"]
         for match in auth_matches:
-            code_snippets.append(match.snippet)
+            code_snippets.append(match["snippet"])
 
         combined = " ".join(code_snippets).lower()
 

@@ -13,10 +13,10 @@ import pytest
 from models.schemas import (
     Finding,
     ChecklistStatus,
-    Disposition,
-)
+    Disposition)
 from services.strict_classifier import StrictClassifier
 from models.schemas import Evidence, InputChannel
+from services.evidence_gatherer import SSRFAnalysis  # For dict creation reference
 
 
 @pytest.fixture
@@ -39,8 +39,7 @@ def base_finding():
         vulnerability_type="Unknown",
         severity="high",
         confidence=0.8,
-        created_at="2026-01-12T00:00:00Z",
-    )
+        created_at="2026-01-12T00:00:00Z")
 
 
 @pytest.fixture
@@ -61,8 +60,7 @@ def empty_evidence():
         input_channel=InputChannel.unknown,
         input_channel_deterministic=False,
         input_channel_signals=[],
-        input_channel_reason="",
-    )
+        input_channel_reason="")
 
 
 class TestCodeExecutionByDesign:
@@ -125,7 +123,7 @@ class PipelineExecutor:
         finding.vulnerability_type = "Command Injection"
         finding.file_path = "/app/api/handlers.py"
         finding.description = "Shell command with user input on unauthenticated route"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 @app.post("/execute")  # public route
 async def execute_command(cmd: str):
@@ -133,31 +131,31 @@ async def execute_command(cmd: str):
     return {"output": result.stdout}
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/api/handlers.py",
-                line=2,
-                snippet="async def execute_command(cmd: str):",
-                match_type="source",
-            ),
-            EvidenceMatch(
-                file="/app/api/handlers.py",
-                line=3,
-                snippet="subprocess.run(cmd, shell=True)",
-                match_type="sink",
-            ),
-            EvidenceMatch(
-                file="/app/api/handlers.py",
-                line=1,
-                snippet='@app.post("/execute")  # public route',
-                match_type="route_registration",
-            ),
+            {
+                "file": "/app/api/handlers.py",
+                "line": 2,
+                "snippet": "async def execute_command(cmd: str):",
+                "match_type": "source",
+            },
+            {
+                "file": "/app/api/handlers.py",
+                "line": 3,
+                "snippet": "subprocess.run(cmd, shell=True)",
+                "match_type": "sink",
+            },
+            {
+                "file": "/app/api/handlers.py",
+                "line": 1,
+                "snippet": '@app.post("/execute")  # public route',
+                "match_type": "route_registration",
+            },
             # Add dataflow evidence to complete proof chain
-            EvidenceMatch(
-                file="/app/api/handlers.py",
-                line=3,
-                snippet="subprocess.run(cmd, shell=True)",
-                match_type="dataflow",
-            )
+            {
+                "file": "/app/api/handlers.py",
+                "line": 3,
+                "snippet": "subprocess.run(cmd, shell=True)",
+                "match_type": "dataflow",
+            }
         ]
 
         result = classifier.classify(finding, evidence)
@@ -183,21 +181,21 @@ class TestSSRFPatternDowngrades:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
         finding.description = "HTTP request to external URL"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 def check_service_health():
     response = requests.get("https://api.example.com/health")
     return response.json()
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/health.py",
-                line=3,
-                snippet='requests.get("https://api.example.com/health")',
-                match_type="sink",
-            )
+            {
+                "file": "/app/health.py",
+                "line": 3,
+                "snippet": 'requests.get("https://api.example.com/health")',
+                "match_type": "sink",
+            }
         ]
-        evidence.ssrf_analysis = SSRFAnalysis(url_is_constant=True)
+        evidence.ssrf_analysis = {"url_is_constant": True, "url_from_config": False, "url_expression": None}
 
         result = classifier.classify(finding, evidence)
 
@@ -211,21 +209,21 @@ def check_service_health():
         """
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 def fetch_data():
     url = os.getenv("API_ENDPOINT")
     response = requests.get(url)
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/api.py",
-                line=3,
-                snippet="requests.get(url)",
-                match_type="sink",
-            )
+            {
+                "file": "/app/api.py",
+                "line": 3,
+                "snippet": "requests.get(url)",
+                "match_type": "sink",
+            }
         ]
-        evidence.ssrf_analysis = SSRFAnalysis(url_from_config=True)
+        evidence.ssrf_analysis = {"url_is_constant": False, "url_from_config": True, "url_expression": None}
 
         result = classifier.classify(finding, evidence)
 
@@ -240,7 +238,7 @@ def fetch_data():
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
         finding.file_path = "/app/api/fetch.py"  # API path for boundary detection
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 @app.post("/fetch")  # public route
 async def fetch_url(url: str):
@@ -248,33 +246,33 @@ async def fetch_url(url: str):
     return response.text
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/api/fetch.py",
-                line=2,
-                snippet="async def fetch_url(url: str):",
-                match_type="source",
-            ),
-            EvidenceMatch(
-                file="/app/api/fetch.py",
-                line=3,
-                snippet="requests.get(url)",
-                match_type="sink",
-            ),
-            EvidenceMatch(
-                file="/app/api/fetch.py",
-                line=1,
-                snippet='@app.post("/fetch")  # public route',
-                match_type="route_registration",
-            ),
+            {
+                "file": "/app/api/fetch.py",
+                "line": 2,
+                "snippet": "async def fetch_url(url: str):",
+                "match_type": "source",
+            },
+            {
+                "file": "/app/api/fetch.py",
+                "line": 3,
+                "snippet": "requests.get(url)",
+                "match_type": "sink",
+            },
+            {
+                "file": "/app/api/fetch.py",
+                "line": 1,
+                "snippet": '@app.post("/fetch")  # public route',
+                "match_type": "route_registration",
+            },
             # Add dataflow evidence
-            EvidenceMatch(
-                file="/app/api/fetch.py",
-                line=3,
-                snippet="requests.get(url)",
-                match_type="dataflow",
-            )
+            {
+                "file": "/app/api/fetch.py",
+                "line": 3,
+                "snippet": "requests.get(url)",
+                "match_type": "dataflow",
+            }
         ]
-        evidence.ssrf_analysis = SSRFAnalysis(url_is_constant=False)
+        evidence.ssrf_analysis = {"url_is_constant": False, "url_from_config": False, "url_expression": None}
 
         result = classifier.classify(finding, evidence)
 
@@ -293,7 +291,7 @@ class TestCSWSHPatterns:
         finding.vulnerability_type = "Cross-Site WebSocket Hijacking"
         finding.description = "WebSocket without origin validation"
         finding.file_path = "/app/websocket/handlers.py"  # WebSocket path for boundary detection
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 @app.websocket("/ws")
 async def websocket_handler(websocket: WebSocket):
@@ -304,25 +302,25 @@ async def websocket_handler(websocket: WebSocket):
     await websocket.accept()
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/websocket/handlers.py",
-                line=1,
-                snippet='@app.websocket("/ws")',
-                match_type="route_registration",
-            ),
-            EvidenceMatch(
-                file="/app/websocket/handlers.py",
-                line=4,
-                snippet='if websocket.headers.get("origin") != "https://example.com":',
-                match_type="auth_gate",
-            ),
+            {
+                "file": "/app/websocket/handlers.py",
+                "line": 1,
+                "snippet": '@app.websocket("/ws")',
+                "match_type": "route_registration",
+            },
+            {
+                "file": "/app/websocket/handlers.py",
+                "line": 4,
+                "snippet": 'if websocket.headers.get("origin") != "https://example.com":',
+                "match_type": "auth_gate",
+            },
             # Add sink to qualify for HARDENING
-            EvidenceMatch(
-                file="/app/websocket/handlers.py",
-                line=7,
-                snippet="await websocket.accept()",
-                match_type="sink",
-            )
+            {
+                "file": "/app/websocket/handlers.py",
+                "line": 7,
+                "snippet": "await websocket.accept()",
+                "match_type": "sink",
+            }
         ]
 
         result = classifier.classify(finding, evidence)
@@ -336,19 +334,19 @@ async def websocket_handler(websocket: WebSocket):
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Code Injection"  # Different vuln type
         finding.description = "RCE via websocket message handler"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 async def handle_message(websocket, message):
     # Execute user command
     exec(message['code'])
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/ws.py",
-                line=3,
-                snippet="exec(message['code'])",
-                match_type="sink",
-            )
+            {
+                "file": "/app/ws.py",
+                "line": 3,
+                "snippet": "exec(message['code'])",
+                "match_type": "sink",
+            }
         ]
 
         result = classifier.classify(finding, evidence)
@@ -368,7 +366,7 @@ class TestDeserializationPatterns:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Deserialization"
         finding.description = "Use of unsafe yaml.load()"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 def load_config():
     with open('config.yaml', 'r') as f:
@@ -376,12 +374,12 @@ def load_config():
     return config
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/config.py",
-                line=3,
-                snippet="yaml.load(f, Loader=yaml.Loader)",
-                match_type="sink",
-            )
+            {
+                "file": "/app/config.py",
+                "line": 3,
+                "snippet": "yaml.load(f, Loader=yaml.Loader)",
+                "match_type": "sink",
+            }
         ]
         # No sources - file is local/trusted
 
@@ -400,7 +398,7 @@ class TestSQLInjectionPatterns:
         finding.vulnerability_type = "SQL Injection"
         finding.file_path = "/app/connectors/database.py"
         finding.description = "Dynamic SQL query construction"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 def build_query(table_name, columns):
     # Internal connector - developer-controlled
@@ -408,12 +406,12 @@ def build_query(table_name, columns):
     return execute_query(query)
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/connectors/database.py",
-                line=3,
-                snippet='query = f"SELECT {columns} FROM {table_name}"',
-                match_type="sink",
-            )
+            {
+                "file": "/app/connectors/database.py",
+                "line": 3,
+                "snippet": 'query = f"SELECT {columns} FROM {table_name}"',
+                "match_type": "sink",
+            }
         ]
         # No request sources - internal pipeline code
 
@@ -430,7 +428,7 @@ def build_query(table_name, columns):
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SQL Injection"
         finding.file_path = "/app/api/users.py"  # API path for boundary detection
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 @app.get("/users")  # public route
 async def get_users(name: str):
@@ -438,31 +436,31 @@ async def get_users(name: str):
     return db.execute(query)
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=2,
-                snippet="async def get_users(name: str):",
-                match_type="source",
-            ),
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=3,
-                snippet='query = f"SELECT * FROM users WHERE name = \'{name}\'"',
-                match_type="sink",
-            ),
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=1,
-                snippet='@app.get("/users")  # public route',
-                match_type="route_registration",
-            ),
+            {
+                "file": "/app/api/users.py",
+                "line": 2,
+                "snippet": "async def get_users(name: str):",
+                "match_type": "source",
+            },
+            {
+                "file": "/app/api/users.py",
+                "line": 3,
+                "snippet": 'query = f"SELECT * FROM users WHERE name = \'{name}\'"',
+                "match_type": "sink",
+            },
+            {
+                "file": "/app/api/users.py",
+                "line": 1,
+                "snippet": '@app.get("/users")  # public route',
+                "match_type": "route_registration",
+            },
             # Add dataflow evidence to complete proof chain
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=3,
-                snippet='query = f"SELECT * FROM users WHERE name = \'{name}\'"',
-                match_type="dataflow",
-            )
+            {
+                "file": "/app/api/users.py",
+                "line": 3,
+                "snippet": 'query = f"SELECT * FROM users WHERE name = \'{name}\'"',
+                "match_type": "dataflow",
+            }
         ]
 
         result = classifier.classify(finding, evidence)
@@ -478,7 +476,7 @@ class TestBugDisposition:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Authentication Bypass"
         finding.description = "Route bypasses authentication check"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 @app.post("/admin/delete")
 async def delete_user(user_id: str, skip_auth: bool = False):
@@ -488,27 +486,25 @@ async def delete_user(user_id: str, skip_auth: bool = False):
     db.users.delete(user_id)
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/admin.py",
-                line=2,
-                snippet="async def delete_user(user_id: str, skip_auth: bool = False):",
-                match_type="source",
-            ),
-            EvidenceMatch(
-                file="/app/admin.py",
-                line=6,
-                snippet="db.users.delete(user_id)",
-                match_type="sink",
-            ),
-            EvidenceMatch(
-                file="/app/admin.py",
-                line=1,
-                snippet='@app.post("/admin/delete")',
-                match_type="route_registration",
-            )
+            {
+                "file": "/app/admin.py",
+                "line": 2,
+                "snippet": "async def delete_user(user_id: str, skip_auth: bool = False):",
+                "match_type": "source",
+            },
+            {
+                "file": "/app/admin.py",
+                "line": 6,
+                "snippet": "db.users.delete(user_id)",
+                "match_type": "sink",
+            },
+            {
+                "file": "/app/admin.py",
+                "line": 1,
+                "snippet": '@app.post("/admin/delete")',
+                "match_type": "route_registration",
+            }
         ]
-        # Pattern indicating bypass
-        evidence.snippet_contains_bypass = "skip_auth" in evidence.snippet
 
         result = classifier.classify(finding, evidence)
 
@@ -529,7 +525,7 @@ class TestMisconfiguration:
         finding.vulnerability_type = "Unauthorized Access"
         finding.file_path = "/app/api/users.py"  # API path for boundary detection
         finding.description = "Endpoint accessible when auth disabled"  # Use exact marker pattern
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 @app.post("/admin/users")
 async def create_user(username: str):
@@ -538,31 +534,31 @@ async def create_user(username: str):
         db.users.create(username)
 """
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=2,
-                snippet="async def create_user(username: str):",
-                match_type="source",
-            ),
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=5,
-                snippet="db.users.create(username)",
-                match_type="sink",
-            ),
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=1,
-                snippet='@app.post("/admin/users")',
-                match_type="route_registration",
-            ),
+            {
+                "file": "/app/api/users.py",
+                "line": 2,
+                "snippet": "async def create_user(username: str):",
+                "match_type": "source",
+            },
+            {
+                "file": "/app/api/users.py",
+                "line": 5,
+                "snippet": "db.users.create(username)",
+                "match_type": "sink",
+            },
+            {
+                "file": "/app/api/users.py",
+                "line": 1,
+                "snippet": '@app.post("/admin/users")',
+                "match_type": "route_registration",
+            },
             # Add dataflow evidence
-            EvidenceMatch(
-                file="/app/api/users.py",
-                line=5,
-                snippet="db.users.create(username)",
-                match_type="dataflow",
-            )
+            {
+                "file": "/app/api/users.py",
+                "line": 5,
+                "snippet": "db.users.create(username)",
+                "match_type": "dataflow",
+            }
         ]
 
         result = classifier.classify(finding, evidence)
@@ -580,15 +576,15 @@ class TestPatternDowngradesOnly:
         """Pattern rules must never return VALID_SECURITY_ISSUE or BUG."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "SSRF"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = "requests.get(url)"
         evidence.matches = [
-            EvidenceMatch(
-                file="/app/test.py",
-                line=1,
-                snippet="requests.get(url)",
-                match_type="sink",
-            )
+            {
+                "file": "/app/test.py",
+                "line": 1,
+                "snippet": "requests.get(url)",
+                "match_type": "sink",
+            }
         ]
         # No sources, no routes - should not be VALID
 
@@ -611,11 +607,26 @@ class TestConfidenceScoring:
         """VALID_SECURITY_ISSUE should have exploit confidence."""
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Command Injection"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.matches = [
-            EvidenceMatch(file="test.py", line=1, snippet="def handler(cmd: str)", match_type="source"),
-            EvidenceMatch(file="test.py", line=2, snippet="subprocess.run(cmd, shell=True)", match_type="sink"),
-            EvidenceMatch(file="test.py", line=0, snippet="@app.post", match_type="route_registration")
+            {
+                "file": "test.py",
+                "line": 1,
+                "snippet": "def handler(cmd: str)",
+                "match_type": "source",
+            },
+            {
+                "file": "test.py",
+                "line": 2,
+                "snippet": "subprocess.run(cmd, shell=True)",
+                "match_type": "sink",
+            },
+            {
+                "file": "test.py",
+                "line": 0,
+                "snippet": "@app.post",
+                "match_type": "route_registration",
+            }
         ]
 
         result = classifier.classify(finding, evidence)
@@ -656,7 +667,7 @@ class TestHardenedCodeDetection:
         finding = base_finding.model_copy()
         finding.vulnerability_type = "Hardcoded Secret"
         finding.file_path = "/app/examples/docker-compose.yml"
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 services:
   db:
@@ -676,7 +687,7 @@ services:
         finding.file_path = "/app/third_party/civetweb/resources/cert/server.key"
         finding.description = "Bundled test certificate material."
 
-        evidence = replace(empty_evidence)
+        evidence = empty_evidence.model_copy()
         evidence.snippet = """
 -----BEGIN RSA PRIVATE KEY-----
 MIIEpgIBAAKCAQEAzvB5
@@ -695,7 +706,6 @@ class TestStrictExecEvalFiltering:
     def test_detects_direct_exec_call(self, classifier):
         """Detect direct exec() call within symbol range."""
         from models.schemas import Finding, VulnerabilityCategory
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-001",
@@ -708,21 +718,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="def handler(user_code: str):\n    exec(user_code)",
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def handler(user_code: str):\n    exec(user_code)",
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -734,7 +746,6 @@ class TestStrictExecEvalFiltering:
     def test_ignores_exec_in_comment(self, classifier):
         """Do not detect exec in comment."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-002",
@@ -747,21 +758,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="# We could use exec() but chose subprocess\nresult = subprocess.run(data)",
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=42,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="# We could use exec() but chose subprocess\nresult = subprocess.run(data)",
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 42,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -770,7 +783,6 @@ class TestStrictExecEvalFiltering:
     def test_detects_obfuscated_exec(self, classifier):
         """Detect getattr(__builtins__, 'exec') pattern."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-003",
@@ -783,21 +795,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='def handler(code):\n    getattr(__builtins__, "exec")(code)',
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='def handler(code):\n    getattr(__builtins__, "exec")(code)',
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -808,7 +822,6 @@ class TestStrictExecEvalFiltering:
     def test_scoped_to_symbol_range(self, classifier):
         """Do not detect exec outside symbol range."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-004",
@@ -821,21 +834,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="def other_func():\n    exec(internal)\n\ndef handler(user_code):\n    process(user_code)",
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=44,
-                line_end=45,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def other_func():\n    exec(internal)\n\ndef handler(user_code):\n    process(user_code)",
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 44,
+                "line_end": 45,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -845,7 +860,6 @@ class TestStrictExecEvalFiltering:
     def test_handles_line_number_prefixes(self, classifier):
         """Handle snippets with line-number prefixes like '42: exec(code)'."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-005",
@@ -858,21 +872,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="41: def handler(user_code: str):\n42:     exec(user_code)",
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="41: def handler(user_code: str):\n42:     exec(user_code)",
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -883,7 +899,6 @@ class TestStrictExecEvalFiltering:
     def test_detects_eval_call(self, classifier):
         """Detect eval() call as code-exec sink."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-006",
@@ -896,21 +911,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="def calculate(expression):\n    result = eval(expression)\n    return result",
-            symbol_info=SymbolInfo(
-                name="calculate",
-                qualified_name="calculate",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def calculate(expression):\n    result = eval(expression)\n    return result",
+            symbol_info={
+                "name": "calculate",
+                "qualified_name": "calculate",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -921,7 +938,6 @@ class TestStrictExecEvalFiltering:
     def test_detects_compile_call(self, classifier):
         """Detect compile() call as code-exec sink."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-007",
@@ -934,21 +950,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="def dynamic_compile(code):\n    bytecode = compile(code, '<string>', 'exec')\n    return bytecode",
-            symbol_info=SymbolInfo(
-                name="dynamic_compile",
-                qualified_name="dynamic_compile",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def dynamic_compile(code):\n    bytecode = compile(code, '<string>', 'exec')\n    return bytecode",
+            symbol_info={
+                "name": "dynamic_compile",
+                "qualified_name": "dynamic_compile",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -959,7 +977,6 @@ class TestStrictExecEvalFiltering:
     def test_detects_exec_in_async_function(self, classifier):
         """Detect exec() in async function (critical bug fix)."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-008",
@@ -972,21 +989,23 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="async def handler(code):\n    exec(code)",
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="async def handler(code):\n    exec(code)",
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -998,7 +1017,6 @@ class TestStrictExecEvalFiltering:
     def test_symbol_name_mismatch_fallback_to_regex(self, classifier):
         """Symbol name mismatch should fall back to regex and still detect exec()."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-exec-009",
@@ -1011,22 +1029,24 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
         # Symbol info says "handler" but snippet has "process_data"
-        evidence = EvidenceResult(
-            snippet="def process_data(code):\n    exec(code)",
-            symbol_info=SymbolInfo(
-                name="handler",  # Mismatch: actual function is process_data
-                qualified_name="handler",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def process_data(code):\n    exec(code)",
+            symbol_info={
+                "name": "handler",  # Mismatch: actual function is process_data
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)
@@ -1039,7 +1059,6 @@ class TestStrictExecEvalFiltering:
     def test_feature_intent_proven_with_path_and_symbol(self, classifier):
         """Prove feature intent with path + symbol match."""
         from models.schemas import Finding, VulnerabilityCategory, Severity
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-feature-001",
@@ -1056,18 +1075,21 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet="class PipelineExecutor:\n    def run_block(self, code):\n        exec(code)",
-            symbol_info=SymbolInfo(
-                name="PipelineExecutor.run_block",
-                qualified_name="PipelineExecutor.run_block",
-                type="method",
-                line_start=41,
-                line_end=43,
-                file_path="/app/pipelines/executor.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="class PipelineExecutor:\n    def run_block(self, code):\n        exec(code)",
+            symbol_info={
+                "name": "PipelineExecutor.run_block",
+                "qualified_name": "PipelineExecutor.run_block",
+                "type": "method",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/pipelines/executor.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._feature_intent_proven(finding, evidence)
@@ -1079,7 +1101,6 @@ class TestStrictExecEvalFiltering:
     def test_feature_intent_not_proven_with_path_only(self, classifier):
         """Do not prove feature intent with path match only."""
         from models.schemas import Finding, Severity
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-feature-002",
@@ -1096,18 +1117,21 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet="def process_data(code):\n    exec(code)",
-            symbol_info=SymbolInfo(
-                name="process_data",
-                qualified_name="process_data",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/pipelines/helper.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def process_data(code):\n    exec(code)",
+            symbol_info={
+                "name": "process_data",
+                "qualified_name": "process_data",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/pipelines/helper.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._feature_intent_proven(finding, evidence)
@@ -1118,7 +1142,6 @@ class TestStrictExecEvalFiltering:
     def test_feature_intent_proven_with_path_and_doc(self, classifier):
         """Prove feature intent with path + doc match."""
         from models.schemas import Finding, Severity
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-feature-003",
@@ -1135,18 +1158,21 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet='def process(cell_code):\n    """Execute notebook cell code."""\n    exec(cell_code)',
-            symbol_info=SymbolInfo(
-                name="process",
-                qualified_name="process",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/kernel/processor.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='def process(cell_code):\n    """Execute notebook cell code."""\n    exec(cell_code)',
+            symbol_info={
+                "name": "process",
+                "qualified_name": "process",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/kernel/processor.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._feature_intent_proven(finding, evidence)
@@ -1159,7 +1185,6 @@ class TestStrictExecEvalFiltering:
     def test_auth_bypass_proven_with_decorator(self, classifier):
         """Detect explicit @public_endpoint decorator."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-auth-001",
@@ -1172,28 +1197,30 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/execute")\n@public_endpoint\nasync def run_code(code: str):\n    exec(code)',
-            symbol_info=SymbolInfo(
-                name="run_code",
-                qualified_name="run_code",
-                type="function",
-                line_start=41,
-                line_end=44,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/execute")\n@public_endpoint\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info={
+                "name": "run_code",
+                "qualified_name": "run_code",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 44,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@public_endpoint',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@public_endpoint',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
@@ -1204,7 +1231,6 @@ class TestStrictExecEvalFiltering:
     def test_auth_bypass_proven_with_parameter(self, classifier):
         """Detect explicit bypass_auth=True parameter."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-auth-002",
@@ -1217,28 +1243,30 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/execute", bypass_auth=True)\nasync def run_code(code: str):\n    exec(code)',
-            symbol_info=SymbolInfo(
-                name="run_code",
-                qualified_name="run_code",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/execute", bypass_auth=True)\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info={
+                "name": "run_code",
+                "qualified_name": "run_code",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@app.post("/execute", bypass_auth=True)',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@app.post("/execute", bypass_auth=True)',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
@@ -1249,7 +1277,6 @@ class TestStrictExecEvalFiltering:
     def test_auth_bypass_not_proven_without_markers(self, classifier):
         """Do not prove bypass without explicit markers."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-auth-003",
@@ -1262,28 +1289,30 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
-            symbol_info=SymbolInfo(
-                name="run_code",
-                qualified_name="run_code",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info={
+                "name": "run_code",
+                "qualified_name": "run_code",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@app.post("/execute")',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@app.post("/execute")',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
@@ -1294,7 +1323,6 @@ class TestStrictExecEvalFiltering:
     def test_auth_bypass_ignores_description(self, classifier):
         """Do not use finding.description as proof."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-auth-004",
@@ -1307,28 +1335,30 @@ class TestStrictExecEvalFiltering:
             vulnerability_type="Code Injection",
             severity="high",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
-            symbol_info=SymbolInfo(
-                name="run_code",
-                qualified_name="run_code",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info={
+                "name": "run_code",
+                "qualified_name": "run_code",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@app.post("/execute")',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@app.post("/execute")',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         proven, reason = classifier._auth_bypass_explicitly_proven(finding, evidence)
@@ -1338,7 +1368,6 @@ class TestStrictExecEvalFiltering:
     def test_exec_with_feature_intent_is_by_design(self, classifier):
         """Classify exec as BY_DESIGN when feature intent proven."""
         from models.schemas import Finding, VulnerabilityCategory, Severity, ChecklistStatus
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-integration-001",
@@ -1355,18 +1384,21 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet="class PipelineExecutor:\n    def run_block(self, code):\n        exec(code)",
-            symbol_info=SymbolInfo(
-                name="PipelineExecutor.run_block",
-                qualified_name="PipelineExecutor.run_block",
-                type="method",
-                line_start=41,
-                line_end=43,
-                file_path="/app/pipelines/executor.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="class PipelineExecutor:\n    def run_block(self, code):\n        exec(code)",
+            symbol_info={
+                "name": "PipelineExecutor.run_block",
+                "qualified_name": "PipelineExecutor.run_block",
+                "type": "method",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/pipelines/executor.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         result = classifier.classify(finding, evidence)
@@ -1380,7 +1412,6 @@ class TestStrictExecEvalFiltering:
     def test_exec_with_unknown_auth_is_speculative(self, classifier):
         """Classify exec as SPECULATIVE when auth unknown."""
         from models.schemas import Finding, VulnerabilityCategory, Severity, ChecklistStatus
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-integration-002",
@@ -1397,25 +1428,28 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
-            symbol_info=SymbolInfo(
-                name="run_code",
-                qualified_name="run_code",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info={
+                "name": "run_code",
+                "qualified_name": "run_code",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@app.post("/execute")',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@app.post("/execute")',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         result = classifier.classify(finding, evidence)
@@ -1428,7 +1462,6 @@ class TestStrictExecEvalFiltering:
     def test_exec_filter_forces_sink_proven(self, classifier):
         """Ensure exec detection forces sink_present to PROVEN."""
         from models.schemas import Finding, VulnerabilityCategory, Severity, ChecklistStatus
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-integration-003",
@@ -1445,18 +1478,21 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet="def run(code):\n    exec(code)",
-            symbol_info=SymbolInfo(
-                name="run",
-                qualified_name="run",
-                type="function",
-                line_start=41,
-                line_end=42,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def run(code):\n    exec(code)",
+            symbol_info={
+                "name": "run",
+                "qualified_name": "run",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 42,
+                "file_path": "/app/api.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         result = classifier.classify(finding, evidence)
@@ -1467,7 +1503,6 @@ class TestStrictExecEvalFiltering:
     def test_pattern_downgrades_skip_code_injection(self, classifier):
         """Ensure pattern downgrades skip CODE_INJECTION category."""
         from models.schemas import Finding, VulnerabilityCategory
-        from services.evidence_gatherer import EvidenceResult
 
         # This test verifies that CODE_INJECTION findings bypass pattern downgrades
         # The exec filter should handle CODE_INJECTION entirely
@@ -1487,20 +1522,23 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet="exec(code)",
+        evidence = Evidence(finding_id="test-001",snippet="exec(code)",
             symbol_info=None,
             framework=None,
             matches=[],
             ssrf_analysis=None,
-            timed_out=False
+            timed_out=False,
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         # Call _apply_pattern_downgrades directly
         disposition = Disposition.VALID_SECURITY_ISSUE  # Start with VALID
 
         # Need to build checklist and get normalized category first
-        checklist = classifier._build_checklist(finding, evidence)
+        checklist = classifier._build_checklist(finding, evidence, threat_model_profile=None)
         category = classifier._normalize_category(finding)
 
         result = classifier._apply_pattern_downgrades(disposition, finding, evidence, checklist, category)
@@ -1511,7 +1549,6 @@ class TestStrictExecEvalFiltering:
     def test_reasoning_includes_exec_details(self, classifier):
         """Ensure reasoning bullets include exec-specific details."""
         from models.schemas import Finding, VulnerabilityCategory
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-reasoning-001",
@@ -1528,25 +1565,28 @@ class TestStrictExecEvalFiltering:
             created_at="2026-01-12T00:00:00Z"
         )
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
-            symbol_info=SymbolInfo(
-                name="run_code",
-                qualified_name="run_code",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/execute")\nasync def run_code(code: str):\n    exec(code)',
+            symbol_info={
+                "name": "run_code",
+                "qualified_name": "run_code",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@app.post("/execute")',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@app.post("/execute")',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         result = classifier.classify(finding, evidence)
@@ -1558,7 +1598,6 @@ class TestStrictExecEvalFiltering:
     def test_no_dataflow_is_speculative(self, classifier):
         """Exec with source and sink but no dataflow → SPECULATIVE."""
         from models.schemas import Finding, VulnerabilityCategory
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-dataflow-001",
@@ -1572,21 +1611,23 @@ class TestStrictExecEvalFiltering:
             code_snippet="exec(config['script'])",
             description="Different variable",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='async def handler(user_code: str):\n    config = load_config()\n    exec(config["script"])',
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='async def handler(user_code: str):\n    config = load_config()\n    exec(config["script"])',
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         # Manually simulate: source=PROVEN, reachable=PROVEN, dataflow=DISPROVEN
@@ -1600,7 +1641,6 @@ class TestStrictExecEvalFiltering:
     def test_admin_path_without_role_check_is_valid(self, classifier):
         """Exec in admin path without role check → VALID (boundary crossed)."""
         from models.schemas import Finding, VulnerabilityCategory
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo, EvidenceMatch
 
         finding = Finding(
             id="test-admin-001",
@@ -1614,28 +1654,30 @@ class TestStrictExecEvalFiltering:
             code_snippet="exec(script)",
             description="Admin endpoint",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet='@app.post("/admin/execute")\nasync def run_script(script: str):\n    exec(script)',
-            symbol_info=SymbolInfo(
-                name="run_script",
-                qualified_name="run_script",
-                type="function",
-                line_start=41,
-                line_end=43,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet='@app.post("/admin/execute")\nasync def run_script(script: str):\n    exec(script)',
+            symbol_info={
+                "name": "run_script",
+                "qualified_name": "run_script",
+                "type": "function",
+                "line_start": 41,
+                "line_end": 43,
+                "file_path": "/app/api.py"
+            },
             framework=None,
             matches=[
-                EvidenceMatch(
-                    file="/app/api.py",
-                    line=41,
-                    snippet='@app.post("/admin/execute")',
-                    match_type="route_registration"
-                )
-            ]
+                {
+                "file": "/app/api.py",
+                "line": 41,
+                "snippet": '@app.post("/admin/execute")',
+                "match_type": "route_registration",
+            }
+            ],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         # This test depends on boundary_crossed logic being set by evidence gatherer
@@ -1649,7 +1691,6 @@ class TestStrictExecEvalFiltering:
     def test_whole_file_scan_avoided(self, classifier):
         """Exec in different function not detected (scoped to symbol)."""
         from models.schemas import Finding
-        from services.evidence_gatherer import EvidenceResult, SymbolInfo
 
         finding = Finding(
             id="test-scope-001",
@@ -1663,21 +1704,23 @@ class TestStrictExecEvalFiltering:
             code_snippet="process(user_code)",
             description="No exec",
             confidence=0.8,
-            created_at="2026-01-12T00:00:00Z",
-        )
+            created_at="2026-01-12T00:00:00Z")
 
-        evidence = EvidenceResult(
-            snippet="def other_func():\n    exec(internal)\n\ndef handler(user_code):\n    process(user_code)",
-            symbol_info=SymbolInfo(
-                name="handler",
-                qualified_name="handler",
-                type="function",
-                line_start=44,
-                line_end=45,
-                file_path="/app/api.py"
-            ),
+        evidence = Evidence(finding_id="test-001",snippet="def other_func():\n    exec(internal)\n\ndef handler(user_code):\n    process(user_code)",
+            symbol_info={
+                "name": "handler",
+                "qualified_name": "handler",
+                "type": "function",
+                "line_start": 44,
+                "line_end": 45,
+                "file_path": "/app/api.py"
+            },
             framework=None,
-            matches=[]
+            matches=[],
+            input_channel=InputChannel.unknown,
+            input_channel_deterministic=False,
+            input_channel_signals=[],
+            input_channel_reason=""
         )
 
         is_sink, reason = classifier._is_code_exec_sink(finding, evidence)

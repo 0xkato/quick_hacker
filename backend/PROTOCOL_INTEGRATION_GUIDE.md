@@ -38,6 +38,28 @@ Created:
 - PostgreSQL database running
 - Database connection configured in `DATABASE_URL` environment variable
 
+### Quick Setup (All Three Steps)
+
+```bash
+# From project root
+
+# 1. Apply migration
+python backend/scripts/migrate_protocol_layer.py
+
+# 2. Seed policies
+python backend/scripts/seed_protocol_policies.py
+
+# 3. Verify setup
+python backend/scripts/verify_protocol_setup.py
+```
+
+**Expected Output from Verification:**
+```
+✅ Protocol Policies: 5 found
+✅ Protocol Fields in Findings: 3/3
+✅ Evidence Quests Table: exists
+```
+
 ### Step 1: Apply Database Migration
 
 ```bash
@@ -62,6 +84,14 @@ This seeds 5 default policies:
 3. HackerOne Standard
 4. Bugcrowd Standard
 5. Research Disclosure
+
+### Step 2.5: Verify Setup
+
+```bash
+python backend/scripts/verify_protocol_setup.py
+```
+
+Confirms all tables and fields are correctly created.
 
 ### Step 3: Configure Environment
 

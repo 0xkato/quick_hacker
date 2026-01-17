@@ -51,6 +51,49 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 - **Findings Panel:** Filter, group, and export vulnerability reports
 - **Code Graph:** Interactive call graph exploration with relevance scoring
 
+## Protocol-Aware Reportability
+
+QuickHack includes a protocol-aware submission evaluation system that determines if findings are worth reporting to bug bounties, VRPs, or responsible disclosure programs.
+
+### Features
+
+- **5 Default Protocols**: Internal, Google VRP (Strict), HackerOne, Bugcrowd, Research Disclosure
+- **Quality Gates**: Disposition filtering, checklist validation, attacker model checks
+- **Evidence Quests**: Autonomous LLM agents gather missing proof for high-signal findings
+- **Disposition Override**: Protocol can downgrade disposition based on submission criteria
+- **UI Integration**: Visual badges, detailed submission panel, quest status
+
+### Quick Start
+
+1. **Set Protocol** (Project Settings):
+   - Choose from 5 pre-configured protocols
+   - Or keep default "Internal (Permissive)"
+
+2. **Run Triage**:
+   - Findings automatically evaluated against protocol
+   - See submission decision (✓ Submit / ✗ Don't Submit / ? Needs Info)
+
+3. **Review Submission Panel**:
+   - View reasoning for decision
+   - See missing evidence if needs_more_info
+   - Trigger evidence quest to fill gaps
+
+### Documentation
+
+- [Protocol Policies Guide](docs/protocol-policies.md) - Detailed policy documentation
+- [System Specification](docs/SYSTEM-SPECIFICATION.md) - Architecture and implementation
+- [Deployment Guide](docs/DEPLOYMENT.md) - Setup and configuration
+
+### Configuration
+
+Add to `.env`:
+```bash
+ENABLE_PROTOCOL_EVALUATION=true
+DEFAULT_PROTOCOL_ID=internal
+ANTHROPIC_API_KEY=your_key_here
+ENABLE_QUESTS_BY_DEFAULT=true
+```
+
 ## Architecture Overview
 
 ```

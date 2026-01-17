@@ -1,6 +1,7 @@
 """Semgrep-based vulnerability pattern scanner."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -63,6 +64,53 @@ class SemgrepScanner:
     def get_tool_name(self) -> ScannerTool:
         """Return the scanner tool identifier."""
         return ScannerTool.SEMGREP
+
+    def _default_rules_dir(self) -> str:
+        """Get default rules directory path."""
+        # Rules are bundled with the scanner
+        scanner_dir = Path(__file__).parent
+        rules_dir = scanner_dir / "semgrep_rules"
+        return str(rules_dir)
+
+    def _build_command(
+        self,
+        language: str | None,
+        severity: list[str],
+        category: str | None,
+        scan_path: str,
+    ) -> list[str]:
+        """Build Semgrep command with filters.
+
+        Args:
+            language: Language filter (python, javascript, c, cpp, java)
+            severity: Severity levels to include
+            category: Vulnerability category filter
+            scan_path: Path to scan
+
+        Returns:
+            List of command arguments
+        """
+        rules_dir = self.rules_dir or self._default_rules_dir()
+
+        cmd = ["semgrep", "--json", "--quiet"]
+
+        # Add config path
+        if language:
+            # Scan specific language rules
+            config_path = Path(rules_dir) / language
+            if config_path.exists():
+                cmd.extend(["--config", str(config_path)])
+            else:
+                # Fallback to all rules if language dir doesn't exist
+                cmd.extend(["--config", rules_dir])
+        else:
+            # Scan all rules
+            cmd.extend(["--config", rules_dir])
+
+        # Add target path
+        cmd.append(scan_path)
+
+        return cmd
 
     def scan(
         self,

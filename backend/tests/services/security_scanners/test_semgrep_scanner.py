@@ -119,3 +119,40 @@ def test_semgrep_finds_sql_injection(tmp_path):
     assert finding.file_path == "sql_injection.py"
     assert finding.line_start > 0
     assert len(finding.snippet) > 0
+
+
+def test_build_command_basic(tmp_path):
+    """Verify basic Semgrep command structure."""
+    with mock.patch('subprocess.run', return_value=mock.Mock(returncode=0)):
+        scanner = SemgrepScanner(workspace_root=str(tmp_path))
+
+        cmd = scanner._build_command(
+            language=None,
+            severity=["high", "critical"],
+            category=None,
+            scan_path=str(tmp_path)
+        )
+
+        assert cmd[0] == "semgrep"
+        assert "--json" in cmd
+        assert "--config" in cmd
+        assert str(tmp_path) in cmd
+
+
+def test_build_command_with_language_filter(tmp_path):
+    """Verify language filtering in command."""
+    with mock.patch('subprocess.run', return_value=mock.Mock(returncode=0)):
+        scanner = SemgrepScanner(workspace_root=str(tmp_path))
+
+        cmd = scanner._build_command(
+            language="python",
+            severity=["high"],
+            category=None,
+            scan_path=str(tmp_path)
+        )
+
+        # Should only scan Python rules
+        assert "--config" in cmd
+        config_idx = cmd.index("--config")
+        config_path = cmd[config_idx + 1]
+        assert "python" in config_path.lower()

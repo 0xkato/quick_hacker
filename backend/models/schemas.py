@@ -672,6 +672,9 @@ class Finding(BaseModel):
     evidence_quest_id: Optional[str] = None
     evidence_quest_completed: bool = False
 
+    # Path classification (for pre-triage filtering)
+    path_classification: Optional[PathClassification] = None
+
     @field_validator(
         "description",
         "code_snippet",

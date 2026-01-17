@@ -5,6 +5,7 @@ Runs synchronously (called via asyncio.to_thread from agent orchestrator).
 GUARANTEE: triaged_count == raw_count (never drops findings)
 """
 
+import asyncio
 import hashlib
 import time
 from datetime import datetime
@@ -20,9 +21,14 @@ from models.schemas import (
     ChecklistStatus,
     ChecklistItem,
     FindingClassification,
+    SubmissionDecision,
+    ProtocolPolicy,
 )
 from services.evidence_gatherer import EvidenceGatherer
 from services.strict_classifier import StrictClassifier
+from services.evidence_quest_orchestrator import EvidenceQuestOrchestrator
+from services.protocol_evaluator import ProtocolEvaluator
+from services.protocol_policies import ProtocolPolicyLoader
 
 
 class FindingTriageService:
@@ -37,7 +43,8 @@ class FindingTriageService:
     """
 
     def __init__(self):
-        pass
+        self.quest_orchestrator: Optional[EvidenceQuestOrchestrator] = None
+        self.protocol_evaluator = ProtocolEvaluator()
 
     def _classification_from_disposition(
         self, disposition: Disposition | None, current: FindingClassification
@@ -142,6 +149,172 @@ class FindingTriageService:
 
             except Exception as e:
                 # On error, mark as SPECULATIVE
+                triaged_finding = self._mark_as_error(
+                    finding, batch_id, policy_version, str(e)
+                )
+                triaged.append(triaged_finding)
+
+        # Verify guarantee
+        assert len(triaged) == len(findings), \
+            f"Triage dropped findings: {len(findings)} input vs {len(triaged)} output"
+
+        # Build metrics
+        metrics = self._build_metrics(findings, triaged, reportable, timeout_count)
+
+        return TriageResult(
+            triaged_findings=triaged,
+            reportable_findings=reportable,
+            metrics=metrics,
+            batch_id=batch_id
+        )
+
+    async def triage_with_protocol(
+        self,
+        repo_root: str,
+        findings: list[Finding],
+        policy_version: str = "1.0.0",
+        budgets: Optional[BudgetConfig] = None,
+        threat_model_profile: Optional[dict] = None,
+        protocol_policy: Optional[ProtocolPolicy] = None,
+        db_conn = None,
+    ) -> TriageResult:
+        """
+        Triage findings with protocol evaluation and quest support.
+
+        This includes ProtocolEvaluator and evidence quest integration.
+        """
+        if not findings:
+            return TriageResult(
+                triaged_findings=[],
+                reportable_findings=[],
+                metrics=TriageMetrics(
+                    raw_count=0,
+                    triaged_count=0,
+                    reportable_count=0,
+                    by_disposition={},
+                    timeout_count=0,
+                    timeout_rate=0.0
+                ),
+                batch_id=self._generate_batch_id()
+            )
+
+        batch_id = self._generate_batch_id()
+        batch_start = time.time()
+        budgets = budgets or BudgetConfig()
+
+        # Initialize quest orchestrator if db provided
+        if db_conn and protocol_policy and protocol_policy.enable_evidence_quests:
+            # TODO: Add LLM client initialization
+            self.quest_orchestrator = EvidenceQuestOrchestrator(
+                repo_root=repo_root,
+                llm_client=None,  # Simplified for MVP
+                db_conn=db_conn
+            )
+
+        gatherer = EvidenceGatherer(repo_root, budgets)
+        classifier = StrictClassifier()
+
+        triaged = []
+        reportable = []
+        timeout_count = 0
+
+        for idx, finding in enumerate(findings):
+            # Check batch timeout
+            elapsed_ms = (time.time() - batch_start) * 1000
+            remaining_findings = len(findings) - len(triaged)
+
+            if elapsed_ms > budgets.batch_ms:
+                # Mark remaining as timeout
+                for remaining_finding in findings[idx:]:
+                    triaged_finding = self._mark_as_timeout(
+                        remaining_finding, batch_id, policy_version
+                    )
+                    triaged.append(triaged_finding)
+                timeout_count += remaining_findings
+                break
+
+            try:
+                # Step 1: Gather evidence
+                evidence = await asyncio.to_thread(gatherer.gather, finding)
+
+                # Step 2: Classify
+                classification = await asyncio.to_thread(
+                    classifier.classify,
+                    finding, evidence, threat_model_profile
+                )
+
+                # Step 3: Protocol evaluation
+                if protocol_policy:
+                    submission_result, new_disposition = await asyncio.to_thread(
+                        self.protocol_evaluator.evaluate,
+                        finding, evidence, classification, protocol_policy
+                    )
+
+                    # Step 4: Handle quest if needed
+                    if (submission_result.quest_run and
+                        self.quest_orchestrator and
+                        submission_result.decision == SubmissionDecision.NEEDS_MORE_INFO):
+
+                        quest = await self.quest_orchestrator.create_quest(
+                            finding, evidence, submission_result.missing_evidence
+                        )
+
+                        # Run quest
+                        updated_evidence, quest_success = await self.quest_orchestrator.run_quest(
+                            quest, finding, evidence
+                        )
+
+                        if quest_success:
+                            # Re-run classification
+                            classification = await asyncio.to_thread(
+                                classifier.classify,
+                                finding, updated_evidence, threat_model_profile
+                            )
+
+                            # Re-run protocol evaluation
+                            submission_result, new_disposition = await asyncio.to_thread(
+                                self.protocol_evaluator.evaluate,
+                                finding, updated_evidence, classification, protocol_policy
+                            )
+
+                            evidence = updated_evidence
+
+                        # Store quest ID
+                        finding.evidence_quest_id = quest.id
+                        finding.evidence_quest_completed = quest_success
+
+                    # Step 5: Apply disposition override if needed
+                    if new_disposition:
+                        classification.disposition = new_disposition
+
+                    finding.submission_result = submission_result
+                else:
+                    # No protocol evaluation
+                    finding.submission_result = None
+
+                # Step 6: Attach metadata
+                triaged_finding = self._attach_triage_metadata(
+                    finding, classification, batch_id, policy_version
+                )
+                triaged.append(triaged_finding)
+
+                # Track reportable (check submission decision if available)
+                if finding.submission_result:
+                    if finding.submission_result.decision == SubmissionDecision.SUBMIT:
+                        reportable.append(triaged_finding)
+                else:
+                    # Fallback to disposition
+                    if classification.disposition in [
+                        Disposition.VALID_SECURITY_ISSUE,
+                        Disposition.BUG
+                    ]:
+                        reportable.append(triaged_finding)
+
+                # Track timeouts
+                if evidence.timed_out:
+                    timeout_count += 1
+
+            except Exception as e:
                 triaged_finding = self._mark_as_error(
                     finding, batch_id, policy_version, str(e)
                 )

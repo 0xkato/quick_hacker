@@ -1,41 +1,49 @@
--- Migration: Add Protocol-Aware Reportability Layer
+-- Migration: Add protocol-aware reportability layer
 -- Date: 2026-01-17
--- Description: Adds protocol evaluation tables and fields
 
--- Add protocol fields to findings table
-ALTER TABLE findings
-ADD COLUMN IF NOT EXISTS submission_result JSONB,
-ADD COLUMN IF NOT EXISTS evidence_quest_id VARCHAR(64),
-ADD COLUMN IF NOT EXISTS evidence_quest_completed BOOLEAN NOT NULL DEFAULT FALSE;
-
-CREATE INDEX IF NOT EXISTS idx_findings_evidence_quest_id ON findings(evidence_quest_id);
+-- Add protocol_id to projects
+ALTER TABLE projects ADD COLUMN protocol_id TEXT DEFAULT 'internal';
 
 -- Create protocol_policies table
 CREATE TABLE IF NOT EXISTS protocol_policies (
-    id VARCHAR(64) PRIMARY KEY,
-    display_name VARCHAR(128) NOT NULL,
-    config JSONB NOT NULL,
-    is_default BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    config JSON NOT NULL,
+    is_default BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_protocol_policies_default ON protocol_policies(is_default);
+
+-- Add submission fields to findings
+ALTER TABLE findings ADD COLUMN submission_result JSON;
+ALTER TABLE findings ADD COLUMN evidence_quest_id TEXT;
+ALTER TABLE findings ADD COLUMN evidence_quest_completed BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX idx_findings_submission_decision ON findings(
+    json_extract(submission_result, '$.decision')
+);
+CREATE INDEX idx_findings_quest ON findings(evidence_quest_id);
 
 -- Create evidence_quests table
 CREATE TABLE IF NOT EXISTS evidence_quests (
-    id VARCHAR(64) PRIMARY KEY,
-    finding_id VARCHAR(64) NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
-    category VARCHAR(64) NOT NULL,
-    quest_type VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    missing_items JSONB,
-    evidence_found JSONB,
-    new_checklist_items JSONB,
+    id TEXT PRIMARY KEY,
+    finding_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    quest_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    missing_items JSON,
+    evidence_found JSON,
+    new_checklist_items JSON,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    success BOOLEAN,
+    success BOOLEAN DEFAULT FALSE,
     error_message TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (finding_id) REFERENCES findings(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_evidence_quests_finding_id ON evidence_quests(finding_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_quests_status ON evidence_quests(status);
+CREATE INDEX idx_quests_finding ON evidence_quests(finding_id);
+CREATE INDEX idx_quests_status ON evidence_quests(status);
+CREATE INDEX idx_quests_category ON evidence_quests(category);

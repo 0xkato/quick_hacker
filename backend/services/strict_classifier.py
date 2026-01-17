@@ -201,7 +201,7 @@ class StrictClassifier:
         self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if attacker can control the input."""
-        # Check for source evidence
+        # Check for source evidence in matches
         source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
 
         if source_matches:
@@ -211,8 +211,19 @@ class StrictClassifier:
                 reason=f"Found {len(source_matches)} user input sources"
             )
 
+        # Check for input_channel evidence (Phase 3 integration)
+        if (evidence.input_channel and
+            evidence.input_channel != InputChannel.unknown and
+            evidence.input_channel_deterministic):
+            # input_channel is set and deterministic - this indicates attacker control
+            return ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason=f"Input channel: {evidence.input_channel.value}, {getattr(evidence, 'input_channel_reason', '')}"
+            )
+
         # Check for explicit "no user input" patterns
-        snippet_lower = evidence.snippet.lower()
+        snippet_lower = evidence.snippet.lower() if evidence.snippet else ""
         if any(marker in snippet_lower for marker in ["constant", "hardcoded", "config", "static"]):
             return ChecklistItem(
                 value=False,
@@ -237,19 +248,19 @@ class StrictClassifier:
                 reason=f"Found {len(sink_matches)} dangerous sinks"
             )
 
-        # Check finding's code snippet for sink patterns
-        if finding.code_snippet:
-            snippet_lower = finding.code_snippet.lower()
-            sink_patterns = [
-                "subprocess", "exec", "eval", "system", "popen",
-                ".execute(", "yaml.load", "pickle.load", "requests.get", "requests.post"
-            ]
-            if any(p in snippet_lower for p in sink_patterns):
-                return ChecklistItem(
-                    value=True,
-                    status=ChecklistStatus.PROVEN,
-                    reason="Dangerous function found in code snippet"
-                )
+        # Check evidence snippet for sink patterns
+        snippet = evidence.snippet or finding.code_snippet or ""
+        snippet_lower = snippet.lower()
+        sink_patterns = [
+            "subprocess", "exec", "eval", "system", "popen",
+            ".execute(", "yaml.load", "pickle.load", "requests.get", "requests.post"
+        ]
+        if any(p in snippet_lower for p in sink_patterns):
+            return ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Dangerous function found in code snippet"
+            )
 
         return ChecklistItem(
             value=False,
@@ -257,10 +268,93 @@ class StrictClassifier:
             reason="No clear dangerous sinks found"
         )
 
+    def _check_sql_injection_dataflow(
+        self, finding: Finding, evidence: Evidence
+    ) -> Optional[ChecklistItem]:
+        """
+        Check SQL injection-specific patterns in evidence.
+
+        Returns ChecklistItem if pattern detected, None otherwise.
+        Priority: mitigations > vulnerabilities (a mitigation makes it safe)
+        """
+        snippet = evidence.snippet or evidence.handler_snippet or ""
+        snippet_lower = snippet.lower()
+
+        # FIRST: Check for explicit mitigations - these take highest priority
+        # Pattern 1: Complete allowlist validation before query
+        # Look for: ALLOWED_X = {...} followed by if check before execute
+        if 'allowed_' in snippet_lower and ('if' in snippet_lower and 'not in' in snippet_lower):
+            # More specific check: allowlist defined and checked
+            if re.search(r'ALLOWED_\w+\s*=\s*\{[^}]+\}', snippet, re.IGNORECASE):
+                if re.search(r'if\s+\w+\s+not\s+in\s+ALLOWED_\w+', snippet, re.IGNORECASE):
+                    return ChecklistItem(
+                        value=False,
+                        status=ChecklistStatus.DISPROVEN,
+                        reason="Complete allowlist validates input before use",
+                        reason_code="mitigated_by_allowlist"
+                    )
+
+        # Pattern 2: Positional placeholders with parameter list
+        # e.g., cursor.execute("SELECT * FROM users WHERE id = ?", [user_id])
+        # BUT: Don't match if there's also an unsafe pattern (mixed code)
+        positional_param = re.search(r'\.execute\s*\(\s*["\'].*?\?\s*.*?["\']\s*,\s*\[', snippet)
+        has_unsafe_fstring = re.search(r'f["\'].*?\{.*?\}.*?["\']', snippet) and '.execute' in snippet_lower
+        has_unsafe_concat = (re.search(r'["\'].*?\s*\+\s*\w+', snippet) or re.search(r'\w+\s*\+\s*["\']', snippet)) and ('.execute' in snippet_lower or 'query' in snippet_lower)
+
+        if positional_param and not (has_unsafe_fstring or has_unsafe_concat):
+            return ChecklistItem(
+                value=False,
+                status=ChecklistStatus.DISPROVEN,
+                reason="Parameter binding present: query uses placeholder ? with separate parameter list",
+                reason_code="mitigated_by_parameterization"
+            )
+
+        # Pattern 3: Named placeholders with parameter dict
+        # e.g., cursor.execute("SELECT * FROM users WHERE id = :id", {"id": user_id})
+        named_param = re.search(r'\.execute\s*\(\s*["\'].*?:\w+\s*.*?["\']\s*,\s*\{', snippet)
+        if named_param and not (has_unsafe_fstring or has_unsafe_concat):
+            return ChecklistItem(
+                value=False,
+                status=ChecklistStatus.DISPROVEN,
+                reason="Parameter binding with named placeholder",
+                reason_code="mitigated_by_parameterization"
+            )
+
+        # SECOND: Check for unsafe patterns (vulnerable)
+        # Pattern 4: f-string interpolation in SQL query
+        # e.g., f"SELECT * FROM users WHERE id = {user_id}"
+        if has_unsafe_fstring:
+            return ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="f-string interpolation in SQL query (structure-taint)",
+                reason_code="unsafe_identifier_influence"
+            )
+
+        # Pattern 5: String concatenation with + operator
+        # e.g., "SELECT * FROM users WHERE id = '" + user_id + "'"
+        if has_unsafe_concat:
+            return ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="String concatenation allows structure-taint",
+                reason_code="unsafe_structure_taint"
+            )
+
+        # No SQL injection-specific pattern detected
+        return None
+
     def _evaluate_dataflow_evidenced(
         self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if data flows from source to sink."""
+        # First check for SQL injection-specific patterns
+        category = self._normalize_category(finding)
+        if category == VulnerabilityCategory.SQL_INJECTION:
+            sql_result = self._check_sql_injection_dataflow(finding, evidence)
+            if sql_result is not None:
+                return sql_result
+
         source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
         sink_matches = [m for m in evidence.matches if m["match_type"] == "sink"]
 
@@ -318,6 +412,15 @@ class StrictClassifier:
                 reason=f"Found {len(route_matches)} route registrations"
             )
 
+        # Check input_channel_signals for route registration
+        if hasattr(evidence, 'input_channel_signals') and evidence.input_channel_signals:
+            if "route_registration" in evidence.input_channel_signals:
+                return ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="Route registration detected in input channel signals"
+                )
+
         # Check finding file path for route-like patterns
         if any(marker in finding.file_path.lower() for marker in [
             "/routes/", "/api/", "/handlers/", "/views/", "/endpoints/"
@@ -345,6 +448,16 @@ class StrictClassifier:
                 value=True,
                 status=ChecklistStatus.PROVEN,
                 reason=f"Framework detected: {evidence.framework}"
+            )
+
+        # Check input_channel for network boundary
+        if (evidence.input_channel and
+            evidence.input_channel == InputChannel.network and
+            evidence.input_channel_deterministic):
+            return ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason=f"Network boundary crossed: {getattr(evidence, 'input_channel_reason', '')}"
             )
 
         # Check for source matches that indicate HTTP/WS
@@ -387,7 +500,7 @@ class StrictClassifier:
         self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
         """Check if exploitable in default/secure config (STRICT logic)."""
-        snippet = (finding.description + " " + evidence.snippet).lower()
+        snippet = (finding.description + " " + evidence.snippet).lower() if evidence.snippet else finding.description.lower()
 
         # PROVEN False: explicit evidence exploitation requires disabled security
         misconfig_markers = [
@@ -426,6 +539,26 @@ class StrictClassifier:
                 reason="Auth check present but could be middleware"
             )
 
+        # For code-level vulnerabilities (SQL injection, etc.) with no explicit misconfig markers,
+        # assume PROVEN True (it's a code-level issue, not a config issue)
+        # This is the default assumption for most vulnerability types
+        category = self._normalize_category(finding)
+        code_level_categories = [
+            VulnerabilityCategory.SQL_INJECTION,
+            VulnerabilityCategory.COMMAND_INJECTION,
+            VulnerabilityCategory.CODE_INJECTION,
+            VulnerabilityCategory.XSS,
+            VulnerabilityCategory.PATH_TRAVERSAL,
+            VulnerabilityCategory.DESERIALIZATION,
+        ]
+
+        if category in code_level_categories:
+            return ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Code-level vulnerability, not configuration-dependent"
+            )
+
         # Default: UNKNOWN
         return ChecklistItem(
             value=False,
@@ -436,7 +569,11 @@ class StrictClassifier:
     def _evaluate_security_control_bypassed(
         self, finding: Finding, evidence: Evidence
     ) -> Optional[ChecklistItem]:
-        """Check if security control is explicitly bypassed (for BUG)."""
+        """Check if security control is explicitly bypassed (for BUG).
+
+        Note: This is for EXPLICIT bypasses (e.g., skip_auth=True), NOT for
+        missing mitigations. Missing mitigations are handled by dataflow_evidenced.
+        """
         snippet = (finding.description + " " + evidence.snippet).lower()
 
         # PROVEN True: explicit bypass markers in same scope
@@ -794,6 +931,25 @@ class StrictClassifier:
         # Rule 5: BY_DESIGN (code-exec features with conservative heuristics)
         # NEVER treat command injection as BY_DESIGN
         if self._is_product_feature(finding, evidence, checklist):
+            return Disposition.BY_DESIGN
+
+        # Rule 5b: BY_DESIGN (mitigated vulnerabilities with explicit reason codes)
+        # If dataflow or security_control_bypassed is DISPROVEN with a mitigation reason_code,
+        # treat as BY_DESIGN (the code has proper security controls)
+        mitigation_reason_codes = [
+            "mitigated_by_parameterization",
+            "mitigated_by_allowlist",
+            "mitigated_by_sanitization",
+            "mitigated_by_validation"
+        ]
+
+        if (checklist.dataflow_evidenced.status == ChecklistStatus.DISPROVEN and
+                checklist.dataflow_evidenced.reason_code in mitigation_reason_codes):
+            return Disposition.BY_DESIGN
+
+        if (checklist.security_control_bypassed and
+                checklist.security_control_bypassed.status == ChecklistStatus.DISPROVEN and
+                checklist.security_control_bypassed.reason_code in mitigation_reason_codes):
             return Disposition.BY_DESIGN
 
         # Rule 6: HARDENING (sink + (reachable OR source) but no dataflow)

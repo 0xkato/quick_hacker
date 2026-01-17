@@ -4,6 +4,8 @@ import { useEffect } from 'react';
 import { X, FileCode, ExternalLink } from 'lucide-react';
 import type { Finding } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
+import { SubmissionBadge } from '@/components/FindingsList/SubmissionBadge';
+import { SubmissionPanel } from '@/components/FindingDrawer/SubmissionPanel';
 
 // Import constants from FindingsList
 const DISPOSITION_COLORS: Record<string, string> = {
@@ -174,6 +176,10 @@ export function FindingDrawer({ finding, onClose, onNavigateToFile }: FindingDra
                   Filtered by triage
                 </span>
               )}
+              {/* Submission badge */}
+              {finding.submission_result && (
+                <SubmissionBadge submissionResult={finding.submission_result} />
+              )}
             </div>
             <h2 className="text-vsc-base text-vsc-text font-medium">{finding.title}</h2>
           </div>
@@ -328,6 +334,24 @@ export function FindingDrawer({ finding, onClose, onNavigateToFile }: FindingDra
                   <span className="text-vsc-xs text-vsc-text">{finding.exploit_confidence}%</span>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Submission Panel */}
+          {finding.submission_result && (
+            <div>
+              <h4 className="text-vsc-text-muted text-vsc-xs uppercase tracking-wider mb-2">
+                Submission Evaluation
+              </h4>
+              <SubmissionPanel
+                submissionResult={finding.submission_result}
+                findingId={finding.id}
+                onRetriggerQuest={() => {
+                  // In a real implementation, this would refetch the finding
+                  // For now, we'll just log it
+                  console.log('Quest retriggered for finding:', finding.id);
+                }}
+              />
             </div>
           )}
         </div>

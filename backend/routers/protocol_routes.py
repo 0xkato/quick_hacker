@@ -78,3 +78,98 @@ async def update_project_protocol(
     await db.commit()
 
     return {"success": True, "protocol_id": protocol_id}
+
+
+@router.post("/findings/{finding_id}/quests")
+async def trigger_evidence_quest(
+    finding_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually trigger evidence quest for a finding."""
+    # Get finding
+    result = await db.execute(
+        text("SELECT * FROM findings WHERE id = :finding_id"),
+        {"finding_id": finding_id}
+    )
+    row = result.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # TODO: Get evidence and trigger quest
+    # For now, return placeholder
+    return {
+        "message": "Quest triggering not yet fully implemented",
+        "finding_id": finding_id,
+        "status": "pending"
+    }
+
+
+@router.get("/findings/{finding_id}/quests")
+async def get_finding_quests(
+    finding_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all quests for a finding."""
+    result = await db.execute(
+        text("""
+            SELECT id, quest_type, status, started_at, completed_at, success
+            FROM evidence_quests
+            WHERE finding_id = :finding_id
+            ORDER BY created_at DESC
+        """),
+        {"finding_id": finding_id}
+    )
+
+    rows = result.fetchall()
+
+    quests = []
+    for row in rows:
+        quests.append({
+            "id": row[0],
+            "quest_type": row[1],
+            "status": row[2],
+            "started_at": row[3],
+            "completed_at": row[4],
+            "success": bool(row[5]) if row[5] is not None else None
+        })
+
+    return {"quests": quests}
+
+
+@router.get("/quests/{quest_id}")
+async def get_quest_details(
+    quest_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get detailed quest information."""
+    result = await db.execute(
+        text("""
+            SELECT id, finding_id, category, quest_type, status,
+                   missing_items, evidence_found, new_checklist_items,
+                   started_at, completed_at, success, error_message
+            FROM evidence_quests
+            WHERE id = :quest_id
+        """),
+        {"quest_id": quest_id}
+    )
+
+    row = result.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Quest not found")
+
+    return {
+        "id": row[0],
+        "finding_id": row[1],
+        "category": row[2],
+        "quest_type": row[3],
+        "status": row[4],
+        "missing_items": json.loads(row[5]) if row[5] else [],
+        "evidence_found": json.loads(row[6]) if row[6] else {},
+        "new_checklist_items": json.loads(row[7]) if row[7] else {},
+        "started_at": row[8],
+        "completed_at": row[9],
+        "success": bool(row[10]) if row[10] is not None else None,
+        "error_message": row[11]
+    }

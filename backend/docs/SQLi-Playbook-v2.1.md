@@ -27,7 +27,8 @@
 **Safe patterns:**
 - `mitigated_by_parameterization` - Query uses ? or :name placeholders
 - `mitigated_by_allowlist` - Complete allowlist validates input
-- `mitigated_by_safe_builder` - Framework API prevents injection
+- `mitigated_by_sanitization` - Input is sanitized before use
+- `mitigated_by_validation` - Input is validated against constraints
 
 **Unsafe patterns:**
 - `unsafe_structure_taint` - String interpolation in query

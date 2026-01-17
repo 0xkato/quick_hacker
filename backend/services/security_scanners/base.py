@@ -40,6 +40,7 @@ class ScannerTool(str, Enum):
     SECRETS = "secrets"
     DEPENDENCIES = "dependencies"
     GREP = "grep"
+    SEMGREP = "semgrep"
 
     def __str__(self) -> str:
         return self.value

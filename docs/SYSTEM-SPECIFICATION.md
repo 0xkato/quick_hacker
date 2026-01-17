@@ -14,10 +14,11 @@
 5. [Threat Modeling System](#threat-modeling-system)
 6. [Triage & Classification](#triage--classification)
 7. [Security Issue vs Bug Classification](#security-issue-vs-bug-classification)
-8. [Data Models](#data-models)
-9. [API Reference](#api-reference)
-10. [Testing Strategy](#testing-strategy)
-11. [Deployment](#deployment)
+8. [Protocol-Aware Reportability Layer](#protocol-aware-reportability-layer)
+9. [Data Models](#data-models)
+10. [API Reference](#api-reference)
+11. [Testing Strategy](#testing-strategy)
+12. [Deployment](#deployment)
 
 ---
 
@@ -1389,6 +1390,116 @@ def get_logs():
 - Gating: Not applicable
 
 **Disposition:** HARDENING (add auth, rate limiting)
+
+---
+
+## Protocol-Aware Reportability Layer
+
+### Overview
+
+The protocol layer sits between the triage pipeline and final report generation. It evaluates whether findings are worth submitting to specific disclosure channels (bug bounties, VRPs, internal reporting).
+
+### Architecture
+
+```
+Finding → Evidence → Classification → Protocol Evaluation → Storage
+                          ↓              ↓
+                    Disposition    SubmissionResult
+                                        ↓
+                                  Evidence Quest? → Re-triage
+```
+
+### Key Components
+
+**ProtocolEvaluator:** Applies protocol-specific quality gates to determine submit/dont_submit/needs_more_info
+
+**ProtocolPolicy:** Configuration defining quality requirements per protocol (osvrp_strict, hackerone_strict, etc.)
+
+**EvidenceQuestOrchestrator:** Manages autonomous LLM agents that gather missing evidence for high-signal findings
+
+**Quest Playbooks:** Category-specific evidence gathering strategies (CommandInjectionQuest, SQLInjectionQuest, etc.)
+
+### Data Models
+
+**SubmissionResult:**
+- decision: submit | dont_submit | needs_more_info
+- reasons: Human-readable explanations
+- missing_evidence: Specific gaps (for NMI)
+- quest_run: Whether evidence quest was triggered
+- disposition_modified: If protocol changed disposition
+
+**ProtocolPolicy:**
+- min_disposition_to_submit: Set of dispositions that meet threshold
+- require_cross_boundary_for_local_bugs: Gate for CLI/local bugs
+- category_rules: Per-category validation (e.g., command injection requires shell)
+- enable_evidence_quests: Whether to run autonomous evidence gathering
+
+### Evaluation Flow
+
+1. **Gate 1 - Disposition:** Check if disposition meets protocol threshold
+2. **Gate 2 - Checklist:** Verify sufficient PROVEN items
+3. **Gate 3 - Attacker Model:** Reject social engineering if policy requires
+4. **Gate 4 - Category Rules:** Apply vulnerability-specific validation
+5. **Gate 5 - Local Boundary:** Check automation for local bugs
+
+If any gate fails: Either reject (dont_submit) or request more info (needs_more_info)
+
+If all gates pass: Accept for submission (submit)
+
+### Disposition Override
+
+ProtocolEvaluator can modify Finding.disposition based on protocol rules:
+- VALID → HARDENING (insufficient proof)
+- VALID → HARDENING (local-only without automation)
+- VALID → HARDENING (social engineering dependency)
+
+No audit trail is preserved (simplified approach).
+
+### Evidence Quests
+
+When needs_more_info with quest_run=True:
+1. Create EvidenceQuest in database
+2. Instantiate category-specific playbook (CommandInjectionQuest, etc.)
+3. Playbook uses LLM with tools to gather missing evidence
+4. If quest succeeds: Update Evidence → Re-run Classifier → Re-run ProtocolEvaluator
+5. Store quest results in database for audit
+
+Quest playbooks have access to:
+- read_file: Read source code
+- grep: Search codebase
+- parse_ast: Parse Python AST
+- (Future: More sophisticated analysis tools)
+
+### Database Schema
+
+**protocol_policies table:**
+- Stores policy configurations as JSON
+- Seeded with 5 defaults on first run
+
+**evidence_quests table:**
+- Tracks quest execution lifecycle
+- Stores evidence_found and new_checklist_items
+
+**findings.submission_result:**
+- JSON field storing SubmissionResult
+- Indexed on decision for filtering
+
+### API Endpoints
+
+- GET /protocol-policies (list all)
+- GET /protocol-policies/:id (get specific)
+- PATCH /projects/:id (update project protocol)
+- POST /findings/:id/quests (trigger quest)
+- GET /findings/:id/quests (list quests)
+- GET /quests/:id (quest details)
+- GET /findings (with submission_decision filter)
+
+### UI Components
+
+- ProtocolPolicySelector: Choose protocol in project settings
+- SubmissionBadge: Visual indicator (✓ / ✗ / ?) in findings list
+- SubmissionPanel: Full details in finding drawer
+- Quest status display: Show when quest ran and what it found
 
 ---
 

@@ -117,9 +117,9 @@ class VulnerabilityCategory(str, Enum):
 
 class SubmissionDecision(str, Enum):
     """Protocol evaluation decision for reportability."""
-    submit = "submit"
-    dont_submit = "dont_submit"
-    needs_more_info = "needs_more_info"
+    SUBMIT = "submit"
+    DONT_SUBMIT = "dont_submit"
+    NEEDS_MORE_INFO = "needs_more_info"
 
 
 class InputChannel(str, Enum):

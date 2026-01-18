@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
 from config import settings
+from database import AsyncSessionLocal
 from middleware.auth import AuthContext, get_user_api_key_for_provider
 from models.schemas import (
     Agent,
@@ -1008,13 +1010,39 @@ class AgentOrchestrator:
                         max_snippet_lines=settings.triage_max_snippet_lines
                     )
 
-                    # Run triage in worker thread (evidence gathering + classification)
+                    # Load protocol policy for this project
+                    from services.protocol_policies import ProtocolPolicyLoader
+                    from protocol_config import ProtocolConfig
+
+                    protocol_policy = None
+                    db_conn = None
+                    if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
+                        try:
+                            async with AsyncSessionLocal() as db:
+                                # Get project's protocol_id from database
+                                result = await db.execute(
+                                    text("SELECT protocol_id FROM projects WHERE id = :agent_id"),
+                                    {"agent_id": agent.id}
+                                )
+                                row = result.fetchone()
+                                protocol_id = row[0] if row and row[0] else ProtocolConfig.DEFAULT_PROTOCOL_ID
+
+                                # Load the protocol policy
+                                loader = ProtocolPolicyLoader(db)
+                                protocol_policy = await loader.get_policy(protocol_id)
+                                db_conn = db
+                        except Exception as e:
+                            print(f"Warning: Failed to load protocol policy: {e}")
+
+                    # Run triage in worker thread with protocol evaluation
                     triage_result = await asyncio.to_thread(
-                        triage_service.triage_findings,
+                        triage_service.triage_with_protocol,
                         repo_root=agent.repo_path,
                         findings=raw_findings,
                         policy_version=settings.triage_policy_version,
-                        budgets=budgets
+                        budgets=budgets,
+                        protocol_policy=protocol_policy,
+                        db_conn=db_conn,
                     )
 
                     # Assert no findings dropped
@@ -1665,13 +1693,39 @@ class AgentOrchestrator:
                             max_snippet_lines=settings.triage_max_snippet_lines,
                         )
 
+                        # Load protocol policy for this project
+                        from services.protocol_policies import ProtocolPolicyLoader
+                        from protocol_config import ProtocolConfig
+
+                        protocol_policy = None
+                        db_conn = None
+                        if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
+                            try:
+                                async with AsyncSessionLocal() as db:
+                                    # Get project's protocol_id from database
+                                    result = await db.execute(
+                                        text("SELECT protocol_id FROM projects WHERE id = :agent_id"),
+                                        {"agent_id": agent.id}
+                                    )
+                                    row = result.fetchone()
+                                    protocol_id = row[0] if row and row[0] else ProtocolConfig.DEFAULT_PROTOCOL_ID
+
+                                    # Load the protocol policy
+                                    loader = ProtocolPolicyLoader(db)
+                                    protocol_policy = await loader.get_policy(protocol_id)
+                                    db_conn = db
+                            except Exception as e:
+                                print(f"Warning: Failed to load protocol policy: {e}")
+
                         triage_result = await asyncio.to_thread(
-                            triage_service.triage_findings,
+                            triage_service.triage_with_protocol,
                             repo_root=str(agent.repo_path),
                             findings=new_findings,
                             policy_version=settings.triage_policy_version,
                             budgets=budgets,
                             threat_model_profile=threat_model_profile_for_gating,
+                            protocol_policy=protocol_policy,
+                            db_conn=db_conn,
                         )
 
                         codex_findings[last_triaged_count:] = triage_result.triaged_findings
@@ -1768,12 +1822,39 @@ class AgentOrchestrator:
                         max_evidence_bytes=settings.triage_max_evidence_bytes,
                         max_snippet_lines=settings.triage_max_snippet_lines,
                     )
+
+                    # Load protocol policy for this project
+                    from services.protocol_policies import ProtocolPolicyLoader
+                    from protocol_config import ProtocolConfig
+
+                    protocol_policy = None
+                    db_conn = None
+                    if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
+                        try:
+                            async with AsyncSessionLocal() as db:
+                                # Get project's protocol_id from database
+                                result = await db.execute(
+                                    text("SELECT protocol_id FROM projects WHERE id = :agent_id"),
+                                    {"agent_id": agent.id}
+                                )
+                                row = result.fetchone()
+                                protocol_id = row[0] if row and row[0] else ProtocolConfig.DEFAULT_PROTOCOL_ID
+
+                                # Load the protocol policy
+                                loader = ProtocolPolicyLoader(db)
+                                protocol_policy = await loader.get_policy(protocol_id)
+                                db_conn = db
+                        except Exception as e:
+                            print(f"Warning: Failed to load protocol policy: {e}")
+
                     triage_result = await asyncio.to_thread(
-                        triage_service.triage_findings,
+                        triage_service.triage_with_protocol,
                         repo_root=str(agent.repo_path),
                         findings=raw_findings,
                         policy_version=settings.triage_policy_version,
                         budgets=budgets,
+                        protocol_policy=protocol_policy,
+                        db_conn=db_conn,
                     )
                     triaged_findings = triage_result.triaged_findings
                     reportable_count = triage_result.metrics.reportable_count

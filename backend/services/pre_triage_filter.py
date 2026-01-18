@@ -1,6 +1,14 @@
 """Pre-triage filtering for VRP policies."""
+import warnings
 from models.schemas import Finding, TriagePolicy, PathClassification
 from services.path_classifier import classify_path
+
+# Deprecation warning
+warnings.warn(
+    "pre_triage_filter is deprecated. Use services.finding_filters.PathFilter instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def pre_filter_findings(

@@ -1211,7 +1211,7 @@ class ToolCore:
             Dict with decision ("keep" or "filter") and reason
         """
         # Import here to avoid circular dependencies
-        from services.production_relevance_filter import ProductionRelevanceFilter
+        from services.finding_filters import ProductionRelevanceFilter
         from protocol_config.protocol_config import ProtocolConfig
         from models.schemas import Finding, Severity
 

@@ -5,19 +5,10 @@ Uses Claude to intelligently determine if a finding is relevant for bug bounty
 submission based on file path, code context, and production impact.
 """
 
-import warnings
 from typing import Optional
 from anthropic import Anthropic
 from models.schemas import Finding, Disposition
 from protocol_config.protocol_config import ProtocolConfig
-
-# Deprecation warning
-warnings.warn(
-    "production_relevance_filter is deprecated. Use services.finding_filters.ProductionRelevanceFilter instead.",
-    DeprecationWarning,
-    stacklevel=2
-)
-
 
 class ProductionRelevanceFilter:
     """

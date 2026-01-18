@@ -20,7 +20,7 @@ from models.schemas import (
     InputChannel,
     Evidence,
 )
-from services.threat_model_gating import derive_allowed_input_channels
+from services.finding_filters.filters.threat_model_filter import derive_allowed_input_channels
 
 
 @dataclass

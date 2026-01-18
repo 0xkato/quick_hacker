@@ -1,11 +1,13 @@
 """Agent management API router."""
 
+import asyncio
 import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 
 from database import get_db
 from middleware.auth import AuthContext, require_auth
@@ -613,14 +615,38 @@ async def retriage_findings(
         max_snippet_lines=settings.triage_max_snippet_lines,
     )
 
-    # Run triage in thread
+    # Load protocol policy for this project
+    from services.protocol_policies import ProtocolPolicyLoader
+    from protocol_config import ProtocolConfig
+
+    protocol_policy = None
+    if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
+        try:
+            # Get project's protocol_id from database
+            result = await db.execute(
+                text("SELECT protocol_id FROM projects WHERE id = :agent_id"),
+                {"agent_id": agent_id}
+            )
+            row = result.fetchone()
+            protocol_id = row[0] if row and row[0] else ProtocolConfig.DEFAULT_PROTOCOL_ID
+
+            # Load the protocol policy
+            loader = ProtocolPolicyLoader(db)
+            protocol_policy = await loader.get_policy(protocol_id)
+        except Exception as e:
+            # Log but don't fail if protocol loading fails
+            print(f"Warning: Failed to load protocol policy: {e}")
+
+    # Run triage in thread with protocol evaluation
     try:
         triage_result = await asyncio.to_thread(
-            triage_service.triage_findings,
+            triage_service.triage_with_protocol,
             repo_root=repo_path,
             findings=findings,
             policy_version=settings.triage_policy_version,
             budgets=budgets,
+            protocol_policy=protocol_policy,
+            db_conn=db,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Triage failed: {str(e)}")

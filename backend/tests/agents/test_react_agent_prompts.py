@@ -1,5 +1,5 @@
 import pytest
-from agents.react_agent import ReActSecurityAgent
+from agents.react import ReActSecurityAgent
 from services.prompt_router import PromptRouter
 from models.schemas import AgentCreateRequest, AgentType, ProviderConfig, ProviderType
 

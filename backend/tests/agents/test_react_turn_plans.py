@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
-from agents.react_agent import ReActSecurityAgent
+from agents.react import ReActSecurityAgent
 from models.schemas import AgentCreateRequest, AgentType, ProviderConfig
 from models.turn_plan import TurnPlan, Hypothesis, HypothesisActivity, FocusGap
 

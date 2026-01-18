@@ -19,7 +19,7 @@ from models.schemas import (
 )
 from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
-from agents.react_agent import ReActSecurityAgent
+from agents.react import ReActSecurityAgent
 from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import SDK_AVAILABLE
 from services.tool_cache import ToolCache

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents.base_agent import BaseAgent
-from agents.react_agent import ReActSecurityAgent
+from agents.react import ReActSecurityAgent
 from models.schemas import AgentCreateRequest, AgentType, ProviderConfig, ProviderType
 
 

@@ -482,12 +482,12 @@ class StrictClassifier:
 
         # Check for internal markers
         if any(marker in finding.file_path.lower() for marker in [
-            "/migration/", "/test/", "/script/", "/internal/", "/cron/"
+            "/migration/", "/test/", "/script/", "/internal/", "/cron/", "/tools/", "/docs/"
         ]):
             return ChecklistItem(
                 value=False,
                 status=ChecklistStatus.DISPROVEN,
-                reason="Internal/test/migration context"
+                reason="Internal/test/tools/docs/migration context"
             )
 
         return ChecklistItem(
@@ -1048,6 +1048,8 @@ class StrictClassifier:
                 "third_party", "third-party", "/vendor/", "vendored",
                 # Common cert fixture locations in embedded servers.
                 "resources/cert", "resources/certs", "resources/ssl_cert",
+                # Build tools and utilities often have example/test code
+                "/tools/", "tools/",
                 "_obsolete",
             ]):
                 return Disposition.HARDENING

@@ -480,9 +480,11 @@ class StrictClassifier:
                 reason="File path indicates HTTP/WebSocket handler"
             )
 
-        # Check for internal markers
-        if any(marker in finding.file_path.lower() for marker in [
-            "/migration/", "/test/", "/script/", "/internal/", "/cron/", "/tools/", "/docs/"
+        # Check for internal markers (both absolute and relative paths)
+        path_lower = finding.file_path.lower()
+        if any(marker in path_lower for marker in [
+            "/migration/", "/test/", "/script/", "/internal/", "/cron/", "/tools/", "/docs/",
+            "migration/", "test/", "script/", "internal/", "cron/", "tools/", "docs/"
         ]):
             return ChecklistItem(
                 value=False,
@@ -1048,8 +1050,8 @@ class StrictClassifier:
                 "third_party", "third-party", "/vendor/", "vendored",
                 # Common cert fixture locations in embedded servers.
                 "resources/cert", "resources/certs", "resources/ssl_cert",
-                # Build tools and utilities often have example/test code
-                "/tools/", "tools/",
+                # Build tools, utilities, docs, samples often have example/test code
+                "/tools/", "tools/", "/docs/", "docs/", "samples/", "/samples/",
                 "_obsolete",
             ]):
                 return Disposition.HARDENING
@@ -1060,6 +1062,16 @@ class StrictClassifier:
                 if (checklist.source_controlled_input.status != ChecklistStatus.PROVEN or
                         not checklist.source_controlled_input.value):
                     return Disposition.BY_DESIGN
+
+        # Command injection and other bugs in tools/test/docs/samples are not production issues
+        path_lower = finding.file_path.lower()
+        if any(marker in path_lower for marker in [
+            "tools/", "/tools/", "test/", "/test/", "docs/", "/docs/",
+            "samples/", "/samples/", "dockerfile", ".sh", "scripts/"
+        ]):
+            # Downgrade to HARDENING (not production code)
+            if disposition in [Disposition.VALID_SECURITY_ISSUE, Disposition.BUG]:
+                return Disposition.HARDENING
 
         return disposition
 

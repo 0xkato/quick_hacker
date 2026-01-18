@@ -36,25 +36,19 @@ import { ResumeDialog } from '@/components/ResumeDialog';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '@/hooks/useAuth';
 import { useInvestigationFlow } from '@/hooks/useInvestigationFlow';
+import { useAgentManagement } from '@/hooks/useAgentManagement';
+import { useFindingsManagement } from '@/hooks/useFindingsManagement';
+import { useProjectWorkspace } from '@/hooks/useProjectWorkspace';
+import { usePanelLayout, type ActivityView } from '@/hooks/usePanelLayout';
+import { useSessionManagement } from '@/hooks/useSessionManagement';
+import { useObservability } from '@/hooks/useObservability';
+import { useCallTree } from '@/hooks/useCallTree';
 import { featureFlags, FeatureFlag } from '@/lib/featureFlags';
-import { files, agents as agentsApi, calltree as calltreeApi, projects as projectsApi, session as sessionApi, setAuthFunctions, type Project } from '@/lib/api';
-import { autoSelectFindingsAgentId } from '@/lib/findingsSelection';
+import { agents as agentsApi, projects as projectsApi, setAuthFunctions, type Project } from '@/lib/api';
 import type {
-  FileNode,
-  FileContent,
-  Agent,
-  Finding,
-  AgentProgress,
-  InvestigationFlow,
-  CallTreeRoute,
-  LLMInteraction,
-  ToolDetail,
   InvestigationReport,
-  SessionStatus,
-  SnapshotInfo,
 } from '@/types';
 
-type ActivityView = 'explorer' | 'search' | 'agents' | 'findings' | 'flow' | 'llm';
 type ThreatModel = 'A' | 'AB' | 'ABC';
 
 export default function Home() {
@@ -64,58 +58,50 @@ export default function Home() {
   const [showThreatModelModal, setShowThreatModelModal] = useState(false);
   const [threatModelPresetPreview, setThreatModelPresetPreview] = useState<ThreatModel | null>(null);
 
-  // State
-  const [fileTree, setFileTree] = useState<FileNode | null>(null);
-  const [currentFile, setCurrentFile] = useState<FileContent | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [findings, setFindings] = useState<Finding[]>([]);
-  const [agentProgress, setAgentProgress] = useState<Record<string, AgentProgress>>({});
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [selectedFindingsAgentId, setSelectedFindingsAgentId] = useState<string | null>(null);
-  const [userSelectedFindingsAgentId, setUserSelectedFindingsAgentId] = useState(false);
-  const [agentFlow, setAgentFlow] = useState<InvestigationFlow | null>(null);
-  const [diagramMode, setDiagramMode] = useState<'investigation' | 'calltree'>('investigation');
-  const [callTreeRoutes, setCallTreeRoutes] = useState<CallTreeRoute[]>([]);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [callTreeFlow, setCallTreeFlow] = useState<InvestigationFlow | null>(null);
-  const [isCallTreeRoutesLoading, setIsCallTreeRoutesLoading] = useState(false);
-  const [isCallTreeLoading, setIsCallTreeLoading] = useState(false);
-
-  // Observability state
-  const [llmInteractions, setLlmInteractions] = useState<LLMInteraction[]>([]);
-  const [toolDetails, setToolDetails] = useState<ToolDetail[]>([]);
-
   // Report state
   const [currentReport, setCurrentReport] = useState<InvestigationReport | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
 
-  // UI state
-  const [activeView, setActiveView] = useState<ActivityView>('explorer');
-  const [showSidebar, setShowSidebar] = useState(true);
-  const [showPanel, setShowPanel] = useState(true);
-  const [showChat, setShowChat] = useState(false);
+  // Modal state
   const [showSettings, setShowSettings] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-
-  // Session hibernation state
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>('active');
-  const [snapshotInfo, setSnapshotInfo] = useState<SnapshotInfo | null>(null);
-  const [showResumeDialog, setShowResumeDialog] = useState(false);
-
-  // Drawer state
-  const [selectedFindingForDrawer, setSelectedFindingForDrawer] = useState<Finding | null>(null);
 
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
 
   // Feature flag state
   const [useSpanBasedFlow, setUseSpanBasedFlow] = useState(false);
+  const [diagramMode, setDiagramMode] = useState<'investigation' | 'calltree'>('investigation');
+
+  // Custom hooks for state management
+  const panels = usePanelLayout();
+  const workspace = useProjectWorkspace({ currentProject });
+  const agentMgmt = useAgentManagement({ projectId: currentProject?.id || null, isAuthenticated });
+  const findingsMgmt = useFindingsManagement({
+    projectId: currentProject?.id || null,
+    agents: agentMgmt.agents,
+    selectedAgentId: agentMgmt.selectedAgentId,
+    activeView: panels.activeView,
+  });
+  const sessionMgmt = useSessionManagement({
+    currentProjectId: currentProject?.id || null,
+    isAuthenticated,
+    agents: agentMgmt.agents,
+  });
+  const observability = useObservability({
+    selectedAgentId: agentMgmt.selectedAgentId,
+    isAuthenticated,
+  });
+  const callTree = useCallTree({
+    projectId: currentProject?.id || null,
+    diagramMode,
+    isAuthenticated,
+  });
 
   // Span-based flow reconstruction (only when feature enabled)
-  const flowEvents = agentFlow?.nodes || [];
+  const flowEvents = agentMgmt.agentFlow?.nodes || [];
   const { spans, edges: spanEdges, isLoading: isReconstructing } = useInvestigationFlow(
-    selectedAgentId || '',
+    agentMgmt.selectedAgentId || '',
     useSpanBasedFlow ? flowEvents : []
   );
 
@@ -133,37 +119,8 @@ export default function Home() {
     }
   }, [user]);
 
-  // Auto-select agent for findings view
-  useEffect(() => {
-    if (activeView !== 'findings') return;
-    if (agents.length === 0) return;
-
-    const nextSelection = autoSelectFindingsAgentId({
-      agents,
-      findings,
-      selectedAgentId,
-      selectedFindingsAgentId,
-      userSelectedFindingsAgentId,
-    });
-
-    if (nextSelection !== selectedFindingsAgentId) {
-      setSelectedFindingsAgentId(nextSelection);
-    }
-  }, [activeView, agents, findings, selectedAgentId, selectedFindingsAgentId, userSelectedFindingsAgentId]);
-
-  // Persist selected agent across refreshes
-  useEffect(() => {
-    const stored = localStorage.getItem('quickhack.selectedAgentId');
-    if (stored) setSelectedAgentId(stored);
-  }, []);
-
-  useEffect(() => {
-    if (selectedAgentId) {
-      localStorage.setItem('quickhack.selectedAgentId', selectedAgentId);
-    } else {
-      localStorage.removeItem('quickhack.selectedAgentId');
-    }
-  }, [selectedAgentId]);
+  // Auto-select agent for findings view - now handled by useFindingsManagement hook
+  // Persist selected agent across refreshes - now handled by useAgentManagement hook
 
   // Set up API auth functions
   useEffect(() => {
@@ -173,50 +130,56 @@ export default function Home() {
   // WebSocket - only connect after auth is ready (JWT or legacy session token)
   const { isConnected } = useWebSocket({
     enabled: isAuthenticated,
-    onFinding: useCallback((finding: Finding) => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onFinding: useCallback((finding: any) => {
       // Only add finding if it belongs to an agent in the current project
-      setFindings((prev) => {
+      findingsMgmt.setFindings((prev) => {
         // Check if this finding's agent belongs to current project
-        const belongsToCurrentProject = agents.some(agent => agent.id === finding.agent_id);
+        const belongsToCurrentProject = agentMgmt.agents.some(agent => agent.id === finding.agent_id);
         if (!belongsToCurrentProject) {
           console.log(`Ignoring finding from agent ${finding.agent_id} (different project)`);
           return prev;
         }
         return [finding, ...prev];
       });
-    }, [agents]),
-    onProgress: useCallback((agentId: string, progress: AgentProgress) => {
-      setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
+    }, [agentMgmt.agents, findingsMgmt.setFindings]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onProgress: useCallback((agentId: string, progress: any) => {
+      agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
       // Check for flow updates in progress data
       if (progress && (progress as any).type === 'flow_update' && (progress as any).flow) {
-        if (agentId === selectedAgentId) {
-          setAgentFlow((progress as any).flow);
+        if (agentId === agentMgmt.selectedAgentId) {
+          agentMgmt.setAgentFlow((progress as any).flow);
         }
       }
-    }, [selectedAgentId]),
+    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentProgress, agentMgmt.setAgentFlow]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     onAgentStatus: useCallback((agentId: string, status: string) => {
-      setAgents((prev) =>
+      agentMgmt.setAgents((prev) =>
         prev.map((a) =>
-          a.id === agentId ? { ...a, status: status as Agent['status'] } : a
+          a.id === agentId ? { ...a, status: status as any } : a
         )
       );
-    }, []),
+    }, [agentMgmt.setAgents]),
     // Observability handlers
-    onLLMRequest: useCallback((agentId: string, interaction: LLMInteraction) => {
-      if (!selectedAgentId || agentId === selectedAgentId) {
-        setLlmInteractions((prev) => [...prev, interaction]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onLLMRequest: useCallback((agentId: string, interaction: any) => {
+      if (!agentMgmt.selectedAgentId || agentId === agentMgmt.selectedAgentId) {
+        observability.setLlmInteractions((prev) => [...prev, interaction]);
       }
-    }, [selectedAgentId]),
-    onLLMResponse: useCallback((agentId: string, interaction: LLMInteraction) => {
-      if (!selectedAgentId || agentId === selectedAgentId) {
-        setLlmInteractions((prev) => [...prev, interaction]);
+    }, [agentMgmt.selectedAgentId, observability.setLlmInteractions]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onLLMResponse: useCallback((agentId: string, interaction: any) => {
+      if (!agentMgmt.selectedAgentId || agentId === agentMgmt.selectedAgentId) {
+        observability.setLlmInteractions((prev) => [...prev, interaction]);
       }
-    }, [selectedAgentId]),
-    onToolDetail: useCallback((agentId: string, detail: ToolDetail) => {
-      if (!selectedAgentId || agentId === selectedAgentId) {
-        setToolDetails((prev) => [...prev, detail]);
+    }, [agentMgmt.selectedAgentId, observability.setLlmInteractions]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onToolDetail: useCallback((agentId: string, detail: any) => {
+      if (!agentMgmt.selectedAgentId || agentId === agentMgmt.selectedAgentId) {
+        observability.setToolDetails((prev) => [...prev, detail]);
       }
-    }, [selectedAgentId]),
+    }, [agentMgmt.selectedAgentId, observability.setToolDetails]),
     onReportReady: useCallback(async (agentId: string, reportId: string) => {
       // Auto-fetch and show report when ready
       try {
@@ -229,149 +192,8 @@ export default function Home() {
     }, []),
   });
 
-  // Load flow and observability data when agent is selected
-  useEffect(() => {
-    if (!isAuthenticated || !selectedAgentId) {
-      setAgentFlow(null);
-      setLlmInteractions([]);
-      setToolDetails([]);
-      return;
-    }
-
-    let errorCount = 0;
-    const maxErrors = 3; // Stop polling after 3 consecutive errors
-    let intervalId: NodeJS.Timeout | null = null;
-
-    const loadFlow = async () => {
-      try {
-        const flow = await agentsApi.getFlow(selectedAgentId);
-        setAgentFlow(flow);
-        errorCount = 0; // Reset on success
-      } catch (err) {
-        console.error('Failed to load flow:', err);
-        errorCount++;
-        // Stop polling after too many errors (agent likely doesn't exist)
-        if (errorCount >= maxErrors && intervalId) {
-          console.log('Stopping flow polling due to repeated errors');
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-      }
-    };
-
-    const loadObservability = async () => {
-      try {
-        const [interactions, details] = await Promise.all([
-          agentsApi.getLLMInteractions(selectedAgentId),
-          agentsApi.getToolDetails(selectedAgentId),
-        ]);
-        setLlmInteractions(interactions);
-        setToolDetails(details);
-      } catch (err) {
-        console.error('Failed to load observability data:', err);
-      }
-    };
-
-    // Load flow and observability data
-    loadFlow();
-    loadObservability();
-
-    // Check if selected agent exists and get its status
-    const selectedAgent = agents.find(a => a.id === selectedAgentId);
-
-    // If agents are loaded but selected agent doesn't exist, clear selection
-    if (agents.length > 0 && !selectedAgent) {
-      console.log('Selected agent not found, clearing selection');
-      setSelectedAgentId(null);
-      return;
-    }
-
-    // Only poll if the selected agent is running
-    const isRunning = selectedAgent?.status === 'running' || selectedAgent?.status === 'pending';
-
-    if (isRunning) {
-      intervalId = setInterval(loadFlow, 2000);
-    }
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [selectedAgentId, agents, isAuthenticated]);
-
-  // Load call-tree routes when enabled
-  useEffect(() => {
-    const projectId = currentProject?.id;
-    if (!isAuthenticated || !projectId || diagramMode !== 'calltree') {
-      setCallTreeRoutes([]);
-      setSelectedRouteId(null);
-      setCallTreeFlow(null);
-      setIsCallTreeRoutesLoading(false);
-      setIsCallTreeLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsCallTreeRoutesLoading(true);
-
-    (async () => {
-      try {
-        const routes = await calltreeApi.listRoutes(projectId);
-        if (!cancelled) {
-          setCallTreeRoutes(routes);
-          setSelectedRouteId((prev) => {
-            if (!prev) return prev;
-            if (routes.some((r) => r.id === prev)) return prev;
-            setCallTreeFlow(null);
-            return null;
-          });
-        }
-      } catch (err) {
-        console.error('Failed to load call-tree routes:', err);
-        if (!cancelled) setCallTreeRoutes([]);
-      } finally {
-        if (!cancelled) setIsCallTreeRoutesLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentProject?.id, diagramMode, isAuthenticated]);
-
-  // Build call tree when a route is selected
-  useEffect(() => {
-    const projectId = currentProject?.id;
-    if (!isAuthenticated || !projectId || diagramMode !== 'calltree' || !selectedRouteId) {
-      setCallTreeFlow(null);
-      setIsCallTreeLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsCallTreeLoading(true);
-
-    (async () => {
-      try {
-        const flow = await calltreeApi.getTree(projectId, selectedRouteId, {
-          maxDepth: 6,
-          maxNodes: 250,
-          includeExternal: true,
-        });
-        if (!cancelled) setCallTreeFlow(flow);
-      } catch (err) {
-        console.error('Failed to build call tree:', err);
-        if (!cancelled) setCallTreeFlow(null);
-      } finally {
-        if (!cancelled) setIsCallTreeLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentProject?.id, diagramMode, selectedRouteId, isAuthenticated]);
+  // Load flow and observability data - now handled by useAgentManagement and useObservability hooks
+  // Load call-tree routes and build call tree - now handled by useCallTree hook
 
   // Initialize auth and check project status on mount
   useEffect(() => {
@@ -400,44 +222,20 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthLoading, isAuthenticated]);
 
-  // Check for existing snapshot on project load
-  useEffect(() => {
-    const projectId = currentProject?.id;
-    if (!isAuthenticated || !projectId) return;
-
-    const checkSnapshot = async () => {
-      try {
-        const info = await sessionApi.getSnapshotInfo();
-        setSnapshotInfo(info);
-      } catch (err) {
-        console.error('Failed to check snapshot:', err);
-      }
-    };
-
-    checkSnapshot();
-  }, [currentProject?.id, isAuthenticated]);
+  // Check for existing snapshot - now handled by useSessionManagement hook
 
   // Load project data when entering a project
   const loadProjectData = async (project: Project) => {
-    // Skip only if definitely no repo info at all
-    if (!project.repo_name && !project.is_cloned) return;
+    // Load file tree
+    await workspace.loadFileTree();
 
+    // Load agents and findings
     try {
-      // Try to load file tree - the backend will handle path resolution
-      const tree = await files.getTree(project.id);
-      setFileTree(tree);
-    } catch (err) {
-      console.error('Failed to load file tree:', err);
-      // Don't block other data loading if tree fails
-    }
-
-    try {
-      const projectAgents = await agentsApi.list(project.id);
-      setAgents(projectAgents);
-      const allFindings = await agentsApi.getAllFindings(project.id);
-      setFindings(allFindings);
+      await agentMgmt.refreshAgents();
+      await findingsMgmt.refreshFindings();
     } catch (err) {
       console.error('Failed to load agents/findings:', err);
     }
@@ -446,13 +244,12 @@ export default function Home() {
   // Handle entering a project
   const handleProjectEnter = async (project: Project) => {
     setCurrentProject(project);
-    setCurrentFile(null);
-    setSelectedPath(null);
-    setAgents([]);
-    setFindings([]);
-    setFileTree(null);
-    setSelectedFindingsAgentId(null);
-    setUserSelectedFindingsAgentId(false);
+    workspace.clearFile();
+    agentMgmt.setAgents([]);
+    findingsMgmt.setFindings([]);
+    workspace.setFileTree(null);
+    findingsMgmt.setSelectedFindingsAgentId(null);
+    findingsMgmt.setUserSelectedFindingsAgentId(false);
     await loadProjectData(project);
   };
 
@@ -464,13 +261,12 @@ export default function Home() {
       console.error('Failed to exit project:', err);
     }
     setCurrentProject(null);
-    setCurrentFile(null);
-    setSelectedPath(null);
-    setAgents([]);
-    setFindings([]);
-    setFileTree(null);
-    setSelectedFindingsAgentId(null);
-    setUserSelectedFindingsAgentId(false);
+    workspace.clearFile();
+    agentMgmt.setAgents([]);
+    findingsMgmt.setFindings([]);
+    workspace.setFileTree(null);
+    findingsMgmt.setSelectedFindingsAgentId(null);
+    findingsMgmt.setUserSelectedFindingsAgentId(false);
   };
 
   const openThreatModelModal = (preset?: ThreatModel) => {
@@ -491,21 +287,12 @@ export default function Home() {
 
   // Select file
   const handleFileSelect = async (path: string) => {
-    if (!currentProject) return;
-
-    setSelectedPath(path);
-
-    try {
-      const content = await files.getContent(currentProject.id, path);
-      setCurrentFile(content);
-    } catch (err) {
-      console.error('Failed to load file:', err);
-    }
+    await workspace.selectFile(path);
   };
 
   // Finding click - open drawer
-  const handleFindingClick = (finding: Finding) => {
-    setSelectedFindingForDrawer(finding);
+  const handleFindingClick = (finding: any) => {
+    findingsMgmt.setSelectedFindingForDrawer(finding);
   };
 
   // Navigate to file from drawer
@@ -514,27 +301,25 @@ export default function Home() {
   };
 
   // Agent callbacks
-  const handleAgentCreated = (agent: Agent) => {
-    setAgents((prev) => [agent, ...prev]);
+  const handleAgentCreated = (agent: any) => {
+    agentMgmt.setAgents((prev) => [agent, ...prev]);
   };
 
-  const handleAgentUpdated = (agent: Agent) => {
-    setAgents((prev) => prev.map((a) => (a.id === agent.id ? agent : a)));
+  const handleAgentUpdated = (agent: any) => {
+    agentMgmt.setAgents((prev) => prev.map((a) => (a.id === agent.id ? agent : a)));
   };
 
   const handleAgentDeleted = (agentId: string) => {
-    setAgents((prev) => prev.filter((a) => a.id !== agentId));
-    setFindings((prev) => prev.filter((f) => f.agent_id !== agentId));
+    agentMgmt.setAgents((prev) => prev.filter((a) => a.id !== agentId));
+    findingsMgmt.setFindings((prev) => prev.filter((f) => f.agent_id !== agentId));
   };
 
   // View report for an agent
   const handleViewReport = async (agentId: string) => {
-    try {
-      const report = await agentsApi.getReport(agentId);
+    const report = await agentMgmt.loadReport(agentId);
+    if (report) {
       setCurrentReport(report);
       setShowReportModal(true);
-    } catch (err) {
-      console.error('Failed to load report:', err);
     }
   };
 
@@ -559,65 +344,30 @@ export default function Home() {
 
   // Session restore handler
   const handleRestoreSession = useCallback(async () => {
-    try {
-      setSessionStatus('resuming');
-      const result = await sessionApi.resume();
-
-      // Restore findings from snapshot
-      if (result.snapshot.findings) {
-        setFindings(result.snapshot.findings as unknown as Finding[]);
-      }
-
-      // Restore UI state
-      const ui = result.snapshot.ui_state;
-      if (ui.active_view) {
-        setActiveView(ui.active_view as typeof activeView);
-      }
-      if (ui.selected_file) {
-        setSelectedPath(ui.selected_file);
-      }
-      if (ui.selected_agent_id) {
-        setSelectedAgentId(ui.selected_agent_id);
-      }
-
-      setSessionStatus('active');
-      setShowResumeDialog(false);
-      setSnapshotInfo(null);
-
-      // Delete snapshot after restore
-      await sessionApi.deleteSnapshot();
-    } catch (err) {
-      console.error('Failed to restore session:', err);
-      setSessionStatus('active');
-    }
-  }, []);
+    await sessionMgmt.restoreSession({
+      onFindingsRestore: (findings) => findingsMgmt.setFindings(findings),
+      onActiveViewRestore: (view) => panels.setActiveView(view),
+      onSelectedFileRestore: (path) => workspace.setSelectedPath(path),
+      onSelectedAgentRestore: (agentId) => agentMgmt.selectAgent(agentId),
+    });
+  }, [sessionMgmt, findingsMgmt, panels, workspace, agentMgmt]);
 
   // Handle showing dialog or auto-restore when snapshotInfo changes
   useEffect(() => {
-    if (!snapshotInfo) return;
+    if (!sessionMgmt.snapshotInfo) return;
 
     // Check if we have running agents (conflict)
-    const hasRunning = agents.some(a => a.status === 'running');
+    const hasRunning = agentMgmt.agents.some(a => a.status === 'running');
 
-    if (hasRunning) {
-      // Show conflict dialog
-      setShowResumeDialog(true);
-    } else {
+    if (!hasRunning) {
       // Auto-restore if no conflict
       handleRestoreSession();
     }
-  }, [snapshotInfo, agents, handleRestoreSession]);
+  }, [sessionMgmt.snapshotInfo, agentMgmt.agents, handleRestoreSession]);
 
   const handleKeepCurrent = useCallback(async () => {
-    setShowResumeDialog(false);
-    // Optionally delete the snapshot
-    try {
-      await sessionApi.deleteSnapshot();
-      setSnapshotInfo(null);
-    } catch (err) {
-      console.error('Failed to delete snapshot:', err);
-    }
-  }, []);
+    await sessionMgmt.keepCurrentSession();
+  }, [sessionMgmt]);
 
   const handleSessionPaused = useCallback(() => {
     // Could show a toast notification here
@@ -630,10 +380,10 @@ export default function Home() {
   }, []);
 
   // Count running agents and findings
-  const runningAgents = agents.filter((a) => a.status === 'running').length;
-  const criticalFindings = findings.filter((f) => f.severity === 'critical').length;
-  const highFindings = findings.filter((f) => f.severity === 'high').length;
-  const selectedAgent = selectedAgentId ? agents.find((a) => a.id === selectedAgentId) : null;
+  const runningAgents = agentMgmt.agents.filter((a) => a.status === 'running').length;
+  const criticalFindings = findingsMgmt.findings.filter((f) => f.severity === 'critical').length;
+  const highFindings = findingsMgmt.findings.filter((f) => f.severity === 'high').length;
+  const selectedAgent = agentMgmt.selectedAgentId ? agentMgmt.agents.find((a) => a.id === agentMgmt.selectedAgentId) : null;
   const canQueueInvestigations = Boolean(
     selectedAgent &&
       ['deep_scan', 'deep_audit', 'custom', 'strict_analysis', 'ultra_strict'].includes(selectedAgent.agent_type)
@@ -732,17 +482,17 @@ export default function Home() {
             </button>
           )}
           <SessionControls
-            sessionStatus={sessionStatus}
-            onStatusChange={setSessionStatus}
-            hasRunningAgents={agents.some(a => a.status === 'running')}
-            activeView={activeView}
-            selectedFile={selectedPath}
+            sessionStatus={sessionMgmt.sessionStatus}
+            onStatusChange={sessionMgmt.setSessionStatus}
+            hasRunningAgents={agentMgmt.agents.some(a => a.status === 'running')}
+            activeView={panels.activeView}
+            selectedFile={workspace.selectedPath}
             openPanels={[
-              showSidebar ? 'sidebar' : '',
-              showPanel ? 'panel' : '',
-              showChat ? 'chat' : '',
+              panels.showSidebar ? 'sidebar' : '',
+              panels.showPanel ? 'panel' : '',
+              panels.showChat ? 'chat' : '',
             ].filter(Boolean)}
-            selectedAgentId={selectedAgentId}
+            selectedAgentId={agentMgmt.selectedAgentId}
             onPaused={handleSessionPaused}
             onError={handleSessionError}
           />
@@ -763,20 +513,20 @@ export default function Home() {
         <aside className="w-12 bg-vsc-activitybar flex flex-col items-center py-1 border-r border-vsc-border-subtle">
           <button
             onClick={() => {
-              setActiveView('explorer');
-              setShowSidebar(true);
+              panels.setActiveView('explorer');
+              panels.setShowSidebar(true);
             }}
-            className={`activity-icon ${activeView === 'explorer' && showSidebar ? 'active' : ''}`}
+            className={`activity-icon ${panels.activeView === 'explorer' && panels.showSidebar ? 'active' : ''}`}
             title="Explorer"
           >
             <Files className="w-6 h-6" />
           </button>
           <button
             onClick={() => {
-              setActiveView('agents');
-              setShowSidebar(true);
+              panels.setActiveView('agents');
+              panels.setShowSidebar(true);
             }}
-            className={`activity-icon ${activeView === 'agents' && showSidebar ? 'active' : ''}`}
+            className={`activity-icon ${panels.activeView === 'agents' && panels.showSidebar ? 'active' : ''}`}
             title="Agents"
           >
             <Bug className="w-6 h-6" />
@@ -785,27 +535,27 @@ export default function Home() {
                 className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-vsc-accent scan-indicator"
               />
             )}
-            {runningAgents === 0 && agents.some(a => a.status === 'paused') && (
+            {runningAgents === 0 && agentMgmt.agents.some(a => a.status === 'paused') && (
               <span
                 className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-vsc-accent scan-indicator-paused"
               />
             )}
-            {runningAgents === 0 && agents.some(a => a.status === 'completed' && a.findings_count > 0) &&
-             !agents.some(a => a.status === 'running' || a.status === 'paused') && (
+            {runningAgents === 0 && agentMgmt.agents.some(a => a.status === 'completed' && a.findings_count > 0) &&
+             !agentMgmt.agents.some(a => a.status === 'running' || a.status === 'paused') && (
               <span
                 className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${
-                  findings.some(f => f.severity === 'critical') ? 'bg-sev-critical' :
-                  findings.some(f => f.severity === 'high') ? 'bg-sev-high' : 'bg-vsc-accent'
+                  findingsMgmt.findings.some(f => f.severity === 'critical') ? 'bg-sev-critical' :
+                  findingsMgmt.findings.some(f => f.severity === 'high') ? 'bg-sev-high' : 'bg-vsc-accent'
                 }`}
               />
             )}
           </button>
           <button
             onClick={() => {
-              setActiveView('findings');
-              setShowSidebar(true);
+              panels.setActiveView('findings');
+              panels.setShowSidebar(true);
             }}
-            className={`activity-icon ${activeView === 'findings' && showSidebar ? 'active' : ''}`}
+            className={`activity-icon ${panels.activeView === 'findings' && panels.showSidebar ? 'active' : ''}`}
             title="Findings"
           >
             <Search className="w-6 h-6" />
@@ -815,24 +565,24 @@ export default function Home() {
           </button>
           <button
             onClick={() => {
-              setActiveView('flow');
-              setShowSidebar(false);
+              panels.setActiveView('flow');
+              panels.setShowSidebar(false);
             }}
-            className={`activity-icon ${activeView === 'flow' ? 'active' : ''}`}
+            className={`activity-icon ${panels.activeView === 'flow' ? 'active' : ''}`}
             title="Investigation Flow"
           >
             <Network className="w-6 h-6" />
           </button>
           <button
             onClick={() => {
-              setActiveView('llm');
-              setShowSidebar(false);
+              panels.setActiveView('llm');
+              panels.setShowSidebar(false);
             }}
-            className={`activity-icon ${activeView === 'llm' ? 'active' : ''}`}
+            className={`activity-icon ${panels.activeView === 'llm' ? 'active' : ''}`}
             title="LLM Interactions"
           >
             <Brain className="w-6 h-6" />
-            {llmInteractions.length > 0 && (
+            {observability.llmInteractions.length > 0 && (
               <span className="absolute top-1 right-1 w-2 h-2 bg-vsc-accent rounded-full" />
             )}
           </button>
@@ -840,8 +590,8 @@ export default function Home() {
           <div className="flex-1" />
 
           <button
-            onClick={() => setShowChat(!showChat)}
-            className={`activity-icon ${showChat ? 'active' : ''}`}
+            onClick={panels.toggleChat}
+            className={`activity-icon ${panels.showChat ? 'active' : ''}`}
             title="AI Chat"
           >
             <MessageSquare className="w-5 h-5" />
@@ -857,17 +607,17 @@ export default function Home() {
         </aside>
 
         {/* Sidebar */}
-        {showSidebar && (
+        {panels.showSidebar && (
           <aside className="w-64 bg-vsc-sidebar flex flex-col border-r border-vsc-border-subtle">
             {/* Sidebar header with view title */}
             <div className="panel-header">
               <span>
-                {activeView === 'explorer' && 'EXPLORER'}
-                {activeView === 'agents' && 'AGENTS'}
-                {activeView === 'findings' && 'FINDINGS'}
+                {panels.activeView === 'explorer' && 'EXPLORER'}
+                {panels.activeView === 'agents' && 'AGENTS'}
+                {panels.activeView === 'findings' && 'FINDINGS'}
               </span>
               <button
-                onClick={() => setShowSidebar(false)}
+                onClick={() => panels.setShowSidebar(false)}
                 className="btn-icon"
               >
                 <X className="w-4 h-4" />
@@ -877,19 +627,19 @@ export default function Home() {
 
             {/* Sidebar content based on active view */}
             <div className="flex-1 overflow-hidden">
-              {activeView === 'explorer' && (
+              {panels.activeView === 'explorer' && (
                 <FileTree
-                  tree={fileTree}
-                  selectedPath={selectedPath}
+                  tree={workspace.fileTree}
+                  selectedPath={workspace.selectedPath}
                   onFileSelect={handleFileSelect}
                 />
               )}
 
-              {activeView === 'agents' && (
+              {panels.activeView === 'agents' && (
                 <AgentManager
                   repoId={currentProject.id}
-                  agents={agents}
-                  progress={agentProgress}
+                  agents={agentMgmt.agents}
+                  progress={agentMgmt.agentProgress}
                   onAgentCreated={handleAgentCreated}
                   onAgentUpdated={handleAgentUpdated}
                   onAgentDeleted={handleAgentDeleted}
@@ -897,33 +647,33 @@ export default function Home() {
                 />
               )}
 
-              {activeView === 'findings' && (
+              {panels.activeView === 'findings' && (
                 <div className="h-full flex flex-col overflow-hidden">
                   {/* Agent selector for findings */}
                   <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2 flex-shrink-0">
                     <Bug className="w-4 h-4 text-vsc-text-muted" />
                     <select
-                      value={selectedFindingsAgentId || ''}
+                      value={findingsMgmt.selectedFindingsAgentId || ''}
                       onChange={(e) => {
-                        setUserSelectedFindingsAgentId(true);
-                        setSelectedFindingsAgentId(e.target.value || null);
+                        findingsMgmt.setUserSelectedFindingsAgentId(true);
+                        findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
                       }}
                       className="flex-1 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
                     >
-                      {!selectedFindingsAgentId && <option value="">Select an agent...</option>}
-                      {agents.map((agent) => (
+                      {!findingsMgmt.selectedFindingsAgentId && <option value="">Select an agent...</option>}
+                      {agentMgmt.agents.map((agent) => (
                         <option key={agent.id} value={agent.id}>
-                          {agent.name} ({findings.filter(f => f.agent_id === agent.id).length} findings)
+                          {agent.name} ({findingsMgmt.findings.filter(f => f.agent_id === agent.id).length} findings)
                         </option>
                       ))}
                     </select>
                   </div>
                   <div className="flex-1 overflow-hidden">
                     <FindingsList
-                      key={selectedFindingsAgentId || 'none'}
+                      key={findingsMgmt.selectedFindingsAgentId || 'none'}
                       findings={
-                        selectedFindingsAgentId
-                          ? findings.filter(f => f.agent_id === selectedFindingsAgentId)
+                        findingsMgmt.selectedFindingsAgentId
+                          ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
                           : []
                       }
                       onFindingClick={handleFindingClick}
@@ -939,7 +689,7 @@ export default function Home() {
         {/* Main content area */}
         <main className="flex-1 flex flex-col overflow-hidden bg-vsc-bg">
           {/* Flow visualization view */}
-          {activeView === 'flow' && (
+          {panels.activeView === 'flow' && (
             <div className="flex-1 flex flex-col overflow-hidden">
               {/* Diagram selector */}
               <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
@@ -956,12 +706,12 @@ export default function Home() {
 
                 {diagramMode === 'investigation' ? (
                   <select
-                    value={selectedAgentId || ''}
-                    onChange={(e) => setSelectedAgentId(e.target.value || null)}
+                    value={agentMgmt.selectedAgentId || ''}
+                    onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
                     className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
                   >
                     <option value="">Select agent...</option>
-                    {agents.map((agent) => (
+                    {agentMgmt.agents.map((agent) => (
                       <option key={agent.id} value={agent.id}>
                         {agent.name} ({agent.status})
                       </option>
@@ -969,20 +719,20 @@ export default function Home() {
                   </select>
                 ) : (
                   <select
-                    value={selectedRouteId || ''}
-                    onChange={(e) => setSelectedRouteId(e.target.value || null)}
+                    value={callTree.selectedRouteId || ''}
+                    onChange={(e) => callTree.setSelectedRouteId(e.target.value || null)}
                     className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm min-w-[320px]"
-                    disabled={isCallTreeRoutesLoading}
+                    disabled={callTree.isCallTreeRoutesLoading}
                     data-testid="calltree-route-select"
                   >
                     <option value="">
-                      {isCallTreeRoutesLoading
+                      {callTree.isCallTreeRoutesLoading
                         ? 'Loading routes...'
-                        : callTreeRoutes.length === 0
+                        : callTree.callTreeRoutes.length === 0
                           ? 'No FastAPI routes found'
                           : 'Select route...'}
                     </option>
-                    {callTreeRoutes.map((route) => (
+                    {callTree.callTreeRoutes.map((route) => (
                       <option key={route.id} value={route.id}>
                         {(route.label || `${route.method} ${route.path}`)} ({route.handler})
                       </option>
@@ -1004,19 +754,19 @@ export default function Home() {
                   ) : (
                     // Legacy flow visualization
                     <FlowVisualization
-                      agentId={selectedAgentId}
-                      flow={agentFlow}
+                      agentId={agentMgmt.selectedAgentId}
+                      flow={agentMgmt.agentFlow}
                       variant="investigation"
                       onQueueInvestigation={
                         canQueueInvestigations
                           ? async (nodeId) => {
-                            if (!selectedAgentId) return;
-                            const res = await agentsApi.queueInvestigation(selectedAgentId, nodeId);
+                            if (!agentMgmt.selectedAgentId) return;
+                            const res = await agentsApi.queueInvestigation(agentMgmt.selectedAgentId, nodeId);
                             if (!res.queued) {
                               throw new Error(res.reason || 'Not queued');
                             }
-                            const updated = await agentsApi.getFlow(selectedAgentId);
-                            setAgentFlow(updated);
+                            const updated = await agentsApi.getFlow(agentMgmt.selectedAgentId);
+                            agentMgmt.setAgentFlow(updated);
                           }
                           : undefined
                       }
@@ -1024,11 +774,11 @@ export default function Home() {
                   )
                 ) : (
                   <FlowVisualization
-                    agentId={selectedRouteId}
-                    flow={callTreeFlow}
+                    agentId={callTree.selectedRouteId}
+                    flow={callTree.callTreeFlow}
                     variant="calltree"
                     emptySelectionText="Select a route to view call tree"
-                    emptyFlowText={isCallTreeLoading ? 'Building call tree...' : 'No call tree data'}
+                    emptyFlowText={callTree.isCallTreeLoading ? 'Building call tree...' : 'No call tree data'}
                   />
                 )}
               </div>
@@ -1036,19 +786,19 @@ export default function Home() {
           )}
 
           {/* LLM Interactions view */}
-          {activeView === 'llm' && (
+          {panels.activeView === 'llm' && (
             <div className="flex-1 flex flex-col overflow-hidden">
               {/* Agent selector for LLM view */}
               <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
                 <Brain className="w-4 h-4 text-vsc-text-muted" />
                 <span className="text-vsc-sm text-vsc-text-muted">LLM Interactions</span>
                 <select
-                  value={selectedAgentId || ''}
-                  onChange={(e) => setSelectedAgentId(e.target.value || null)}
+                  value={agentMgmt.selectedAgentId || ''}
+                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
                   className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
                 >
                   <option value="">Select agent...</option>
-                  {agents.map((agent) => (
+                  {agentMgmt.agents.map((agent) => (
                     <option key={agent.id} value={agent.id}>
                       {agent.name} ({agent.status})
                     </option>
@@ -1057,9 +807,9 @@ export default function Home() {
               </div>
               <div className="flex-1 overflow-hidden min-h-0">
                 <LLMInteractionPanel
-                  agentId={selectedAgentId}
-                  interactions={llmInteractions}
-                  toolDetails={toolDetails}
+                  agentId={agentMgmt.selectedAgentId}
+                  interactions={observability.llmInteractions}
+                  toolDetails={observability.toolDetails}
                   isConnected={isConnected}
                 />
               </div>
@@ -1067,17 +817,14 @@ export default function Home() {
           )}
 
           {/* Tab bar */}
-          {activeView !== 'flow' && activeView !== 'llm' && currentFile && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && workspace.currentFile && (
             <div className="h-9 bg-vsc-sidebar flex items-end border-b border-vsc-border-subtle">
               <div className="tab active">
                 <span className="truncate max-w-[200px]">
-                  {currentFile.path.split('/').pop()}
+                  {workspace.currentFile.path.split('/').pop()}
                 </span>
                 <button
-                  onClick={() => {
-                    setCurrentFile(null);
-                    setSelectedPath(null);
-                  }}
+                  onClick={workspace.clearFile}
                   className="ml-1 p-0.5 rounded hover:bg-vsc-hover"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -1087,9 +834,9 @@ export default function Home() {
           )}
 
           {/* Breadcrumb */}
-          {activeView !== 'flow' && activeView !== 'llm' && currentFile && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && workspace.currentFile && (
             <div className="breadcrumb border-b border-vsc-border-subtle">
-              {currentFile.path.split('/').map((part, idx, arr) => (
+              {workspace.currentFile.path.split('/').map((part, idx, arr) => (
                 <span key={idx} className="flex items-center">
                   {idx > 0 && <ChevronRight className="breadcrumb-separator w-3 h-3" />}
                   <span className={idx === arr.length - 1 ? 'text-vsc-text' : 'breadcrumb-item'}>
@@ -1101,23 +848,23 @@ export default function Home() {
           )}
 
           {/* Editor */}
-          {activeView !== 'flow' && activeView !== 'llm' && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (
             <div className="flex-1 overflow-hidden">
               <MonacoEditor
-                file={currentFile}
-                findings={findings.filter((f) => f.file_path === currentFile?.path)}
+                file={workspace.currentFile}
+                findings={findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path)}
               />
             </div>
           )}
         </main>
 
         {/* Right panel - can show agents or findings in split view */}
-        {showPanel && currentFile && findings.filter((f) => f.file_path === currentFile?.path).length > 0 && (
+        {panels.showPanel && workspace.currentFile && findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path).length > 0 && (
           <aside className="w-80 bg-vsc-sidebar border-l border-vsc-border-subtle flex flex-col">
             <div className="panel-header">
               <span>FILE FINDINGS</span>
               <button
-                onClick={() => setShowPanel(false)}
+                onClick={() => panels.setShowPanel(false)}
                 className="btn-icon"
               >
                 <X className="w-4 h-4" />
@@ -1125,7 +872,7 @@ export default function Home() {
             </div>
             <div className="flex-1 overflow-auto">
               <FindingsList
-                findings={findings.filter((f) => f.file_path === currentFile?.path)}
+                findings={findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path)}
                 onFindingClick={handleFindingClick}
                 onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
               />
@@ -1170,7 +917,7 @@ export default function Home() {
 
           {/* Findings count */}
           <span className="flex items-center gap-1">
-            {findings.length} findings
+            {findingsMgmt.findings.length} findings
             {criticalFindings > 0 && (
               <span className="text-sev-critical">({criticalFindings} critical)</span>
             )}
@@ -1180,10 +927,10 @@ export default function Home() {
 
       {/* Chat Panel (left pop-out) */}
       <ChatPanel
-        isOpen={showChat}
-        onToggle={() => setShowChat(!showChat)}
-        currentFile={currentFile}
-        findings={findings}
+        isOpen={panels.showChat}
+        onToggle={panels.toggleChat}
+        currentFile={workspace.currentFile}
+        findings={findingsMgmt.findings}
         onRequestSettings={() => setShowSettings(true)}
       />
 
@@ -1224,20 +971,20 @@ export default function Home() {
       />
 
       {/* Resume Dialog */}
-      {showResumeDialog && snapshotInfo && (
+      {sessionMgmt.showResumeDialog && sessionMgmt.snapshotInfo && (
         <ResumeDialog
-          snapshotInfo={snapshotInfo}
+          snapshotInfo={sessionMgmt.snapshotInfo}
           onRestore={handleRestoreSession}
           onKeepCurrent={handleKeepCurrent}
-          onClose={() => setShowResumeDialog(false)}
+          onClose={() => sessionMgmt.setShowResumeDialog(false)}
         />
       )}
 
       {/* Finding Drawer */}
-      {selectedFindingForDrawer && (
+      {findingsMgmt.selectedFindingForDrawer && (
         <FindingDrawer
-          finding={selectedFindingForDrawer}
-          onClose={() => setSelectedFindingForDrawer(null)}
+          finding={findingsMgmt.selectedFindingForDrawer}
+          onClose={() => findingsMgmt.setSelectedFindingForDrawer(null)}
           onNavigateToFile={handleNavigateToFile}
         />
       )}

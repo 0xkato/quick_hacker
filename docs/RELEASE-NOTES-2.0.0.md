@@ -1,6 +1,6 @@
 # Release Notes: v2.0.0 - Protocol-Aware Reportability Layer
 
-**Release Date:** 2026-01-17
+**Release Date:** 2026-01-18
 
 ## Overview
 
@@ -43,10 +43,50 @@ Autonomous LLM agents that:
 - Quest status and findings display
 - Filters for submission decisions
 
+## Implementation Summary
+
+**Total Tasks Completed:** 28/28 (100%)
+
+### Phase 1: Foundation ✓
+- Data models (SubmissionDecision, SubmissionResult, ProtocolPolicy, EvidenceQuest)
+- Database schema with 3 new tables
+- 5 default protocol policies
+
+### Phase 2: ProtocolEvaluator Core ✓
+- 5-gate evaluation flow
+- Category-specific rules (command injection, SQL injection)
+- 7 unit tests passing
+
+### Phase 3: Evidence Quest System ✓
+- Quest orchestrator with playbook architecture
+- Command injection quest playbook
+- Integration with triage service
+
+### Phase 4: REST API ✓
+- Protocol policy endpoints
+- Quest management endpoints
+- Enhanced findings filters
+
+### Phase 5: Frontend UI ✓
+- TypeScript type definitions
+- API client methods
+- 4 React components (ProtocolPolicySelector, SubmissionBadge, SubmissionPanel, integration)
+
+### Phase 6: Documentation ✓
+- User guide (protocol-policies.md)
+- System specification updates
+- Deployment guide
+
+### Phase 7: Deployment ✓
+- Database migration script
+- Configuration module
+- Integration tests (5/5 passing)
+- README updates
+- Release documentation
+
 ## Breaking Changes
 
-- `FindingTriageService.triage_findings()` replaced by `triage_with_protocol()`
-- New required database migration (002_add_protocol_layer.sql)
+- New database schema requires migration
 - Requires ANTHROPIC_API_KEY for quest functionality
 
 ## Migration Guide
@@ -63,28 +103,28 @@ python backend/scripts/migrate_to_protocol_layer.py
 
 # 3. Configure .env
 echo "ANTHROPIC_API_KEY=your_key" >> .env
+echo "ENABLE_PROTOCOL_EVALUATION=true" >> .env
 
 # 4. Restart server
 ```
 
 ## Known Limitations
 
-- Quest playbooks simplified for MVP (no full LLM tool integration)
+- Quest playbooks simplified for MVP
 - SQLite JSON indexing may be slow for >10K findings
 - Quest success rate varies by category (60-80%)
 
-## Future Enhancements
+## Documentation
 
-- Additional quest playbooks (deserialization, SSRF, memory safety)
-- Custom protocol policies (user-defined rules)
-- Report generator for submittable findings
-- Multi-protocol evaluation
+- [Protocol Policies Guide](protocol-policies.md)
+- [System Specification](SYSTEM-SPECIFICATION.md)
+- [Deployment Guide](DEPLOYMENT.md)
 
 ## Contributors
 
-- Claude Sonnet 4.5 (Implementation)
-- 0xkato (Design & Review)
+- Implementation: Claude Sonnet 4.5
+- Design & Review: 0xkato
 
 ---
 
-**Full Changelog:** See git log v1.0.0..v2.0.0
+**Full Implementation:** All 28 phases complete

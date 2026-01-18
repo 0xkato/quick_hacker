@@ -1,7 +1,7 @@
 # backend/tests/services/test_agent_orchestrator_cache.py
 import pytest
 from unittest.mock import MagicMock, patch
-from services.agent_orchestrator import AgentOrchestrator
+from services.agents import AgentOrchestrator
 
 
 class TestAgentOrchestratorCache:

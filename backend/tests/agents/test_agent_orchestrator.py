@@ -1,6 +1,6 @@
 import pytest
 from models.schemas import AgentType
-from services.agent_orchestrator import AGENT_CLASSES
+from services.agents import AGENT_CLASSES
 from agents.deep_audit import DeepAuditSupervisor
 
 

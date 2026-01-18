@@ -5,7 +5,7 @@ from typing import Dict, Any
 
 from config import settings
 from middleware.auth import require_auth
-from services.agent_orchestrator import orchestrator as agent_orchestrator
+from services.agents import orchestrator as agent_orchestrator
 
 router = APIRouter()
 

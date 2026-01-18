@@ -23,7 +23,7 @@ from models.schemas import (
     BudgetConfig,
     EvidenceBlob,
 )
-from services.agent_orchestrator import orchestrator
+from services.agents import orchestrator
 from services.observability_service import observability_service
 from services.flow_service import flow_service
 from services.investigation_queue_service import investigation_queue_service

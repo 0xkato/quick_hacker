@@ -1,10 +1,26 @@
 """
 Strict classifier for vulnerability triage.
 
+DEPRECATED: This module is deprecated. Use services.classification.StrictClassifier instead.
+
 Implements tri-state proof checklist and strict disposition rules.
 Runs synchronously (called via asyncio.to_thread).
 """
 
+import warnings
+
+warnings.warn(
+    "strict_classifier is deprecated. Use services.classification.StrictClassifier instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
+# Re-export for backward compatibility
+from services.classification import StrictClassifier, ClassificationResult
+
+__all__ = ["StrictClassifier", "ClassificationResult"]
+
+# Keep old implementation for reference (will be removed in future version)
 import ast
 import re
 from dataclasses import dataclass
@@ -20,12 +36,12 @@ from models.schemas import (
     InputChannel,
     Evidence,
 )
-from services.threat_model_gating import derive_allowed_input_channels
+from services.finding_filters.filters.threat_model_filter import derive_allowed_input_channels
 
 
 @dataclass
-class ClassificationResult:
-    """Result from classification."""
+class _LegacyClassificationResult:
+    """Result from classification (LEGACY - use ClassificationResult from services.classification)."""
     disposition: Disposition
     classification_confidence: int  # 0-100
     exploit_confidence: Optional[int]  # 0-100, only for VALID/BUG
@@ -34,7 +50,7 @@ class ClassificationResult:
     category: Optional[VulnerabilityCategory] = None
 
 
-class StrictClassifier:
+class _LegacyStrictClassifier:
     """
     Tri-state proof checklist + strict disposition rules.
 

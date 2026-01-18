@@ -34,13 +34,14 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 
 ### 🛠️ Rich Tool Ecosystem
 
-**13 specialized tools** for comprehensive code analysis:
+**19 specialized tools** for comprehensive code analysis:
 
-- **Code Analysis:** ReadFile, Ripgrep, AST parsing, symbol search
-- **Execution:** Bash (Docker sandboxed), test runners
-- **Code Understanding:** Call graph, data flow tracing, route discovery
-- **File Operations:** List files, file tree generation
-- **Security:** Auth gate detection, config analysis
+- **Code Analysis:** ReadFile, Ripgrep, symbol search, file structure analysis
+- **Code Understanding:** Call graph, data flow tracing, route discovery, find definitions/usages
+- **Security Scanning:** Secrets detection, dependency audit, semantic grep
+- **Investigation:** Sink signal tracking, trace path verdicts, coverage tracking
+- **File Operations:** List files, directory browsing, hierarchical tree generation
+- **Reporting:** Investigation notes, security report generation, audit completion
 
 ### 📊 Interactive IDE
 
@@ -100,6 +101,8 @@ QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
 
 ## Architecture Overview
 
+> **Note:** The codebase has been refactored (2026-01-18) for better maintainability and organization. See [REFACTORING_SUMMARY.md](docs/REFACTORING_SUMMARY.md) for details.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                      Frontend (Next.js 14 + React 18)                    │
@@ -109,37 +112,59 @@ QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
 │  │  Editor   │  │ Explorer │  │ Manager  │  │  Panel   │  │ Layout  │ │
 │  │           │  │          │  │          │  │          │  │ (Spans) │ │
 │  └───────────┘  └──────────┘  └──────────┘  └──────────┘  └─────────┘ │
+│       │              │              │              │            │       │
+│       └──────────────┴──────────────┴──────────────┴────────────┘       │
+│                      Custom Hooks Layer (2026-01-18)                    │
+│       ┌────────────────────────────────────────────────────────┐       │
+│       │  useAgentManagement, useFindingsManagement,           │       │
+│       │  useProjectWorkspace, usePanelLayout, etc.            │       │
+│       └────────────────────────────────────────────────────────┘       │
 └────────────────────────────┬─────────────────────────────────────────────┘
                              │ HTTP/REST + WebSocket
 ┌────────────────────────────┴─────────────────────────────────────────────┐
 │                      Backend (FastAPI + Python 3.11+)                    │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                      Agent Orchestrator                          │   │
+│  │                      Agent Orchestration (Refactored)            │   │
 │  │                                                                  │   │
-│  │   ┌─────────────┐    ┌─────────────┐    ┌──────────────┐       │   │
-│  │   │ QuickAudit  │    │    ReAct    │    │  DeepAudit   │       │   │
-│  │   │   Agent     │    │    Agent    │    │  (LangGraph) │       │   │
-│  │   └─────────────┘    └─────────────┘    └──────────────┘       │   │
+│  │   services/agents/                                              │   │
+│  │   ├── AgentOrchestrator  (lifecycle management)                │   │
+│  │   ├── AgentManager       (CRUD operations)                      │   │
+│  │   └── ExecutionContext   (runtime state)                        │   │
+│  │                                                                  │   │
+│  │   agents/react/ (Modular ReAct Agent)                           │   │
+│  │   ├── Core        ├── Execution    ├── Memory                   │   │
+│  │   ├── Reasoning   ├── Tools        ├── State                    │   │
+│  │   └── Utils                                                      │   │
+│  │                                                                  │   │
+│  │   agents/tool_core/ (Tool Utilities - 8 modules)                │   │
+│  │   └── Cache, Validation, Budget, Core Operations                │   │
 │  │                                                                  │   │
 │  │   ┌──────────────────────────────────────────────────────────┐  │   │
-│  │   │               Tool Execution (13 tools)                  │  │   │
-│  │   │  • ReadFile  • Ripgrep  • Bash (sandboxed)              │  │   │
-│  │   │  • CallGraph • FindSymbol • GetRoutes                   │  │   │
+│  │   │               Tool Execution (19 tools)                  │  │   │
+│  │   │  • ReadFile  • SearchCode  • FindDefinition             │  │   │
+│  │   │  • TraceDataFlow  • ScanSecrets  • AuditDeps            │  │   │
+│  │   │  • SinkSignals  • TraceVerdict  • CompleteAudit         │  │   │
 │  │   └──────────────────────────────────────────────────────────┘  │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                      Triage System                               │   │
+│  │                  Triage System (Refactored)                      │   │
 │  │                                                                  │   │
-│  │   ┌─────────────────┐    ┌──────────────────────────────────┐   │   │
-│  │   │   Evidence      │ ─▶ │   Strict Classifier              │   │   │
-│  │   │   Gatherer      │    │   • Tri-state proof checklist    │   │   │
-│  │   │                 │    │   • Disposition rules            │   │   │
-│  │   │ • Code snippets │    │   • Conservative feature detect  │   │   │
-│  │   │ • Route info    │    │   • Code-only evidence          │   │   │
-│  │   │ • Auth gates    │    │   • Exec/eval filtering         │   │   │
-│  │   └─────────────────┘    └──────────────────────────────────┘   │   │
+│  │   services/finding_filters/ (Unified Filter Pipeline)           │   │
+│  │   ├── FilterPipeline    ├── PathFilter                          │   │
+│  │   ├── ProductionFilter  └── ThreatModelFilter                   │   │
+│  │                                                                  │   │
+│  │   services/evidence/ (Evidence Collection & Quests)             │   │
+│  │   ├── EvidenceService   ├── EvidenceGatherer                    │   │
+│  │   └── QuestOrchestrator (async evidence collection)             │   │
+│  │                                                                  │   │
+│  │   services/classification/ (Modular Classification Gates)       │   │
+│  │   ├── StrictClassifier  (orchestrator)                          │   │
+│  │   └── gates/            (16 vulnerability-specific modules)     │   │
+│  │       ├── sqli_gate.py      ├── xss_gate.py                     │   │
+│  │       ├── code_injection_gate.py  ├── idor_gate.py              │   │
+│  │       └── ... (12 more gates)                                   │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌──────────┐  │
@@ -434,6 +459,8 @@ CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 ## Project Structure
 
+> **Refactored 2026-01-18:** See [REFACTORING_SUMMARY.md](docs/REFACTORING_SUMMARY.md) for migration details.
+
 ```
 quick_hack/
 ├── backend/
@@ -442,29 +469,54 @@ quick_hack/
 │   ├── agents/
 │   │   ├── base_agent.py            # Abstract agent base class
 │   │   ├── quick_audit_agent.py     # Fast pattern-based scanning
-│   │   ├── react_agent.py           # ReAct reasoning loop
 │   │   ├── deep_audit_agent.py      # LangGraph state machine
-│   │   ├── orchestrator.py          # Agent lifecycle management
-│   │   ├── claude_sdk_orchestrator.py  # Time-governed execution
-│   │   ├── tools/                   # 13 tool implementations
+│   │   ├── react/                   # 🆕 Modular ReAct agent (7 modules)
+│   │   │   ├── agent_core.py        # Main agent class
+│   │   │   ├── execution.py         # Tool execution
+│   │   │   ├── memory.py            # Conversation history
+│   │   │   ├── reasoning.py         # Reasoning loop
+│   │   │   ├── state.py             # Agent state
+│   │   │   ├── tool_adapter.py      # Tool integration
+│   │   │   └── utils.py             # Helper utilities
+│   │   ├── tool_core/               # 🆕 Tool utilities (8 modules)
+│   │   │   ├── cache.py             # Caching layer
+│   │   │   ├── validation.py        # Input validation
+│   │   │   ├── budget.py            # Budget management
+│   │   │   └── operations.py        # Core tool operations
+│   │   ├── tools.py                 # 19 tool definitions
 │   │   └── validity_checklists/     # Per-vulnerability-type checklists
 │   ├── routers/                     # 13 API endpoint modules
 │   │   ├── agents.py                # Agent execution endpoints
 │   │   ├── auth.py                  # Authentication (signup/login/refresh)
 │   │   ├── projects.py              # Project management
-│   │   ├── files.py                 # File operations
 │   │   ├── findings.py              # Findings CRUD
-│   │   ├── websocket.py             # Real-time updates
-│   │   └── ... (7 more routers)
-│   ├── services/                    # Business logic (31 files)
-│   │   ├── agent_service.py         # Agent management
-│   │   ├── evidence_gatherer.py     # Triage evidence collection
-│   │   ├── strict_classifier.py     # Vulnerability classification
+│   │   └── ... (9 more routers)
+│   ├── services/                    # Business logic (90+ files, well-organized)
+│   │   ├── agents/                  # 🆕 Agent orchestration (3 modules)
+│   │   │   ├── orchestrator.py      # Lifecycle management
+│   │   │   ├── manager.py           # CRUD operations
+│   │   │   └── execution_context.py # Runtime state
+│   │   ├── finding_filters/         # 🆕 Unified filter pipeline (5 modules)
+│   │   │   ├── pipeline.py          # Composable filter chain
+│   │   │   ├── path_filter.py       # Path classification
+│   │   │   ├── production_filter.py # Production relevance
+│   │   │   └── threat_model_filter.py # Threat model gating
+│   │   ├── evidence/                # 🆕 Evidence & quests (3 modules)
+│   │   │   ├── service.py           # Unified evidence service
+│   │   │   ├── gatherer.py          # Evidence collection
+│   │   │   └── quest_orchestrator.py # Async evidence quests
+│   │   ├── classification/          # 🆕 Classification gates (17 modules)
+│   │   │   ├── strict_classifier.py # Main orchestrator
+│   │   │   └── gates/               # 16 vulnerability-specific gates
+│   │   │       ├── sqli_gate.py
+│   │   │       ├── xss_gate.py
+│   │   │       ├── code_injection_gate.py
+│   │   │       └── ... (13 more gates)
 │   │   ├── code_graph_service.py    # Call graph construction
-│   │   ├── flow_tracker.py          # Agent execution tracking
+│   │   ├── findings_service.py      # Finding persistence
 │   │   ├── reconstruction_service.py # Span-based DAG reconstruction
 │   │   ├── feature_flags.py         # Feature flag service
-│   │   └── ... (24 more services)
+│   │   └── ... (60+ more services)
 │   ├── database/                    # SQLAlchemy models
 │   │   ├── models.py                # 6 core models (User, Project, Finding, etc.)
 │   │   ├── connection.py            # Async engine setup
@@ -476,40 +528,46 @@ quick_hack/
 │   │   └── claude_sdk_provider.py   # Claude SDK/MCP
 │   ├── middleware/
 │   │   └── auth.py                  # JWT validation
-│   └── tests/                       # Pytest test suite
+│   └── tests/                       # Pytest test suite (1086 tests)
 │       └── services/
 │           └── test_strict_classifier.py  # 41 triage tests
 ├── frontend/
 │   ├── app/                         # Next.js App Router pages
 │   │   ├── page.tsx                 # Landing page
 │   │   ├── login/                   # Auth pages
-│   │   ├── projects/                # Project workspace
+│   │   ├── projects/
+│   │   │   └── [id]/page.tsx        # 🔄 Refactored workspace (993 lines, -20%)
 │   │   └── layout.tsx               # Root layout with providers
 │   ├── components/                  # React components
 │   │   ├── Editor/                  # Monaco editor wrapper
 │   │   ├── FileExplorer/            # File tree browser
 │   │   ├── Agent/                   # Agent manager
 │   │   ├── Chat/                    # Chat interface
-│   │   ├── Findings/                # Findings panel
-│   │   ├── InvestigationFlow/       # Span-based tree visualization (TreeLayout)
-│   │   ├── Flow/                    # Legacy flow visualization
-│   │   └── ... (14 component dirs)
+│   │   ├── Findings/                # Findings panel with drawer overlay
+│   │   ├── InvestigationFlow/       # Span-based tree visualization
+│   │   └── ... (14+ component dirs)
 │   ├── contexts/                    # React Context providers
 │   │   └── AuthContext.tsx          # Global auth state
-│   ├── hooks/                       # Custom React hooks
-│   │   ├── useAuth.ts
-│   │   ├── useWebSocket.ts
-│   │   ├── useInvestigationFlow.ts  # Span reconstruction hook
-│   │   └── ... (10+ hooks)
+│   ├── hooks/                       # 🆕 Custom React hooks (7 new hooks)
+│   │   ├── useAgentManagement.ts    # Agent state & operations
+│   │   ├── useFindingsManagement.ts # Findings state & filtering
+│   │   ├── useProjectWorkspace.ts   # Workspace lifecycle
+│   │   ├── usePanelLayout.ts        # Panel state & resizing
+│   │   ├── useCodeEditorState.ts    # Editor state
+│   │   ├── useInvestigationFlow.ts  # Span reconstruction
+│   │   ├── useWebSocketState.ts     # WebSocket management
+│   │   └── ... (5+ more hooks)
 │   └── lib/
 │       ├── api.ts                   # API client with auth
 │       └── types.ts                 # TypeScript interfaces
 ├── docs/
-│   ├── triage-system.md             # Triage documentation
+│   ├── REFACTORING_SUMMARY.md       # 🆕 Refactoring overview
+│   ├── MIGRATION_GUIDE.md           # 🆕 Migration instructions
+│   ├── API_CONSISTENCY.md           # 🆕 Naming patterns guide
+│   ├── SYSTEM-SPECIFICATION.md      # Complete system docs
+│   ├── protocol-policies.md         # Protocol policies
 │   └── plans/                       # Design documents
-│       ├── 2026-01-12-architecture-reference.md       # Complete architecture
-│       ├── 2026-01-12-strict-exec-eval-filtering-design.md
-│       └── 2026-01-12-strict-exec-eval-filtering-implementation.md
+│       └── ... (8 design docs)
 ├── docker-compose.yml               # Docker services definition
 ├── .env.example                     # Environment variables template
 └── README.md                        # This file

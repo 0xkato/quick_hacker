@@ -1,22 +1,18 @@
-"""Core tool functionality for the zero-FP agent."""
+"""Validity checklist operations for ToolCore."""
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
 from models.sink_signals import CandidateStatus
 
 
-class ToolCore:
-    """Core tool functionality for vulnerability analysis."""
+class ValidityMixin:
+    """Mixin for validity checklist operations.
 
-    def __init__(self, repo_path: str, project_id: str):
-        """Initialize ToolCore.
-
-        Args:
-            repo_path: Path to the repository to analyze
-            project_id: Project identifier
-        """
-        self.repo_path = repo_path
-        self.project_id = project_id
+    This mixin provides methods for getting validity checklists and
+    finalizing findings with the disprove-first self-critique checklist.
+    """
 
     def get_validity_checklist(self, vulnerability_class: str) -> dict[str, Any]:
         """Get validity checklist for a specific vulnerability class.
@@ -62,7 +58,7 @@ class ToolCore:
 
         # Build path to checklist file
         # Assuming checklists are in backend/agents/validity_checklists/
-        backend_dir = Path(__file__).parent.parent
+        backend_dir = Path(__file__).parent.parent.parent
         checklist_path = backend_dir / "agents" / "validity_checklists" / checklist_files[vulnerability_class]
 
         # Read checklist content

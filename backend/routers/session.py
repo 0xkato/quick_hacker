@@ -54,7 +54,7 @@ async def pause_session(
         raise HTTPException(status_code=400, detail="No project selected")
 
     # Import here to avoid circular imports
-    from services.agent_orchestrator import orchestrator as agent_orchestrator
+    from services.agents import orchestrator as agent_orchestrator
 
     # Get all agents for this project
     active_agents = []

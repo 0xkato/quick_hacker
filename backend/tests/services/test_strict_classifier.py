@@ -16,7 +16,7 @@ from models.schemas import (
     Disposition)
 from services.strict_classifier import StrictClassifier
 from models.schemas import Evidence, InputChannel
-from services.evidence_gatherer import SSRFAnalysis  # For dict creation reference
+from services.evidence import SSRFAnalysis  # For dict creation reference
 
 
 @pytest.fixture

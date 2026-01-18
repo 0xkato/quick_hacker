@@ -1,4 +1,37 @@
-"""Evidence quest orchestration service."""
+"""
+Evidence quest orchestration service.
+
+DEPRECATED: Use services.evidence.EvidenceQuestOrchestrator instead.
+This module is kept for backward compatibility only.
+"""
+
+import warnings
+
+warnings.warn(
+    "evidence_quest_orchestrator is deprecated. Use services.evidence.EvidenceQuestOrchestrator instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
+# Re-export from new location for backward compatibility
+from services.evidence.quest_manager import (
+    EvidenceQuestOrchestrator,
+    QuestPlaybook,
+    QuestResult,
+    CommandInjectionQuest,
+    SQLInjectionQuest,
+)
+
+__all__ = [
+    "EvidenceQuestOrchestrator",
+    "QuestPlaybook",
+    "QuestResult",
+    "CommandInjectionQuest",
+    "SQLInjectionQuest",
+]
+
+# Keep old implementation below for reference during migration
+# This code is no longer used but kept temporarily
 
 import asyncio
 import uuid

@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
 from models.schemas import WSMessage
-from services.agent_orchestrator import orchestrator
+from services.agents import orchestrator
 from services.observability_service import observability_service
 from services.persistence_service import persistence_service
 from services.report_service import report_service

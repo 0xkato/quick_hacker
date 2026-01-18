@@ -1,6 +1,18 @@
 """
 ReAct Security Research Agent
 
+DEPRECATED: This module is deprecated. Use 'agents.react' instead.
+    from agents.react import ReActSecurityAgent
+
+This file is maintained for backward compatibility. New functionality
+should be added to the agents/react/ module structure:
+- agents/react/agent.py: Main agent coordinator
+- agents/react/state_machine.py: State management
+- agents/react/handoff.py: Scanner → Analyzer handoff
+- agents/react/dual_model.py: Dual-model configuration
+- agents/react/tool_executor.py: Tool execution helpers
+- agents/react/types.py: Common types
+
 A proper agentic loop that investigates codebases like a human security researcher:
 1. Explores the codebase structure
 2. Identifies attack surfaces

@@ -1,5 +1,13 @@
 """Path classification for VRP filtering."""
+import warnings
 from models.schemas import PathClassification, PathClassificationConfig
+
+# Deprecation warning
+warnings.warn(
+    "path_classifier is deprecated. Use services.finding_filters.PathFilter instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def classify_path(file_path: str, config: PathClassificationConfig) -> PathClassification:

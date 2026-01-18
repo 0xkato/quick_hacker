@@ -24,7 +24,7 @@ from models.observability import (
 from models.schemas import WSMessage, WSMessageType, Severity
 
 if TYPE_CHECKING:
-    from agents.react_agent import ReActSecurityAgent
+    from agents.react import ReActSecurityAgent
 
 
 # Report output directory

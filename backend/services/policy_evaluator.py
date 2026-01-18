@@ -5,7 +5,7 @@ from models.schemas import (
     Disposition, VulnerabilityCategory, ChecklistStatus, InputChannel,
     PolicyEvaluationResult
 )
-from services.strict_classifier import ClassificationResult
+from services.classification import ClassificationResult
 
 
 class PolicyEvaluator:

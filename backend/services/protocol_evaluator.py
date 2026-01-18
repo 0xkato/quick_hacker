@@ -16,8 +16,8 @@ from models.schemas import (
     ChecklistStatus,
 )
 
-# Import ClassificationResult from strict_classifier
-from services.strict_classifier import ClassificationResult
+# Import ClassificationResult from classification module
+from services.classification import ClassificationResult
 
 
 @dataclass

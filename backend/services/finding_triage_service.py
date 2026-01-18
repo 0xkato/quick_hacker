@@ -26,15 +26,13 @@ from models.schemas import (
     TriagePolicy,
     PolicyDecision,
 )
-from services.evidence_gatherer import EvidenceGatherer
-from services.strict_classifier import StrictClassifier
-from services.evidence_quest_orchestrator import EvidenceQuestOrchestrator
+from services.evidence import EvidenceGatherer, EvidenceQuestOrchestrator
+from services.classification import StrictClassifier
 from services.protocol_evaluator import ProtocolEvaluator
 from services.protocol_policies import ProtocolPolicyLoader
 from services.deduplicator import deduplicate_findings
-from services.pre_triage_filter import pre_filter_findings
 from services.policy_evaluator import PolicyEvaluator
-from services.production_relevance_filter import ProductionRelevanceFilter
+from services.finding_filters import PathFilter, ProductionRelevanceFilter
 from protocol_config.protocol_config import ProtocolConfig
 
 
@@ -126,7 +124,8 @@ class FindingTriageService:
 
         # Step 2 - Pre-filter
         if policy:
-            findings = pre_filter_findings(findings, policy)
+            path_filter = PathFilter(policy.path_classification, policy)
+            findings = path_filter.apply(findings)
 
         # Early return if all filtered out
         if not findings:

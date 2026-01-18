@@ -1,7 +1,7 @@
 """Integration tests for agent flow tree end-to-end functionality."""
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
-from agents.react_agent import ReActSecurityAgent
+from agents.react import ReActSecurityAgent
 from models.schemas import AgentCreateRequest, AgentType, ProviderConfig, ProviderType
 from services.flow_service import flow_service
 

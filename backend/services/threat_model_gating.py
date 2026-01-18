@@ -6,7 +6,15 @@ Centralized, unit-testable logic for determining which input channels are
 attacker-controlled based on project threat model configuration.
 """
 
+import warnings
 from models.schemas import InputChannel
+
+# Deprecation warning
+warnings.warn(
+    "threat_model_gating is deprecated. Use services.finding_filters.ThreatModelFilter instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def derive_allowed_input_channels(threat_model_profile: dict | None) -> set[InputChannel]:

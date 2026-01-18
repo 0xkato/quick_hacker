@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from models.schemas import Finding, ProofChecklist, Disposition, ChecklistStatus, VulnerabilityCategory
-from services.evidence_gatherer import EvidenceResult
+from services.evidence import EvidenceResult
 from services.blocking_gaps import get_blocking_gaps_for_category
 
 

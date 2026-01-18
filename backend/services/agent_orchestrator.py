@@ -1,5 +1,10 @@
-"""Agent orchestrator for managing multiple concurrent agents."""
+"""Agent orchestrator for managing multiple concurrent agents.
 
+DEPRECATED: This module is deprecated. Use services.agents.AgentOrchestrator instead.
+The module will remain for backward compatibility but may be removed in a future version.
+"""
+
+import warnings
 import asyncio
 import logging
 import time
@@ -9,6 +14,13 @@ from typing import Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+
+# Emit deprecation warning
+warnings.warn(
+    "services.agent_orchestrator is deprecated. Use services.agents.AgentOrchestrator instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +39,7 @@ from models.schemas import (
 )
 from agents.base_agent import BaseAgent
 from agents.quick_audit_agent import QuickAuditAgent
-from agents.react_agent import ReActSecurityAgent
+from agents.react import ReActSecurityAgent
 from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 from providers.codex_cli_provider import CodexCLIProvider

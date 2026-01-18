@@ -68,8 +68,10 @@ export function FindingsReportView({ findings, onClose, onNavigateToFile }: Find
   }, []);
   // Sort by severity
   const sortedFindings = [...findings].sort((a, b) => {
-    const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-    return severityOrder[a.severity] - severityOrder[b.severity];
+    const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    const aOrder = a.severity ? severityOrder[a.severity] ?? 999 : 999;
+    const bOrder = b.severity ? severityOrder[b.severity] ?? 999 : 999;
+    return aOrder - bOrder;
   });
 
   const handleGoToFile = (finding: Finding) => {

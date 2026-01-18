@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import type { FileNode, FileContent, Project } from '@/types';
-import { files } from '@/lib/api';
+import type { FileNode, FileContent } from '@/types';
+import { files, type Project } from '@/lib/api';
 
 export interface UseProjectWorkspaceOptions {
   currentProject: Project | null;

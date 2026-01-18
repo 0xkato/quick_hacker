@@ -8,6 +8,7 @@ submission based on file path, code context, and production impact.
 from typing import Optional
 from anthropic import Anthropic
 from models.schemas import Finding, Disposition
+from protocol_config.protocol_config import ProtocolConfig
 
 class ProductionRelevanceFilter:
     """
@@ -21,8 +22,17 @@ class ProductionRelevanceFilter:
     - Development-only code
     """
 
-    def __init__(self, anthropic_api_key: str):
+    def __init__(
+        self,
+        anthropic_api_key: str,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None
+    ):
         self.client = Anthropic(api_key=anthropic_api_key)
+        self.model = model or ProtocolConfig.PRODUCTION_FILTER_MODEL
+        self.max_tokens = max_tokens or ProtocolConfig.PRODUCTION_FILTER_MAX_TOKENS
+        self.temperature = temperature or ProtocolConfig.PRODUCTION_FILTER_TEMPERATURE
 
     def is_production_relevant(self, finding: Finding) -> tuple[bool, str]:
         """
@@ -36,9 +46,9 @@ class ProductionRelevanceFilter:
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-haiku-20241022",  # Fast, cheap model
-                max_tokens=200,
-                temperature=0,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
                 messages=[{
                     "role": "user",
                     "content": prompt

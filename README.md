@@ -88,10 +88,14 @@ QuickHack includes a protocol-aware submission evaluation system that determines
 
 Add to `.env`:
 ```bash
+# Protocol Evaluation
 ENABLE_PROTOCOL_EVALUATION=true
 DEFAULT_PROTOCOL_ID=internal
 ANTHROPIC_API_KEY=your_key_here
+
+# LLM Settings (used for quests and filtering)
 ENABLE_QUESTS_BY_DEFAULT=true
+QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
 ```
 
 ## Architecture Overview

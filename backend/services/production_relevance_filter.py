@@ -26,13 +26,13 @@ class ProductionRelevanceFilter:
         self,
         anthropic_api_key: str,
         model: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None
+        max_tokens: int = 300,
+        temperature: float = 0
     ):
         self.client = Anthropic(api_key=anthropic_api_key)
-        self.model = model or ProtocolConfig.PRODUCTION_FILTER_MODEL
-        self.max_tokens = max_tokens or ProtocolConfig.PRODUCTION_FILTER_MAX_TOKENS
-        self.temperature = temperature or ProtocolConfig.PRODUCTION_FILTER_TEMPERATURE
+        self.model = model or ProtocolConfig.QUEST_LLM_MODEL
+        self.max_tokens = max_tokens
+        self.temperature = temperature
 
     def is_production_relevant(self, finding: Finding) -> tuple[bool, str]:
         """
@@ -86,51 +86,57 @@ class ProductionRelevanceFilter:
 
 ## STAGE 1: Production Relevance Filter
 
-**FILTER OUT (respond with "FILTER: <reason>"):**
-1. **Test code** - Files in test/, tests/, __tests__/, spec/, *_test.*, *Test.*, test_*
-2. **Build tools** - Files in tools/, scripts/, build/, utils/, bin/, dev-tools/
-3. **Third-party code** - Files in third_party/, vendor/, node_modules/, external/, deps/
-4. **Documentation** - Files in docs/, documentation/, examples/, samples/, tutorials/
-5. **Config files** - Dockerfiles, docker-compose.yml, .sh scripts, Makefiles, build.gradle
-6. **Development utilities** - Code that only runs during development/build, not in production
+Determine if this code affects production users. Filter out code that only runs during development, testing, or build processes.
+
+**FILTER OUT** (respond with "FILTER: <reason>"):
+- Test code and test utilities
+- Build tools and development scripts
+- Third-party dependencies and vendored code
+- Documentation and example code
+- Configuration files for build systems
+- Development-only utilities
+
+**KEEP** (proceed to Stage 2):
+- Production runtime code
+- Libraries that ship to users
+- API endpoints and server code
+- Client-side code (web, mobile, desktop)
+- Core application functionality
 
 If filtered here, respond immediately with "FILTER: <reason>" and stop.
 
 ## STAGE 2: Issue Validation (for production code only)
 
-The report below is an issue. I want you to do research to figure out if this is something that is:
-- **Expected behavior** - Specifically allowed or by-design
-- **Configuration issue** - Could have larger implications as described in the report
-- **Actual security problem** - Real vulnerability worth reporting
+Analyze if this is a real security issue worth reporting. Be VERY HARSH on distinguishing between "bug" and "security issue".
 
-**CRITICAL: Be VERY HARSH on distinguishing between "bug" and "security issue".**
+**FILTER OUT** (respond with "FILTER: <reason>"):
+1. **Expected behavior** - Working as designed without security implications
+2. **Configuration without impact** - Design choice that doesn't create exploitable conditions
+3. **Bug but not security** - Functional issue without security exploitation path
+4. **Theoretical only** - No realistic attack scenario or attacker capabilities
+5. **Pattern match false positive** - Looks like a vulnerability type but isn't actually exploitable
+6. **Unrealistic prerequisites** - Requires impossible attacker position or user actions
 
-**FILTER OUT (respond with "FILTER: <reason>"):**
-1. **Expected behavior** - Documented as working as intended
-2. **By-design configuration** - Intentional design choice without security implications
-3. **Bug but not security** - Functional issue without exploitable security impact
-4. **Theoretical only** - No realistic attack scenario or attacker model
-5. **Invalid sink** - Pattern matches vulnerability type but isn't exploitable (e.g., command injection without shell=True)
-6. **Missing prerequisites** - Requires unrealistic attacker capabilities or user actions
+**KEEP** (respond with "KEEP: <reason>"):
+1. **Exploitable vulnerability** - Real security issue with realistic attack scenario
+2. **Risky configuration** - By-design but creates security-exploitable condition
+3. **Documented but dangerous** - Known issue that still has valid security impact
 
-**KEEP (respond with "KEEP: <reason>"):**
-1. **Real security issue** - Exploitable vulnerability with realistic attack scenario
-2. **Configuration with security implications** - By-design but creates exploitable condition
-3. **Documented but still exploitable** - Known issue that's still a valid security concern
+## Validation Criteria
 
-## Special Cases for Production Code
-- **Command injection** - Must use shell=True or equivalent, not just argv parsing
-- **Buffer overflow** - Must show attacker-controlled size/input reaching unsafe function
-- **Path traversal** - Must show user input flowing to file operations
-- **XSS/injection** - Must show user input rendered/executed without sanitization
-- **Stack protection disabled** - Only if paired with actual memory corruption vulnerability
+For the specific vulnerability type, verify:
+- **Attacker control**: Can an attacker actually control the dangerous input?
+- **Sink execution**: Does the code path actually execute the dangerous operation?
+- **Prerequisites**: Are the conditions for exploitation realistic?
+- **Impact**: Would successful exploitation have security consequences?
 
 ## Your Response
+
 Respond with EXACTLY one line:
 - "FILTER: <brief reason>" if this should NOT be reported
 - "KEEP: <brief reason>" if this SHOULD be reported
 
-Focus on: Is this a real security issue with realistic exploitation, or is it expected behavior/bug/theoretical concern?"""
+Focus on: Is this a real security issue with realistic exploitation?"""
 
     def get_filter_disposition(self) -> Disposition:
         """Return the disposition to use for filtered findings."""

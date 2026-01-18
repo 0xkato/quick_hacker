@@ -112,6 +112,7 @@ class VulnerabilityCategory(str, Enum):
     INFORMATION_DISCLOSURE = "information_disclosure"
     DOS = "dos"
     RACE_CONDITION = "race_condition"
+    INTEGER_OVERFLOW = "integer_overflow"
     GENERIC = "generic"
 
 
@@ -138,6 +139,155 @@ class InputChannel(str, Enum):
     local_unprivileged = "local_unprivileged"
 
     unknown = "unknown"
+
+
+class PathClassification(str, Enum):
+    """File path classification for scope filtering."""
+    runtime = "runtime"          # Production code
+    tooling = "tooling"          # Developer tools, may run on CI
+    third_party = "third_party"  # Vendored dependencies
+    unknown = "unknown"
+
+
+class PolicyDecision(str, Enum):
+    """Policy evaluation decision for VRP reporting."""
+    REPORT_SECURITY_VRP = "report_security_vrp"           # High confidence, VRP-reportable
+    REPORT_SECURITY_LOW_CONFIDENCE = "report_security_low" # Valid but needs review
+    HARDENING_ONLY = "hardening_only"                     # Not security issue, hardening opp
+    DO_NOT_REPORT = "do_not_report"                       # Filtered out
+
+
+class PathClassificationConfig(BaseModel):
+    """Path classification rules for scope filtering."""
+    runtime_roots: list[str] = Field(
+        default_factory=lambda: ["src/", "app/", "backend/", "frontend/", "lib/", "libs/"]
+    )
+    tooling_roots: list[str] = Field(
+        default_factory=lambda: ["tools/", "scripts/", "examples/", "samples/"]
+    )
+    third_party_roots: list[str] = Field(
+        default_factory=lambda: [
+            "third_party/", "vendor/", "node_modules/",
+            ".venv/", "site-packages/", "dist/", "build/",
+            "target/", "out/"
+        ]
+    )
+    test_roots: list[str] = Field(
+        default_factory=lambda: ["test/", "tests/", "__tests__/"]
+    )
+    ci_roots: list[str] = Field(
+        default_factory=lambda: [".github/", ".gitlab/", "ci/"]
+    )
+    docs_roots: list[str] = Field(
+        default_factory=lambda: ["docs/", "documentation/"]
+    )
+    migration_roots: list[str] = Field(
+        default_factory=lambda: ["migrations/", "migrate/"]
+    )
+
+    @field_validator('runtime_roots', 'tooling_roots', 'third_party_roots', 'test_roots', 'ci_roots', 'docs_roots', 'migration_roots')
+    @classmethod
+    def validate_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("Path roots cannot be empty")
+        return v
+
+    @field_validator('runtime_roots', 'tooling_roots', 'third_party_roots', 'test_roots', 'ci_roots', 'docs_roots', 'migration_roots')
+    @classmethod
+    def validate_trailing_slash(cls, v: list[str]) -> list[str]:
+        for path in v:
+            if not path.endswith('/'):
+                raise ValueError(f"Path must end with '/': {path}")
+        return v
+
+
+class CommandInjectionGate(BaseModel):
+    """Evidence requirements for command injection to be VRP-reportable."""
+    require_shell_execution: bool = True  # shell=True or os.system
+    require_attacker_controls_shell_string: bool = True  # Not just arguments
+    credible_boundaries: list[str] = Field(
+        default_factory=lambda: ["network", "ci_artifact", "repo_checkout", "file_input"]
+    )
+
+
+class IntegerOverflowGate(BaseModel):
+    """Evidence requirements for integer overflow to be VRP-reportable."""
+    require_attacker_controlled_operands: bool = True
+    require_overflow_prone_operation: bool = True  # Multiplication or unchecked addition
+    require_allocation_or_bounds_use: bool = True  # malloc, array index, buffer size
+    require_proven_mismatch: bool = True  # 32-bit calc → 64-bit size, etc.
+
+
+class MemoryCorruptionGate(BaseModel):
+    """Evidence requirements for memory corruption to be VRP-reportable."""
+    require_asan_trace: bool = False  # Prefer but don't require
+    require_release_config: bool = True  # Must trigger in NDEBUG/release
+    require_untrusted_input_path: bool = True
+
+
+class DosGate(BaseModel):
+    """Evidence requirements for DoS to be VRP-reportable."""
+    require_service_boundary: bool = True  # Network service, not local script
+
+
+class EvidenceGates(BaseModel):
+    """Per-vulnerability-type evidence requirements."""
+    command_injection: CommandInjectionGate = Field(default_factory=CommandInjectionGate)
+    integer_overflow: IntegerOverflowGate = Field(default_factory=IntegerOverflowGate)
+    memory_corruption: MemoryCorruptionGate = Field(default_factory=MemoryCorruptionGate)
+    dos: DosGate = Field(default_factory=DosGate)
+
+
+class DeduplicationConfig(BaseModel):
+    """Deduplication strategy configuration."""
+    enabled: bool = True
+    strategy: Literal["exact", "fuzzy", "symbol"] = "exact"
+    exact_match_fields: list[str] = Field(
+        default_factory=lambda: ["file_path", "line_start", "vulnerability_type", "title"]
+    )
+
+
+class TriagePolicy(BaseModel):
+    """
+    VRP triage policy configuration.
+
+    Encodes "what do we bother reporting given strictness, scope, and evidence?"
+    Separate from ThreatModelProfile (attacker capabilities).
+    """
+    name: str  # e.g., "vrp-google-oss-strict", "internal-audit"
+
+    # Path classification and filtering
+    path_classification: PathClassificationConfig = Field(
+        default_factory=PathClassificationConfig
+    )
+    filter_third_party: bool = True  # Drop findings from third_party_roots
+    filter_tests: bool = True  # Drop findings from test_roots
+    filter_ci: bool = True  # Drop findings from ci_roots
+    filter_docs: bool = True  # Drop findings from docs_roots
+    filter_migrations: bool = True  # Drop findings from migration_roots
+
+    # Tooling findings require stronger boundary (not auto-filtered)
+    tooling_requires_ci_boundary: bool = True
+
+    # Evidence gates per vulnerability type
+    evidence_gates: EvidenceGates = Field(default_factory=EvidenceGates)
+
+    # Deduplication
+    deduplication: DeduplicationConfig = Field(default_factory=DeduplicationConfig)
+
+    # Disposition overrides
+    report_hardening: bool = False  # Default: don't report HARDENING findings
+    report_by_design: bool = False  # Default: don't report BY_DESIGN findings
+
+
+class PolicyEvaluationResult(BaseModel):
+    """Result from policy evaluation."""
+    decision: PolicyDecision
+    path_classification: PathClassification
+    gate_results: dict[str, bool]  # Which gates passed/failed
+    reasoning: list[str]  # Why this decision was made
+    original_disposition: Disposition  # From StrictClassifier
+    overridden: bool  # True if policy changed the classification
 
 
 # === Phase 4: Project Scope ===
@@ -522,6 +672,13 @@ class Finding(BaseModel):
     # Quest tracking (also stored in submission_result.quest_id if quest ran during protocol evaluation)
     evidence_quest_id: Optional[str] = None
     evidence_quest_completed: bool = False
+
+    # Path classification (for pre-triage filtering)
+    path_classification: Optional[PathClassification] = None
+
+    # Policy evaluation results
+    policy_decision: Optional[PolicyDecision] = None
+    policy_reasoning: Optional[list[str]] = None
 
     @field_validator(
         "description",

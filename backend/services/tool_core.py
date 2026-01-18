@@ -1197,6 +1197,64 @@ class ToolCore:
 
         return {"reported": True, "finding": finding}
 
+    async def triage_finding(
+        self,
+        title: str,
+        file_path: str,
+        vulnerability_type: str,
+        severity: str,
+        description: str,
+    ) -> dict[str, Any]:
+        """Triage a finding using LLM-based production relevance filter.
+
+        Returns:
+            Dict with decision ("keep" or "filter") and reason
+        """
+        # Import here to avoid circular dependencies
+        from services.production_relevance_filter import ProductionRelevanceFilter
+        from protocol_config.protocol_config import ProtocolConfig
+        from models.schemas import Finding, Severity
+
+        # Check if filter is available
+        api_key = ProtocolConfig.ANTHROPIC_API_KEY
+        if not api_key:
+            return {
+                "decision": "keep",
+                "reason": "No API key configured - filter unavailable"
+            }
+
+        # Create minimal Finding object for filter
+        try:
+            severity_enum = Severity(severity.lower())
+        except ValueError:
+            severity_enum = Severity.MEDIUM
+
+        finding = Finding(
+            title=title,
+            file_path=file_path,
+            vulnerability_type=vulnerability_type,
+            severity=severity_enum,
+            description=description,
+        )
+
+        # Run production relevance filter
+        try:
+            production_filter = ProductionRelevanceFilter(api_key)
+            is_relevant, reason = production_filter.is_production_relevant(finding)
+
+            return {
+                "decision": "keep" if is_relevant else "filter",
+                "reason": reason,
+                "is_production_code": is_relevant
+            }
+        except Exception as e:
+            # On error, default to keeping
+            return {
+                "decision": "keep",
+                "reason": f"Filter error: {str(e)}",
+                "error": True
+            }
+
     async def track_file_analysis(
         self,
         file_path: str,

@@ -273,6 +273,21 @@ class QuickHackMCPServer:
                     "required": ["finding"],
                 },
             ),
+            ToolSpec(
+                name="triage_finding",
+                description="Triage a finding to determine if it's reportable (two-stage: production relevance + issue validation). Returns decision and reason.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "file_path": {"type": "string"},
+                        "vulnerability_type": {"type": "string"},
+                        "severity": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["title", "file_path", "vulnerability_type", "severity", "description"],
+                },
+            ),
         ]
 
     async def handle_request(self, request: dict[str, Any]) -> dict[str, Any] | None:
@@ -428,6 +443,14 @@ class QuickHackMCPServer:
             # Accept either promote_finding({finding:{...}}) or direct report_finding-style keys.
             merged = dict(finding)
             return await self._dispatch_tool("report_finding", merged)
+        if name == "triage_finding":
+            return await self.tool_core.triage_finding(
+                title=str(args["title"]),
+                file_path=str(args["file_path"]),
+                vulnerability_type=str(args["vulnerability_type"]),
+                severity=str(args["severity"]),
+                description=str(args["description"]),
+            )
 
         raise ValueError(f"Unknown tool: {name}")
 

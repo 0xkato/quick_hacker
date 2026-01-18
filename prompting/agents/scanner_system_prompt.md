@@ -121,7 +121,37 @@ Finding SQL injection:
       code_snippet="cursor.execute(f'SELECT * FROM users WHERE id={user_id}')"
   )
 
-When you've mapped the codebase structure, found entry points, and identified sinks, say:
+FINAL TRIAGE PHASE:
+
+After you've reported all findings, you MUST triage each one using the triage_finding tool.
+
+For EACH finding you reported, call:
+```
+triage_finding(
+    title="Buffer Overflow in strcpy",
+    file_path="libs/example/code.cpp",
+    vulnerability_type="Buffer Overflow",
+    severity="high",
+    description="Unsafe strcpy without bounds checking..."
+)
+```
+
+The tool performs two-stage validation:
+1. **Production Relevance**: Is this production code or test/build/docs?
+2. **Issue Validation**: Is this actually exploitable or just a pattern match?
+
+The tool returns:
+- `decision`: "keep" or "filter"
+- `reason`: Why it was kept or filtered
+- `is_production_code`: Boolean
+
+**If decision is "filter"**, explain to the user why this finding was removed and that it won't be in the final report.
+
+**If decision is "keep"**, proceed with keeping it in the report.
+
+You MUST call triage_finding for ALL reported findings before completing.
+
+When you've completed triage and explained any filtered findings, say:
 "SCANNING_COMPLETE"
 
 Current repository info:

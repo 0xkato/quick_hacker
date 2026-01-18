@@ -27,7 +27,7 @@ from models.schemas import (
     PolicyDecision,
 )
 from services.evidence import EvidenceGatherer, EvidenceQuestOrchestrator
-from services.strict_classifier import StrictClassifier
+from services.classification import StrictClassifier
 from services.protocol_evaluator import ProtocolEvaluator
 from services.protocol_policies import ProtocolPolicyLoader
 from services.deduplicator import deduplicate_findings

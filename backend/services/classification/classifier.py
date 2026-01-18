@@ -1,30 +1,11 @@
+"""Main vulnerability classifier orchestrator.
+
+This module orchestrates the classification of vulnerabilities using specialized gates
+for each vulnerability category. It maintains backward compatibility with the original
+StrictClassifier interface while delegating category-specific logic to gate modules.
 """
-Strict classifier for vulnerability triage.
-
-DEPRECATED: This module is deprecated. Use services.classification.StrictClassifier instead.
-
-Implements tri-state proof checklist and strict disposition rules.
-Runs synchronously (called via asyncio.to_thread).
-"""
-
-import warnings
-
-warnings.warn(
-    "strict_classifier is deprecated. Use services.classification.StrictClassifier instead.",
-    DeprecationWarning,
-    stacklevel=2
-)
-
-# Re-export for backward compatibility
-from services.classification import StrictClassifier, ClassificationResult
-
-__all__ = ["StrictClassifier", "ClassificationResult"]
-
-# Keep old implementation for reference (will be removed in future version)
-import ast
-import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 from models.schemas import (
     Finding,
@@ -37,11 +18,26 @@ from models.schemas import (
     Evidence,
 )
 from services.finding_filters.filters.threat_model_filter import derive_allowed_input_channels
+from .gates import (
+    BaseGate,
+    SQLiGate,
+    CodeInjectionGate,
+    CommandInjectionGate,
+    XSSGate,
+    PathTraversalGate,
+    XXEGate,
+    SSRFGate,
+    DeserializationGate,
+    HardcodedSecretGate,
+    CSWSHGate,
+    AuthBypassGate,
+    OpenRedirectGate,
+)
 
 
 @dataclass
-class _LegacyClassificationResult:
-    """Result from classification (LEGACY - use ClassificationResult from services.classification)."""
+class ClassificationResult:
+    """Result from classification."""
     disposition: Disposition
     classification_confidence: int  # 0-100
     exploit_confidence: Optional[int]  # 0-100, only for VALID/BUG
@@ -50,16 +46,31 @@ class _LegacyClassificationResult:
     category: Optional[VulnerabilityCategory] = None
 
 
-class _LegacyStrictClassifier:
+class StrictClassifier:
     """
-    Tri-state proof checklist + strict disposition rules.
+    Zero false-positive vulnerability classifier.
 
-    Responsibilities:
-    - Evaluate A-F checklist items (PROVEN/DISPROVEN/UNKNOWN)
-    - Apply disposition rules in priority order
-    - Run pattern-based downgrades
-    - Return disposition + confidence + reasoning
+    Orchestrates classification through specialized gates for each vulnerability type.
+    Each gate implements category-specific logic while the classifier handles common
+    proof checklist evaluation and disposition rules.
     """
+
+    def __init__(self):
+        """Initialize classifier with all gates."""
+        self.gates: dict[VulnerabilityCategory, BaseGate] = {
+            VulnerabilityCategory.SQL_INJECTION: SQLiGate(),
+            VulnerabilityCategory.CODE_INJECTION: CodeInjectionGate(),
+            VulnerabilityCategory.COMMAND_INJECTION: CommandInjectionGate(),
+            VulnerabilityCategory.XSS: XSSGate(),
+            VulnerabilityCategory.PATH_TRAVERSAL: PathTraversalGate(),
+            VulnerabilityCategory.XXE: XXEGate(),
+            VulnerabilityCategory.SSRF: SSRFGate(),
+            VulnerabilityCategory.DESERIALIZATION: DeserializationGate(),
+            VulnerabilityCategory.HARDCODED_SECRET: HardcodedSecretGate(),
+            VulnerabilityCategory.CSWSH: CSWSHGate(),
+            VulnerabilityCategory.AUTHENTICATION_BYPASS: AuthBypassGate(),
+            VulnerabilityCategory.OPEN_REDIRECT: OpenRedirectGate(),
+        }
 
     def classify(
         self,
@@ -84,8 +95,29 @@ class _LegacyStrictClassifier:
         # Build tri-state checklist (gating happens here)
         checklist = self._build_checklist(finding, evidence, threat_model_profile)
 
-        # Apply strict disposition rules
-        disposition = self._apply_rules(checklist, finding, evidence)
+        # Check if gate has specific handling for this category
+        gate = self.gates.get(category)
+        gate_result = None
+        if gate:
+            gate_result = gate.evaluate(finding, evidence)
+
+            # Store gate-specific proof items on checklist for backward compatibility
+            if "exec_sink_reason" in gate_result.proof_items:
+                checklist.exec_sink_reason = gate_result.proof_items["exec_sink_reason"]
+            if "feature_intent_reason" in gate_result.proof_items:
+                checklist.feature_intent_reason = gate_result.proof_items["feature_intent_reason"]
+            if "auth_bypass_reason" in gate_result.proof_items:
+                checklist.auth_bypass_reason = gate_result.proof_items["auth_bypass_reason"]
+
+            # If gate provides disposition override, use it
+            if gate_result.disposition:
+                disposition = gate_result.disposition
+            else:
+                # Apply standard disposition rules (may be influenced by gate)
+                disposition = self._apply_rules(checklist, finding, evidence, gate_result)
+        else:
+            # No specific gate - use standard rules
+            disposition = self._apply_rules(checklist, finding, evidence, None)
 
         # Apply pattern downgrades (ONLY downgrades)
         disposition = self._apply_pattern_downgrades(
@@ -187,7 +219,7 @@ class _LegacyStrictClassifier:
         if gated_off:
             # Force DISPROVEN due to profile
             source_controlled_input = ChecklistItem(
-                value=False,  # KEEP - required field
+                value=False,
                 status=ChecklistStatus.DISPROVEN,
                 reason=(
                     f"disabled_by_profile: input_channel={evidence.input_channel.value} "
@@ -284,82 +316,6 @@ class _LegacyStrictClassifier:
             reason="No clear dangerous sinks found"
         )
 
-    def _check_sql_injection_dataflow(
-        self, finding: Finding, evidence: Evidence
-    ) -> Optional[ChecklistItem]:
-        """
-        Check SQL injection-specific patterns in evidence.
-
-        Returns ChecklistItem if pattern detected, None otherwise.
-        Priority: mitigations > vulnerabilities (a mitigation makes it safe)
-        """
-        snippet = evidence.snippet or evidence.handler_snippet or ""
-        snippet_lower = snippet.lower()
-
-        # FIRST: Check for explicit mitigations - these take highest priority
-        # Pattern 1: Complete allowlist validation before query
-        # Look for: ALLOWED_X = {...} followed by if check before execute
-        if 'allowed_' in snippet_lower and ('if' in snippet_lower and 'not in' in snippet_lower):
-            # More specific check: allowlist defined and checked
-            if re.search(r'ALLOWED_\w+\s*=\s*\{[^}]+\}', snippet, re.IGNORECASE):
-                if re.search(r'if\s+\w+\s+not\s+in\s+ALLOWED_\w+', snippet, re.IGNORECASE):
-                    return ChecklistItem(
-                        value=False,
-                        status=ChecklistStatus.DISPROVEN,
-                        reason="Complete allowlist validates input before use",
-                        reason_code="mitigated_by_allowlist"
-                    )
-
-        # Pattern 2: Positional placeholders with parameter list
-        # e.g., cursor.execute("SELECT * FROM users WHERE id = ?", [user_id])
-        # BUT: Don't match if there's also an unsafe pattern (mixed code)
-        positional_param = re.search(r'\.execute\s*\(\s*["\'].*?\?\s*.*?["\']\s*,\s*\[', snippet)
-        has_unsafe_fstring = re.search(r'f["\'].*?\{.*?\}.*?["\']', snippet) and '.execute' in snippet_lower
-        has_unsafe_concat = (re.search(r'["\'].*?\s*\+\s*\w+', snippet) or re.search(r'\w+\s*\+\s*["\']', snippet)) and ('.execute' in snippet_lower or 'query' in snippet_lower)
-
-        if positional_param and not (has_unsafe_fstring or has_unsafe_concat):
-            return ChecklistItem(
-                value=False,
-                status=ChecklistStatus.DISPROVEN,
-                reason="Parameter binding present: query uses placeholder ? with separate parameter list",
-                reason_code="mitigated_by_parameterization"
-            )
-
-        # Pattern 3: Named placeholders with parameter dict
-        # e.g., cursor.execute("SELECT * FROM users WHERE id = :id", {"id": user_id})
-        named_param = re.search(r'\.execute\s*\(\s*["\'].*?:\w+\s*.*?["\']\s*,\s*\{', snippet)
-        if named_param and not (has_unsafe_fstring or has_unsafe_concat):
-            return ChecklistItem(
-                value=False,
-                status=ChecklistStatus.DISPROVEN,
-                reason="Parameter binding with named placeholder",
-                reason_code="mitigated_by_parameterization"
-            )
-
-        # SECOND: Check for unsafe patterns (vulnerable)
-        # Pattern 4: f-string interpolation in SQL query
-        # e.g., f"SELECT * FROM users WHERE id = {user_id}"
-        if has_unsafe_fstring:
-            return ChecklistItem(
-                value=True,
-                status=ChecklistStatus.PROVEN,
-                reason="f-string interpolation in SQL query (structure-taint)",
-                reason_code="unsafe_identifier_influence"
-            )
-
-        # Pattern 5: String concatenation with + operator
-        # e.g., "SELECT * FROM users WHERE id = '" + user_id + "'"
-        if has_unsafe_concat:
-            return ChecklistItem(
-                value=True,
-                status=ChecklistStatus.PROVEN,
-                reason="String concatenation allows structure-taint",
-                reason_code="unsafe_structure_taint"
-            )
-
-        # No SQL injection-specific pattern detected
-        return None
-
     def _evaluate_dataflow_evidenced(
         self, finding: Finding, evidence: Evidence
     ) -> ChecklistItem:
@@ -367,9 +323,11 @@ class _LegacyStrictClassifier:
         # First check for SQL injection-specific patterns
         category = self._normalize_category(finding)
         if category == VulnerabilityCategory.SQL_INJECTION:
-            sql_result = self._check_sql_injection_dataflow(finding, evidence)
-            if sql_result is not None:
-                return sql_result
+            gate = self.gates.get(VulnerabilityCategory.SQL_INJECTION)
+            if gate:
+                gate_result = gate.evaluate(finding, evidence)
+                if gate_result.proof_items.get("dataflow_evidenced"):
+                    return gate_result.proof_items["dataflow_evidenced"]
 
         source_matches = [m for m in evidence.matches if m["match_type"] == "source"]
         sink_matches = [m for m in evidence.matches if m["match_type"] == "sink"]
@@ -387,7 +345,7 @@ class _LegacyStrictClassifier:
             return ChecklistItem(
                 value=True,
                 status=ChecklistStatus.PROVEN,
-                reason=f"Source and sink in same function ({evidence.symbol_info["name"]})"
+                reason=f"Source and sink in same function ({evidence.symbol_info['name']})"
             )
 
         # Check proximity
@@ -559,7 +517,6 @@ class _LegacyStrictClassifier:
 
         # For code-level vulnerabilities (SQL injection, etc.) with no explicit misconfig markers,
         # assume PROVEN True (it's a code-level issue, not a config issue)
-        # This is the default assumption for most vulnerability types
         category = self._normalize_category(finding)
         code_level_categories = [
             VulnerabilityCategory.SQL_INJECTION,
@@ -626,242 +583,15 @@ class _LegacyStrictClassifier:
             reason="No explicit bypass markers found"
         )
 
-    def _is_code_exec_sink(self, finding: Finding, evidence: Evidence) -> Tuple[bool, str]:
-        """
-        Detect if finding involves exec/eval/compile sink within symbol range.
-
-        Uses AST parsing when available (avoids comment false positives).
-        Falls back to regex that handles line-number prefixes.
-
-        Returns:
-            (is_sink, reason) - reason explains what was detected
-        """
-        symbol_name = None
-        symbol_type = None
-
-        if evidence.symbol_info:
-            symbol_name = evidence.symbol_info["name"]
-            symbol_type = evidence.symbol_info["type"]
-
-        # Try AST parsing first (most reliable) - only if we have symbol info
-        ast_parse_succeeded = False
-        target_node = None  # Initialize outside try block for scope
-        if evidence.snippet and symbol_name and symbol_type:
-            try:
-                tree = ast.parse(evidence.snippet)
-                ast_parse_succeeded = True
-
-                # Find the target symbol (function or class) in the AST
-                for node in ast.walk(tree):
-                    if symbol_type == "function" and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if node.name == symbol_name:
-                            target_node = node
-                            break
-                    elif symbol_type == "class" and isinstance(node, ast.ClassDef):
-                        if node.name == symbol_name:
-                            target_node = node
-                            break
-
-                # If we found the target, check only within its body
-                if target_node:
-                    for node in ast.walk(target_node):
-                        # Direct calls: exec(), eval(), compile()
-                        if isinstance(node, ast.Call):
-                            if isinstance(node.func, ast.Name) and node.func.id in ['exec', 'eval', 'compile']:
-                                return (True, f"Code-exec sink: {node.func.id}() in {symbol_name}")
-
-                            # Obfuscated: getattr(__builtins__, "exec")
-                            if isinstance(node.func, ast.Attribute):
-                                if node.func.attr in ['exec', 'eval', 'compile']:
-                                    return (True, f"Code-exec sink: .{node.func.attr}() in {symbol_name}")
-
-                            # getattr with string literal
-                            if isinstance(node.func, ast.Call):
-                                if isinstance(node.func.func, ast.Name) and node.func.func.id == 'getattr':
-                                    if len(node.func.args) >= 2:
-                                        if isinstance(node.func.args[1], ast.Constant):
-                                            if node.func.args[1].value in ['exec', 'eval', 'compile']:
-                                                return (True, f"Code-exec sink: getattr(..., '{node.func.args[1].value}') in {symbol_name}")
-
-                        # Subscript: __builtins__["exec"]
-                        if isinstance(node, ast.Subscript):
-                            if isinstance(node.slice, ast.Constant):
-                                if node.slice.value in ['exec', 'eval', 'compile']:
-                                    return (True, f"Code-exec sink: subscript['{node.slice.value}'] in {symbol_name}")
-
-                    # Found the target node and checked it - return False (no sink found)
-                    return (False, f"No exec/eval/compile sink in {symbol_name}")
-
-                # If AST parsing succeeded but target_node not found, fall through to regex fallback
-                # (symbol name might not match exactly)
-
-            except SyntaxError:
-                pass  # Fall back to regex
-
-        # Use regex fallback if AST parsing failed or couldn't find the symbol
-        if not ast_parse_succeeded or target_node is None:
-            # Regex fallback: search entire snippet (can't reliably scope with regex)
-            # This is less precise but better than false negatives
-            snippet = evidence.snippet or finding.code_snippet or ""
-
-            for line in snippet.split('\n'):
-                # Strip line-number prefix: "123: code" -> "code"
-                clean_line = re.sub(r'^\s*\d+\s*:\s*', '', line)
-
-                # Skip comment lines
-                if re.match(r'^\s*#', clean_line):
-                    continue
-
-                # Check for exec/eval/compile calls (exact word, not part of larger identifier)
-                if re.search(r'(?<![a-zA-Z_])(exec|eval|compile)\s*\(', clean_line):
-                    return (True, f"Code-exec sink: detected in snippet")
-
-        return (False, "No exec/eval/compile sink detected")
-
-    def _feature_intent_proven(self, finding: Finding, evidence: Evidence) -> Tuple[bool, str]:
-        """
-        Determine if exec/eval is a proven product feature.
-
-        Requires 2+ strong signals:
-        - Signal A: Path match (pipelines, executor, kernel, etl, workflow, dag, notebooks)
-        - Signal B: Symbol match (class/function name suggests execution)
-        - Signal C: Documentation match (comments/docstrings about execution)
-
-        Logic: (A + B) OR (A + C) = PROVEN
-
-        Returns:
-            (proven, reason) - reason explains which signals matched
-        """
-        signals = []
-
-        # Signal A: Path match
-        path = finding.file_path.lower()
-        path_keywords = ['/pipelines/', '/executor/', '/kernel/', '/etl/',
-                         '/workflow/', '/dag/', '/notebooks/', '/blocks/']
-        path_match = any(kw in path for kw in path_keywords)
-
-        # Also check package structure: .../data_preparation/.../block/...
-        if '/data_preparation/' in path and '/block' in path:
-            path_match = True
-
-        if path_match:
-            signals.append(f"path={finding.file_path}")
-
-        # Signal B: Symbol match
-        symbol_name = ""
-        if evidence.symbol_info:
-            symbol_name = evidence.symbol_info["name"].lower()
-
-        symbol_keywords = ['executor', 'pipeline', 'kernel', 'runner', 'block',
-                           'execute_', 'run_', 'eval_', 'process_block', 'run_kernel']
-        symbol_match = any(kw in symbol_name for kw in symbol_keywords)
-
-        if symbol_match:
-            signals.append(f"symbol={evidence.symbol_info["name"]}")
-
-        # Signal C: Documentation match
-        snippet = evidence.snippet or finding.code_snippet or ""
-        doc_keywords = ['execute user code', 'run pipeline', 'notebook kernel',
-                        'block execution', 'pipeline runtime', 'run user block',
-                        'execute block', 'kernel execution', 'run notebook',
-                        'notebook cell', 'execute notebook', 'run block', 'execute cell',
-                        'pipeline execution', 'dynamic execution', 'code execution']
-        doc_match = any(kw in snippet.lower() for kw in doc_keywords)
-
-        if doc_match:
-            signals.append("doc_match")
-
-        # Evaluate: need 2+ signals, including path
-        if len(signals) >= 2 and path_match:
-            return (True, f"Feature intent PROVEN: {' + '.join(signals)}")
-
-        if len(signals) == 1:
-            return (False, f"Feature intent UNKNOWN: only weak signal ({signals[0]})")
-
-        return (False, "Feature intent UNKNOWN: no strong signals found")
-
-    def _auth_bypass_explicitly_proven(self, finding: Finding, evidence: Evidence) -> Tuple[bool, str]:
-        """
-        Determine if auth bypass is explicitly proven in code.
-
-        CRITICAL: Only searches CODE evidence (handler, routes, auth gates).
-        Never uses finding.description (prevents scanner manipulation).
-
-        Explicit markers:
-        - Parameters: bypass_auth=True, require_auth=False, public=True, skip_auth=True
-        - Function calls: bypass_oauth_check(), skip_permission_check(), bypass_auth()
-        - Decorators: @public_endpoint, @no_auth_required, @unauthenticated, @allow_anonymous
-        - Comments: # no auth required, # public endpoint, # bypass authentication
-
-        Returns:
-            (proven, reason) - reason explains what explicit marker was found
-        """
-        # Collect code-only evidence (NEVER use finding.description)
-        code_snippets = []
-
-        # 1. Handler snippet
-        if evidence.snippet:
-            code_snippets.append(evidence.snippet)
-
-        # 2. Route snippets (from matches)
-        route_matches = [m for m in evidence.matches if m["match_type"] == "route_registration"]
-        for match in route_matches:
-            code_snippets.append(match["snippet"])
-
-        # 3. Auth gate snippets
-        auth_matches = [m for m in evidence.matches if m["match_type"] == "auth_gate"]
-        for match in auth_matches:
-            code_snippets.append(match["snippet"])
-
-        combined = " ".join(code_snippets).lower()
-
-        # Check explicit markers
-
-        # 1. Auth-specific parameters
-        auth_params = ['bypass_auth=true', 'require_auth=false',
-                       'public=true', 'skip_auth=true']
-        for param in auth_params:
-            if param in combined:
-                return (True, f"Auth bypass PROVEN: parameter '{param}' in code")
-
-        # 2. Function calls
-        bypass_calls = ['bypass_oauth_check(', 'skip_permission_check(',
-                        'bypass_auth(', 'skip_auth_check(']
-        for call in bypass_calls:
-            if call in combined:
-                return (True, f"Auth bypass PROVEN: function call '{call}' in code")
-
-        # 3. Decorators
-        decorators = ['@public_endpoint', '@no_auth_required',
-                      '@unauthenticated', '@allow_anonymous']
-        for dec in decorators:
-            if dec in combined:
-                return (True, f"Auth bypass PROVEN: decorator '{dec}' in code")
-
-        # 4. Comments (in code only)
-        comment_patterns = ['# no auth required', '# public endpoint',
-                            '# bypass authentication', '# skip auth']
-        for pattern in comment_patterns:
-            if pattern in combined:
-                return (True, f"Auth bypass PROVEN: comment '{pattern}' in code")
-
-        # NOT considered explicit:
-        # - "No auth gates found" (absence != bypass)
-        # - Path contains /public/ (convention, not proof)
-
-        return (False, "Auth bypass not PROVEN: no explicit bypass markers in code")
-
     def _apply_rules(
         self,
         checklist: ProofChecklist,
         finding: Finding,
-        evidence: Evidence
+        evidence: Evidence,
+        gate_result=None
     ) -> Disposition:
         """Apply strict disposition rules in priority order."""
         # Rule 0: HARDENING (threat-model gated input)
-        # If source_controlled_input is DISPROVEN with reason_code="disabled_by_profile",
-        # the input channel is deterministically outside the threat model.
-        # This overrides all other rules.
         if (checklist.source_controlled_input.status == ChecklistStatus.DISPROVEN and
                 checklist.source_controlled_input.reason_code == "disabled_by_profile"):
             return Disposition.HARDENING
@@ -887,51 +617,31 @@ class _LegacyStrictClassifier:
                 checklist.reachable.value):
             return Disposition.BUG
 
-        # Rule 3: STRICT EXEC/EVAL FILTERING
-        is_exec_sink, exec_reason = self._is_code_exec_sink(finding, evidence)
-        if is_exec_sink:
-            # Store reason and force sink_present to PROVEN
-            checklist.exec_sink_reason = exec_reason
-            checklist.sink_present = ChecklistItem(
-                value=True,
-                status=ChecklistStatus.PROVEN,
-                reason=exec_reason
-            )
-            sink = checklist.sink_present  # Update local reference
-
-            # Sub-rule 3a: Feature intent proven → BY_DESIGN
-            feature_proven, feature_reason = self._feature_intent_proven(finding, evidence)
-            checklist.feature_intent_reason = feature_reason
-            if feature_proven:
-                return Disposition.BY_DESIGN
-
-            # Sub-rule 3b: Full proof chain → VALID or SPECULATIVE
+        # Rule 3: STRICT EXEC/EVAL FILTERING (CODE_INJECTION gate)
+        # If we have an exec sink that passed gate evaluation but no disposition override,
+        # apply special exec rules
+        if (gate_result and
+                gate_result.passed and
+                hasattr(checklist, 'exec_sink_reason') and
+                checklist.exec_sink_reason):
+            # Exec sink detected - check for full proof chain
             source = checklist.source_controlled_input
             reachable = checklist.reachable
             dataflow = checklist.dataflow_evidenced
             boundary_crossed = checklist.boundary_crossed
 
-            if (source.status == ChecklistStatus.PROVEN and source.value and
-                reachable.status == ChecklistStatus.PROVEN and reachable.value and
-                dataflow.status == ChecklistStatus.PROVEN and dataflow.value):
+            # If we have SOME proof but not complete, return SPECULATIVE
+            # This prevents exec sinks from being classified as HARDENING
+            has_some_proof = (
+                (source.status == ChecklistStatus.PROVEN and source.value) or
+                (reachable.status == ChecklistStatus.PROVEN and reachable.value) or
+                (dataflow.status == ChecklistStatus.PROVEN and dataflow.value) or
+                (boundary_crossed.status == ChecklistStatus.PROVEN and boundary_crossed.value)
+            )
 
-                bypass_proven, bypass_reason = self._auth_bypass_explicitly_proven(finding, evidence)
-                checklist.auth_bypass_reason = bypass_reason
-
-                boundary_violated = (boundary_crossed.status == ChecklistStatus.PROVEN and
-                                   boundary_crossed.value)
-
-                if bypass_proven or boundary_violated:
-                    return Disposition.VALID_SECURITY_ISSUE
-
-                return Disposition.SPECULATIVE  # Auth unknown, high-risk but unproven
-
-            # Sub-rule 3c: Default → SPECULATIVE
-            # Always check auth bypass for auditing (even if incomplete proof chain)
-            if checklist.auth_bypass_reason is None:
-                bypass_proven, bypass_reason = self._auth_bypass_explicitly_proven(finding, evidence)
-                checklist.auth_bypass_reason = bypass_reason
-            return Disposition.SPECULATIVE
+            if has_some_proof:
+                return Disposition.SPECULATIVE
+            # If no proof at all, fall through to normal rules
 
         # Rule 4: MISCONFIGURATION (not_only_misconfig PROVEN False + others PROVEN True)
         if (checklist.not_only_misconfig.status == ChecklistStatus.PROVEN and
@@ -947,13 +657,10 @@ class _LegacyStrictClassifier:
             return Disposition.MISCONFIGURATION
 
         # Rule 5: BY_DESIGN (code-exec features with conservative heuristics)
-        # NEVER treat command injection as BY_DESIGN
         if self._is_product_feature(finding, evidence, checklist):
             return Disposition.BY_DESIGN
 
         # Rule 5b: BY_DESIGN (mitigated vulnerabilities with explicit reason codes)
-        # If dataflow or security_control_bypassed is DISPROVEN with a mitigation reason_code,
-        # treat as BY_DESIGN (the code has proper security controls)
         mitigation_reason_codes = [
             "mitigated_by_parameterization",
             "mitigated_by_allowlist",
@@ -1028,49 +735,19 @@ class _LegacyStrictClassifier:
         """
         Apply pattern-based downgrades for specific categories.
 
-        SKIP CODE_INJECTION - handled entirely by strict exec filter.
+        Pattern rules can ONLY downgrade dispositions, never upgrade.
         """
-        # Pattern rules can ONLY return: SPECULATIVE, HARDENING, MISCONFIGURATION, BY_DESIGN
-        # They MUST NEVER return: VALID_SECURITY_ISSUE or BUG
-
-        # SKIP CODE_INJECTION - exec filter owns this category
+        # SKIP CODE_INJECTION - handled entirely by strict exec filter (gate)
         if category == VulnerabilityCategory.CODE_INJECTION:
             return disposition
 
-        # SSRF with constant URL
-        if category == VulnerabilityCategory.SSRF and evidence.ssrf_analysis:
-            if evidence.ssrf_analysis["url_is_constant"]:
-                return Disposition.SPECULATIVE
-            if evidence.ssrf_analysis["url_from_config"]:
-                return Disposition.SPECULATIVE
-
-        # CSWSH: check_origin alone without ambient creds
-        if category == VulnerabilityCategory.CSWSH:
-            if "check_origin" in evidence.snippet.lower():
-                # If no evidence of session/cookie abuse
-                if "cookie" not in evidence.snippet.lower() and "session" not in evidence.snippet.lower():
-                    return Disposition.HARDENING
-
-        # Deserialization without attacker source
-        if category == VulnerabilityCategory.DESERIALIZATION:
-            if (checklist.source_controlled_input.status != ChecklistStatus.PROVEN or
-                    not checklist.source_controlled_input.value):
-                return Disposition.HARDENING
-
-        # Hardcoded secrets in test/example files
-        if category == VulnerabilityCategory.HARDCODED_SECRET:
-            path_lower = finding.file_path.lower()
-            if any(marker in path_lower for marker in [
-                "test", "example", "sample", "demo", "docker-compose", ".env.example",
-                # Vendored / third-party bundles often include demo certs/keys.
-                "third_party", "third-party", "/vendor/", "vendored",
-                # Common cert fixture locations in embedded servers.
-                "resources/cert", "resources/certs", "resources/ssl_cert",
-                # Build tools, utilities, docs, samples often have example/test code
-                "/tools/", "tools/", "/docs/", "docs/", "samples/", "/samples/",
-                "_obsolete",
-            ]):
-                return Disposition.HARDENING
+        # Check if category has a gate with specific disposition
+        gate = self.gates.get(category)
+        if gate:
+            gate_result = gate.evaluate(finding, evidence)
+            if gate_result.disposition:
+                # Gate provided a disposition override
+                return gate_result.disposition
 
         # SQL injection in pipeline/connector without attacker source
         if category == VulnerabilityCategory.SQL_INJECTION:
@@ -1152,16 +829,16 @@ class _LegacyStrictClassifier:
         bullets = []
 
         # Add exec-specific reasoning at start (if present)
-        if checklist.exec_sink_reason:
+        if hasattr(checklist, 'exec_sink_reason') and checklist.exec_sink_reason:
             bullets.append(checklist.exec_sink_reason)
-            if checklist.feature_intent_reason:
+            if hasattr(checklist, 'feature_intent_reason') and checklist.feature_intent_reason:
                 bullets.append(checklist.feature_intent_reason)
-            if checklist.auth_bypass_reason:
+            if hasattr(checklist, 'auth_bypass_reason') and checklist.auth_bypass_reason:
                 bullets.append(checklist.auth_bypass_reason)
 
             # If exec reasoning is complete (3 bullets), we can truncate
             if len(bullets) >= 3:
-                return bullets[:4]  # Keep 3-4 bullets for clarity
+                return bullets[:4]
 
         # Continue with standard checklist reasoning...
         if disposition == Disposition.VALID_SECURITY_ISSUE:
@@ -1204,6 +881,28 @@ class _LegacyStrictClassifier:
 
         # Add symbol/framework context if available
         if evidence.symbol_info:
-            bullets.append(f"Symbol: {evidence.symbol_info["name"]} ({evidence.symbol_info["type"]})")
+            bullets.append(f"Symbol: {evidence.symbol_info['name']} ({evidence.symbol_info['type']})")
 
-        return bullets[:5]  # Limit to 5 bullets total
+        return bullets[:5]
+
+    # Backward compatibility: expose gate methods for tests
+    def _is_code_exec_sink(self, finding: Finding, evidence: Evidence):
+        """Delegate to CodeInjectionGate for backward compatibility with tests."""
+        gate = self.gates.get(VulnerabilityCategory.CODE_INJECTION)
+        if gate:
+            return gate._is_code_exec_sink(finding, evidence)
+        return (False, "No CODE_INJECTION gate available")
+
+    def _feature_intent_proven(self, finding: Finding, evidence: Evidence):
+        """Delegate to CodeInjectionGate for backward compatibility with tests."""
+        gate = self.gates.get(VulnerabilityCategory.CODE_INJECTION)
+        if gate:
+            return gate._feature_intent_proven(finding, evidence)
+        return (False, "No CODE_INJECTION gate available")
+
+    def _auth_bypass_explicitly_proven(self, finding: Finding, evidence: Evidence):
+        """Delegate to CodeInjectionGate for backward compatibility with tests."""
+        gate = self.gates.get(VulnerabilityCategory.CODE_INJECTION)
+        if gate:
+            return gate._auth_bypass_explicitly_proven(finding, evidence)
+        return (False, "No CODE_INJECTION gate available")

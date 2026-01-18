@@ -372,6 +372,37 @@ AGENT_TOOLS = [
         }
     },
     {
+        "name": "triage_finding",
+        "description": "Triage a reported finding to determine if it should be kept or filtered. Uses LLM-based two-stage validation: (1) production relevance filter, (2) issue validation. Returns decision ('keep' or 'filter') with reason.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The finding title (same as used in report_finding)"
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file (same as used in report_finding)"
+                },
+                "vulnerability_type": {
+                    "type": "string",
+                    "description": "Type of vulnerability (same as used in report_finding)"
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["critical", "high", "medium", "low", "info"],
+                    "description": "Severity level (same as used in report_finding)"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Brief description of the finding"
+                }
+            },
+            "required": ["title", "file_path", "vulnerability_type", "severity", "description"]
+        }
+    },
+    {
         "name": "add_investigation_note",
         "description": "Add a note to your investigation log. Use this to track your analysis, hypotheses, and things to check.",
         "parameters": {
@@ -1120,6 +1151,63 @@ class ToolExecutor:
         """Report a finding - this is handled specially by the agent."""
         # The agent loop will intercept this and create a proper Finding
         return ToolResult(True, {'reported': True, 'finding': kwargs})
+
+    async def _tool_triage_finding(
+        self,
+        title: str,
+        file_path: str,
+        vulnerability_type: str,
+        severity: str,
+        description: str
+    ) -> ToolResult:
+        """Triage a finding using LLM-based production relevance filter."""
+        try:
+            # Import here to avoid circular dependencies
+            from services.production_relevance_filter import ProductionRelevanceFilter
+            from protocol_config.protocol_config import ProtocolConfig
+            from models.schemas import Finding, Severity as SeverityEnum
+
+            # Check if filter is available
+            api_key = ProtocolConfig.ANTHROPIC_API_KEY
+            if not api_key:
+                return ToolResult(True, {
+                    "decision": "keep",
+                    "reason": "No API key configured - filter unavailable",
+                    "is_production_code": True
+                })
+
+            # Create minimal Finding object for filter
+            try:
+                severity_enum = SeverityEnum(severity.lower())
+            except (ValueError, AttributeError):
+                severity_enum = SeverityEnum.MEDIUM
+
+            finding = Finding(
+                title=title,
+                file_path=file_path,
+                vulnerability_type=vulnerability_type,
+                severity=severity_enum,
+                description=description,
+            )
+
+            # Run production relevance filter
+            production_filter = ProductionRelevanceFilter(api_key)
+            is_relevant, reason = production_filter.is_production_relevant(finding)
+
+            return ToolResult(True, {
+                "decision": "keep" if is_relevant else "filter",
+                "reason": reason,
+                "is_production_code": is_relevant
+            })
+
+        except Exception as e:
+            # On error, default to keeping
+            return ToolResult(True, {
+                "decision": "keep",
+                "reason": f"Filter error: {str(e)}",
+                "is_production_code": True,
+                "error": True
+            })
 
     async def _tool_add_investigation_note(
         self,

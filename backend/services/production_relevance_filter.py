@@ -63,9 +63,9 @@ class ProductionRelevanceFilter:
             return (True, f"Filter error: {str(e)}")
 
     def _build_prompt(self, finding: Finding) -> str:
-        """Build LLM prompt for production relevance check."""
+        """Build LLM prompt for production relevance check and issue validation."""
 
-        return f"""You are a bug bounty triage expert. Determine if this security finding should be reported to a bug bounty program.
+        return f"""You are a bug bounty triage expert. This is a two-stage evaluation to determine if this finding should be reported.
 
 ## Finding Details
 - **Title:** {finding.title}
@@ -74,7 +74,7 @@ class ProductionRelevanceFilter:
 - **Severity:** {finding.severity}
 - **Description:** {finding.description[:500]}
 
-## Bug Bounty Filtering Criteria
+## STAGE 1: Production Relevance Filter
 
 **FILTER OUT (respond with "FILTER: <reason>"):**
 1. **Test code** - Files in test/, tests/, __tests__/, spec/, *_test.*, *Test.*, test_*
@@ -84,26 +84,43 @@ class ProductionRelevanceFilter:
 5. **Config files** - Dockerfiles, docker-compose.yml, .sh scripts, Makefiles, build.gradle
 6. **Development utilities** - Code that only runs during development/build, not in production
 
-**KEEP (respond with "KEEP: <reason>"):**
-1. **Production libraries** - Code in libs/, src/, app/, core/ that ships to users
-2. **Runtime code** - Code that executes when the application runs for end users
-3. **API endpoints** - Server code that handles user requests
-4. **Client code** - JavaScript/Android/iOS code that runs on user devices
-5. **Core functionality** - Any code that affects actual users of the product
+If filtered here, respond immediately with "FILTER: <reason>" and stop.
 
-## Special Cases
-- android/**/*.cpp or android/**/*.java in src/main/java → **KEEP** (production Android code)
-- android/build.gradle → **FILTER** (build configuration)
-- libs/**/*.cpp or libs/**/*.h → **KEEP** (production libraries)
-- web/samples/** → **FILTER** (example code)
-- docs/** → **FILTER** (documentation)
+## STAGE 2: Issue Validation (for production code only)
+
+The report below is an issue. I want you to do research to figure out if this is something that is:
+- **Expected behavior** - Specifically allowed or by-design
+- **Configuration issue** - Could have larger implications as described in the report
+- **Actual security problem** - Real vulnerability worth reporting
+
+**CRITICAL: Be VERY HARSH on distinguishing between "bug" and "security issue".**
+
+**FILTER OUT (respond with "FILTER: <reason>"):**
+1. **Expected behavior** - Documented as working as intended
+2. **By-design configuration** - Intentional design choice without security implications
+3. **Bug but not security** - Functional issue without exploitable security impact
+4. **Theoretical only** - No realistic attack scenario or attacker model
+5. **Invalid sink** - Pattern matches vulnerability type but isn't exploitable (e.g., command injection without shell=True)
+6. **Missing prerequisites** - Requires unrealistic attacker capabilities or user actions
+
+**KEEP (respond with "KEEP: <reason>"):**
+1. **Real security issue** - Exploitable vulnerability with realistic attack scenario
+2. **Configuration with security implications** - By-design but creates exploitable condition
+3. **Documented but still exploitable** - Known issue that's still a valid security concern
+
+## Special Cases for Production Code
+- **Command injection** - Must use shell=True or equivalent, not just argv parsing
+- **Buffer overflow** - Must show attacker-controlled size/input reaching unsafe function
+- **Path traversal** - Must show user input flowing to file operations
+- **XSS/injection** - Must show user input rendered/executed without sanitization
+- **Stack protection disabled** - Only if paired with actual memory corruption vulnerability
 
 ## Your Response
 Respond with EXACTLY one line:
 - "FILTER: <brief reason>" if this should NOT be reported
 - "KEEP: <brief reason>" if this SHOULD be reported
 
-Focus on: Does this affect end users of the production application?"""
+Focus on: Is this a real security issue with realistic exploitation, or is it expected behavior/bug/theoretical concern?"""
 
     def get_filter_disposition(self) -> Disposition:
         """Return the disposition to use for filtered findings."""

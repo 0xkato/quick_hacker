@@ -1034,9 +1034,8 @@ class AgentOrchestrator:
                         except Exception as e:
                             print(f"Warning: Failed to load protocol policy: {e}")
 
-                    # Run triage in worker thread with protocol evaluation
-                    triage_result = await asyncio.to_thread(
-                        triage_service.triage_with_protocol,
+                    # Run triage with protocol evaluation
+                    triage_result = await triage_service.triage_with_protocol(
                         repo_root=agent.repo_path,
                         findings=raw_findings,
                         policy_version=settings.triage_policy_version,
@@ -1717,8 +1716,7 @@ class AgentOrchestrator:
                             except Exception as e:
                                 print(f"Warning: Failed to load protocol policy: {e}")
 
-                        triage_result = await asyncio.to_thread(
-                            triage_service.triage_with_protocol,
+                        triage_result = await triage_service.triage_with_protocol(
                             repo_root=str(agent.repo_path),
                             findings=new_findings,
                             policy_version=settings.triage_policy_version,
@@ -1847,8 +1845,7 @@ class AgentOrchestrator:
                         except Exception as e:
                             print(f"Warning: Failed to load protocol policy: {e}")
 
-                    triage_result = await asyncio.to_thread(
-                        triage_service.triage_with_protocol,
+                    triage_result = await triage_service.triage_with_protocol(
                         repo_root=str(agent.repo_path),
                         findings=raw_findings,
                         policy_version=settings.triage_policy_version,

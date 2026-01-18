@@ -637,10 +637,9 @@ async def retriage_findings(
             # Log but don't fail if protocol loading fails
             print(f"Warning: Failed to load protocol policy: {e}")
 
-    # Run triage in thread with protocol evaluation
+    # Run triage with protocol evaluation
     try:
-        triage_result = await asyncio.to_thread(
-            triage_service.triage_with_protocol,
+        triage_result = await triage_service.triage_with_protocol(
             repo_root=repo_path,
             findings=findings,
             policy_version=settings.triage_policy_version,

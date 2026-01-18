@@ -8,7 +8,7 @@ from models.schemas import (
     Finding, ProofChecklist, Disposition, ChecklistItem, ChecklistStatus,
     VulnerabilityCategory, Severity
 )
-from services.evidence_gatherer import EvidenceResult
+from services.evidence import EvidenceResult
 
 
 @pytest.mark.integration

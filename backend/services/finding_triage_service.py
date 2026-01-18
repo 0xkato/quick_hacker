@@ -26,9 +26,8 @@ from models.schemas import (
     TriagePolicy,
     PolicyDecision,
 )
-from services.evidence_gatherer import EvidenceGatherer
+from services.evidence import EvidenceGatherer, EvidenceQuestOrchestrator
 from services.strict_classifier import StrictClassifier
-from services.evidence_quest_orchestrator import EvidenceQuestOrchestrator
 from services.protocol_evaluator import ProtocolEvaluator
 from services.protocol_policies import ProtocolPolicyLoader
 from services.deduplicator import deduplicate_findings

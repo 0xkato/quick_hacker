@@ -15,7 +15,7 @@ from models.schemas import (
     Finding, ProofChecklist, ChecklistItem, ChecklistStatus,
     Disposition, Severity, VulnerabilityCategory
 )
-from services.evidence_gatherer import EvidenceResult
+from services.evidence import EvidenceResult
 from services.critic_loop import CriticLoop, CriticDecision, CriticInput
 from datetime import datetime
 

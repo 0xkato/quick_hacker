@@ -1,9 +1,37 @@
 """
 Evidence gathering service for vulnerability triage.
 
-Symbol-centered evidence collection with strict time budgets.
-Runs synchronously (called via asyncio.to_thread).
+DEPRECATED: Use services.evidence.EvidenceService instead.
+This module is kept for backward compatibility only.
 """
+
+import warnings
+
+warnings.warn(
+    "evidence_gatherer is deprecated. Use services.evidence.EvidenceService instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
+# Re-export from new location for backward compatibility
+from services.evidence import (
+    EvidenceGatherer,
+    SymbolInfo,
+    EvidenceMatch,
+    SSRFAnalysis,
+    EvidenceResult,
+)
+
+__all__ = [
+    "EvidenceGatherer",
+    "SymbolInfo",
+    "EvidenceMatch",
+    "SSRFAnalysis",
+    "EvidenceResult",
+]
+
+# Keep old implementation below for reference during migration
+# This code is no longer used but kept temporarily
 
 import ast
 import re

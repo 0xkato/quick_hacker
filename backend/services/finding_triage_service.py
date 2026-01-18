@@ -34,6 +34,8 @@ from services.protocol_policies import ProtocolPolicyLoader
 from services.deduplicator import deduplicate_findings
 from services.pre_triage_filter import pre_filter_findings
 from services.policy_evaluator import PolicyEvaluator
+from services.production_relevance_filter import ProductionRelevanceFilter
+from protocol_config.protocol_config import ProtocolConfig
 
 
 class FindingTriageService:
@@ -51,6 +53,14 @@ class FindingTriageService:
         self.quest_orchestrator: Optional[EvidenceQuestOrchestrator] = None
         self.protocol_evaluator = ProtocolEvaluator()
         self.policy_evaluator = PolicyEvaluator()
+
+        # Initialize LLM-based production relevance filter
+        api_key = ProtocolConfig.ANTHROPIC_API_KEY
+        self.production_filter: Optional[ProductionRelevanceFilter] = None
+        if api_key:
+            self.production_filter = ProductionRelevanceFilter(api_key)
+        else:
+            print("⚠️  Warning: No ANTHROPIC_API_KEY - production filter disabled")
 
     def _classification_from_disposition(
         self, disposition: Disposition | None, current: FindingClassification
@@ -289,6 +299,74 @@ class FindingTriageService:
                 break
 
             try:
+                # Step 0: Production relevance filter (LLM-based)
+                if self.production_filter and protocol_policy:
+                    is_relevant, filter_reason = await asyncio.to_thread(
+                        self.production_filter.is_production_relevant,
+                        finding
+                    )
+
+                    if not is_relevant:
+                        # Finding filtered - mark as HARDENING and skip analysis
+                        from models.schemas import ProofChecklist, ClassificationResult
+
+                        filter_checklist = ProofChecklist(
+                            source_controlled_input=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.DISPROVEN,
+                                reason="Non-production code (filtered by LLM)"
+                            ),
+                            sink_present=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.UNKNOWN,
+                                reason="Not analyzed - filtered as non-production"
+                            ),
+                            dataflow_evidenced=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.UNKNOWN,
+                                reason="Not analyzed - filtered as non-production"
+                            ),
+                            reachable=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.UNKNOWN,
+                                reason="Not analyzed - filtered as non-production"
+                            ),
+                            boundary_crossed=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.DISPROVEN,
+                                reason="Non-production code (filtered by LLM)"
+                            ),
+                            not_only_misconfig=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.UNKNOWN,
+                                reason="Not analyzed - filtered as non-production"
+                            ),
+                            security_control_bypassed=ChecklistItem(
+                                value=False,
+                                status=ChecklistStatus.UNKNOWN,
+                                reason="Not analyzed - filtered as non-production"
+                            )
+                        )
+
+                        classification = ClassificationResult(
+                            disposition=Disposition.HARDENING,
+                            classification_confidence=100,
+                            exploit_confidence=None,
+                            proof_checklist=filter_checklist,
+                            reasoning=[
+                                f"Filtered as non-production code: {filter_reason}",
+                                "LLM determined this code does not affect production users"
+                            ],
+                            category=finding.vulnerability_type
+                        )
+
+                        # Attach metadata and skip to next finding
+                        triaged_finding = self._attach_triage_metadata(
+                            finding, classification, batch_id, policy_version
+                        )
+                        triaged.append(triaged_finding)
+                        continue
+
                 # Step 1: Gather evidence
                 evidence = await asyncio.to_thread(gatherer.gather, finding)
 

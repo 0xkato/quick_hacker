@@ -1878,6 +1878,7 @@ class AgentOrchestrator:
             # Best-effort report generation.
             try:
                 report_service.generate_report(agent)
+                print(f"[Orchestrator] Generated report for Codex agent {agent.id}")
                 self._broadcast_message(
                     WSMessage(
                         type=WSMessageType.REPORT_READY,
@@ -1891,8 +1892,10 @@ class AgentOrchestrator:
                         },
                     )
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[Orchestrator] Failed to generate report for Codex agent {agent.id}: {e}")
+                import traceback
+                traceback.print_exc()
 
             return triaged_findings
         except asyncio.CancelledError:

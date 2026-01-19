@@ -55,6 +55,7 @@ from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
 from services.observability_service import observability_service
 from services.finding_triage_service import triage_service
+from services.findings_service import findings_service
 from services.threat_model_prompt_block import build_threat_model_prompt_block
 from prompting_loader import load_prompt, render_prompt
 
@@ -1098,6 +1099,19 @@ class AgentOrchestrator:
             agent.findings = triaged_findings
             print(f"[Orchestrator] Total findings: {len(triaged_findings)} ({reportable_count} reportable)")
 
+            # === Save findings to database for persistence across page refreshes ===
+            saved_count = 0
+            failed_count = 0
+            for finding in triaged_findings:
+                try:
+                    await findings_service.save_finding(finding)
+                    saved_count += 1
+                except Exception as db_err:
+                    failed_count += 1
+                    print(f"[Orchestrator] Failed to save finding {finding.id} to database: {db_err}")
+                    # Continue - finding is still in memory and will be in snapshot
+            print(f"[Orchestrator] Saved {saved_count}/{len(triaged_findings)} findings to database ({failed_count} failed)")
+
             # === Add completion node to flow ===
             completion_status = "completed" if result.get("success", True) else "failed"
             flow_service.add_node(
@@ -1871,6 +1885,19 @@ class AgentOrchestrator:
                     print(f"[Orchestrator] Codex triage failed, using raw findings: {triage_err}")
 
             agent.findings = triaged_findings
+
+            # === Save findings to database for persistence across page refreshes ===
+            saved_count = 0
+            failed_count = 0
+            for finding in triaged_findings:
+                try:
+                    await findings_service.save_finding(finding)
+                    saved_count += 1
+                except Exception as db_err:
+                    failed_count += 1
+                    print(f"[Orchestrator] Failed to save finding {finding.id} to database: {db_err}")
+                    # Continue - finding is still in memory and will be in snapshot
+            print(f"[Orchestrator] Saved {saved_count}/{len(triaged_findings)} findings to database ({failed_count} failed)")
 
             agent.completed_at = datetime.utcnow()
             agent.status = AgentStatus.COMPLETED

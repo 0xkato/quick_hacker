@@ -812,6 +812,7 @@ class AgentOrchestrator:
                                         metadata={"source": "sdk_audit"},
                                     )
                                     sdk_findings.append(finding_obj)
+                                    agent.findings = sdk_findings
 
                                     # Broadcast finding to frontend
                                     self._broadcast_message(WSMessage(
@@ -913,6 +914,7 @@ class AgentOrchestrator:
                         metadata={"source": "sdk_audit"},
                     )
                     sdk_findings.append(finding_obj)
+                    agent.findings = sdk_findings
 
                     # Broadcast finding to frontend
                     self._broadcast_message(WSMessage(

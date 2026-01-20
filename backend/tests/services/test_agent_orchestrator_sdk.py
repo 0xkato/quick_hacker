@@ -180,6 +180,80 @@ class TestAgentOrchestratorSDKIntegration:
         return mock_agent
 
     @pytest.mark.asyncio
+    async def test_run_sdk_agent_persists_findings_during_run(self):
+        """SDK findings must be recorded immediately so a UI refresh can re-hydrate them."""
+        import asyncio
+
+        mock_agent = self._create_mock_agent()
+
+        finding_emitted = asyncio.Event()
+        allow_finish = asyncio.Event()
+
+        def make_sdk_orchestrator(*args, **kwargs):
+            on_ws_event = kwargs["on_ws_event"]
+
+            mock_sdk_orchestrator = MagicMock()
+            mock_sdk_orchestrator.make_fresh_limits = Mock(return_value=Mock())
+
+            async def run_audit(_prompt: str):
+                on_ws_event({
+                    "type": "tool_call",
+                    "id": "toolu_test_report_finding",
+                    "name": "mcp__quickhack__report_finding",
+                    "args": {
+                        "severity": "high",
+                        "title": "Test Finding",
+                    },
+                })
+                on_ws_event({
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_test_report_finding",
+                    "is_error": False,
+                    "result": {
+                        "reported": True,
+                        "finding": {
+                            "severity": "high",
+                            "title": "Test Finding",
+                            "vulnerability_type": "command_injection",
+                            "file_path": "app.py",
+                            "line_start": 123,
+                            "description": "Example",
+                            "confidence": 0.5,
+                        },
+                    },
+                })
+                finding_emitted.set()
+                await allow_finish.wait()
+                return {"findings": [], "success": True}
+
+            mock_sdk_orchestrator.run_audit = AsyncMock(side_effect=run_audit)
+            return mock_sdk_orchestrator
+
+        with patch('services.agent_orchestrator.ToolCore'), \
+             patch('services.agent_orchestrator.ClaudeSDKProvider') as MockProvider, \
+             patch('services.agent_orchestrator.ClaudeSDKOrchestrator') as MockOrchestrator, \
+             patch('services.agent_orchestrator.report_service.generate_report'):
+
+            MockOrchestrator.side_effect = make_sdk_orchestrator
+
+            mock_provider_instance = MagicMock()
+            mock_provider_instance.close = AsyncMock()
+            MockProvider.return_value = mock_provider_instance
+
+            from services.agent_orchestrator import AgentOrchestrator
+            orchestrator = AgentOrchestrator()
+
+            task = asyncio.create_task(orchestrator._run_sdk_agent(mock_agent))
+
+            await asyncio.wait_for(finding_emitted.wait(), timeout=2)
+            assert not task.done()
+
+            assert len(mock_agent.findings) == 1
+
+            allow_finish.set()
+            await asyncio.wait_for(task, timeout=2)
+
+    @pytest.mark.asyncio
     async def test_run_sdk_agent_creates_tool_core(self):
         """_run_sdk_agent should create ToolCore with proper limits factory."""
         mock_agent = self._create_mock_agent()

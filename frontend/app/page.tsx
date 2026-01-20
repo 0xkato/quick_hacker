@@ -44,7 +44,8 @@ import { useSessionManagement } from '@/hooks/useSessionManagement';
 import { useObservability } from '@/hooks/useObservability';
 import { useCallTree } from '@/hooks/useCallTree';
 import { featureFlags, FeatureFlag } from '@/lib/featureFlags';
-import { agents as agentsApi, projects as projectsApi, setAuthFunctions, type Project } from '@/lib/api';
+import { agents as agentsApi, projects as projectsApi, files as filesApi, setAuthFunctions, type Project } from '@/lib/api';
+import { fetchProjectBootstrapData } from '@/lib/projectBootstrap';
 import type {
   InvestigationReport,
 } from '@/types';
@@ -229,13 +230,16 @@ export default function Home() {
 
   // Load project data when entering a project
   const loadProjectData = async (project: Project) => {
-    // Load file tree
-    await workspace.loadFileTree();
-
-    // Load agents and findings
     try {
-      await agentMgmt.refreshAgents();
-      await findingsMgmt.refreshFindings();
+      const data = await fetchProjectBootstrapData(project, {
+        getTree: (repoId) => filesApi.getTree(repoId),
+        listAgents: (repoId) => agentsApi.list(repoId),
+        getAllFindings: (repoId) => agentsApi.getAllFindings(repoId),
+      });
+
+      workspace.setFileTree(data.fileTree);
+      agentMgmt.setAgents(data.agents);
+      findingsMgmt.setFindings(data.findings);
     } catch (err) {
       console.error('Failed to load agents/findings:', err);
     }

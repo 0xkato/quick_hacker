@@ -62,6 +62,30 @@ def get_line_range(finding: Finding) -> tuple[int, int]:
     return (line_start, line_end)
 
 
+def ranges_overlap(range1: tuple[int, int], range2: tuple[int, int]) -> bool:
+    """
+    Check if two line ranges overlap.
+
+    Ranges overlap if they share at least one line number.
+    Uses inclusive comparison: max(start1, start2) <= min(end1, end2)
+
+    Args:
+        range1: First range as (start, end) tuple
+        range2: Second range as (start, end) tuple
+
+    Returns:
+        True if ranges overlap, False otherwise
+
+    Examples:
+        (10, 15) and (12, 18) -> True (overlap 12-15)
+        (10, 15) and (16, 20) -> False (adjacent, no overlap)
+        (10, 15) and (15, 20) -> True (touching at 15)
+    """
+    start1, end1 = range1
+    start2, end2 = range2
+    return max(start1, start2) <= min(end1, end2)
+
+
 def deduplicate_findings(
     findings: list[Finding],
     config: DeduplicationConfig

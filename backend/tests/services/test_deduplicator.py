@@ -1,7 +1,7 @@
 """Tests for finding deduplication."""
 import pytest
 from models.schemas import Finding, DeduplicationConfig, Severity
-from services.deduplicator import deduplicate_findings, normalize_path
+from services.deduplicator import deduplicate_findings, normalize_path, normalize_vuln_type
 from datetime import datetime, timezone
 
 
@@ -27,6 +27,25 @@ def test_normalize_path_handles_empty_and_none():
     """Test that empty strings and None are handled gracefully."""
     assert normalize_path("") == ""
     assert normalize_path(None) == ""
+
+
+def test_normalize_vuln_type_lowercases():
+    """Test that vulnerability types are lowercased."""
+    assert normalize_vuln_type("SQL Injection") == "sql injection"
+    assert normalize_vuln_type("XSS") == "xss"
+    assert normalize_vuln_type("Command_Injection") == "command_injection"
+
+
+def test_normalize_vuln_type_strips_whitespace():
+    """Test that leading/trailing whitespace is stripped."""
+    assert normalize_vuln_type("  SQL Injection  ") == "sql injection"
+    assert normalize_vuln_type("\tXSS\n") == "xss"
+
+
+def test_normalize_vuln_type_handles_empty_and_none():
+    """Test that empty strings and None are handled gracefully."""
+    assert normalize_vuln_type("") == ""
+    assert normalize_vuln_type(None) == ""
 
 
 class TestDeduplicateFindings:

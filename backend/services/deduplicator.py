@@ -22,6 +22,24 @@ def normalize_path(path: str | None) -> str:
     return normalized.lower()
 
 
+def normalize_vuln_type(vuln_type: str | None) -> str:
+    """
+    Normalize vulnerability type for comparison.
+
+    - Lowercase
+    - Strip leading/trailing whitespace
+
+    Args:
+        vuln_type: Vulnerability type to normalize (can be None)
+
+    Returns:
+        Normalized vulnerability type, or empty string if None
+    """
+    if not vuln_type:
+        return ""
+    return vuln_type.lower().strip()
+
+
 def deduplicate_findings(
     findings: list[Finding],
     config: DeduplicationConfig

@@ -50,8 +50,6 @@ def test_normalize_vuln_type_handles_empty_and_none():
 
 def test_get_line_range_with_line_end():
     """Test that line range is extracted when line_end is present."""
-    from services.deduplicator import get_line_range
-
     finding = Finding(
         id="1",
         agent_id="agent1",
@@ -72,8 +70,6 @@ def test_get_line_range_with_line_end():
 
 def test_get_line_range_without_line_end():
     """Test that line_start is used for both when line_end is None."""
-    from services.deduplicator import get_line_range
-
     finding = Finding(
         id="1",
         agent_id="agent1",
@@ -94,8 +90,6 @@ def test_get_line_range_without_line_end():
 
 def test_get_line_range_handles_line_end_less_than_start():
     """Test that invalid ranges (end < start) are treated as single-line."""
-    from services.deduplicator import get_line_range
-
     finding = Finding(
         id="1",
         agent_id="agent1",
@@ -111,9 +105,8 @@ def test_get_line_range_handles_line_end_less_than_start():
         created_at=datetime.now(timezone.utc)
     )
 
-    # Use line_start for both when line_end is invalid
     result = get_line_range(finding)
-    assert result == (10, 10) or result == (10, 8)  # Accept either behavior
+    assert result == (10, 10)
 
 
 class TestDeduplicateFindings:

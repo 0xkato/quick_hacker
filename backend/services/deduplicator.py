@@ -2,6 +2,26 @@
 from models.schemas import Finding, DeduplicationConfig
 
 
+def normalize_path(path: str | None) -> str:
+    """
+    Normalize file path for comparison.
+
+    - Strip leading ./
+    - Convert backslashes to forward slashes
+    - Lowercase (case-insensitive filesystems)
+
+    Args:
+        path: File path to normalize (can be None)
+
+    Returns:
+        Normalized path, or empty string if None
+    """
+    if not path:
+        return ""
+    normalized = path.lstrip('./').replace('\\', '/')
+    return normalized.lower()
+
+
 def deduplicate_findings(
     findings: list[Finding],
     config: DeduplicationConfig

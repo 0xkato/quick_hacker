@@ -5,6 +5,38 @@ from services.deduplicator import deduplicate_findings
 from datetime import datetime, timezone
 
 
+def test_normalize_path_strips_leading_dot_slash():
+    """Test that leading ./ is stripped from paths."""
+    from services.deduplicator import normalize_path
+
+    assert normalize_path("./src/main.py") == "src/main.py"
+    assert normalize_path("./app/test.py") == "app/test.py"
+
+
+def test_normalize_path_lowercases():
+    """Test that paths are lowercased."""
+    from services.deduplicator import normalize_path
+
+    assert normalize_path("Src/Main.py") == "src/main.py"
+    assert normalize_path("APP/TEST.PY") == "app/test.py"
+
+
+def test_normalize_path_normalizes_separators():
+    """Test that backslashes are converted to forward slashes."""
+    from services.deduplicator import normalize_path
+
+    assert normalize_path("src\\main.py") == "src/main.py"
+    assert normalize_path("app\\sub\\test.py") == "app/sub/test.py"
+
+
+def test_normalize_path_handles_empty_and_none():
+    """Test that empty strings and None are handled gracefully."""
+    from services.deduplicator import normalize_path
+
+    assert normalize_path("") == ""
+    assert normalize_path(None) == ""
+
+
 class TestDeduplicateFindings:
     def test_removes_exact_duplicates(self):
         """Test exact duplicates are removed, first occurrence preserved."""

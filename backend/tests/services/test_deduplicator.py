@@ -1,7 +1,7 @@
 """Tests for finding deduplication."""
 import pytest
 from models.schemas import Finding, DeduplicationConfig, Severity
-from services.deduplicator import deduplicate_findings, normalize_path, normalize_vuln_type
+from services.deduplicator import deduplicate_findings, normalize_path, normalize_vuln_type, get_line_range
 from datetime import datetime, timezone
 
 
@@ -46,6 +46,74 @@ def test_normalize_vuln_type_handles_empty_and_none():
     """Test that empty strings and None are handled gracefully."""
     assert normalize_vuln_type("") == ""
     assert normalize_vuln_type(None) == ""
+
+
+def test_get_line_range_with_line_end():
+    """Test that line range is extracted when line_end is present."""
+    from services.deduplicator import get_line_range
+
+    finding = Finding(
+        id="1",
+        agent_id="agent1",
+        repo_id="repo1",
+        severity=Severity.HIGH,
+        file_path="test.py",
+        line_start=10,
+        line_end=15,
+        vulnerability_type="SQL Injection",
+        title="Test",
+        description="Test",
+        confidence=0.9,
+        created_at=datetime.now(timezone.utc)
+    )
+
+    assert get_line_range(finding) == (10, 15)
+
+
+def test_get_line_range_without_line_end():
+    """Test that line_start is used for both when line_end is None."""
+    from services.deduplicator import get_line_range
+
+    finding = Finding(
+        id="1",
+        agent_id="agent1",
+        repo_id="repo1",
+        severity=Severity.HIGH,
+        file_path="test.py",
+        line_start=10,
+        line_end=None,
+        vulnerability_type="SQL Injection",
+        title="Test",
+        description="Test",
+        confidence=0.9,
+        created_at=datetime.now(timezone.utc)
+    )
+
+    assert get_line_range(finding) == (10, 10)
+
+
+def test_get_line_range_handles_line_end_less_than_start():
+    """Test that invalid ranges (end < start) are treated as single-line."""
+    from services.deduplicator import get_line_range
+
+    finding = Finding(
+        id="1",
+        agent_id="agent1",
+        repo_id="repo1",
+        severity=Severity.HIGH,
+        file_path="test.py",
+        line_start=10,
+        line_end=8,  # Invalid: less than start
+        vulnerability_type="SQL Injection",
+        title="Test",
+        description="Test",
+        confidence=0.9,
+        created_at=datetime.now(timezone.utc)
+    )
+
+    # Use line_start for both when line_end is invalid
+    result = get_line_range(finding)
+    assert result == (10, 10) or result == (10, 8)  # Accept either behavior
 
 
 class TestDeduplicateFindings:

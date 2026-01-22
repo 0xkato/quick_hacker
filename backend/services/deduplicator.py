@@ -40,6 +40,28 @@ def normalize_vuln_type(vuln_type: str | None) -> str:
     return vuln_type.lower().strip()
 
 
+def get_line_range(finding: Finding) -> tuple[int, int]:
+    """
+    Get line range from a finding.
+
+    If line_end is None or invalid (< line_start), uses line_start for both.
+
+    Args:
+        finding: Finding to extract line range from
+
+    Returns:
+        Tuple of (start, end) line numbers
+    """
+    line_start = finding.line_start
+    line_end = finding.line_end
+
+    # Use line_start if line_end is missing or invalid
+    if line_end is None or line_end < line_start:
+        return (line_start, line_start)
+
+    return (line_start, line_end)
+
+
 def deduplicate_findings(
     findings: list[Finding],
     config: DeduplicationConfig

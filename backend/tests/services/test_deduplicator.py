@@ -111,16 +111,12 @@ def test_get_line_range_handles_line_end_less_than_start():
 
 def test_ranges_overlap_exact_match():
     """Test that identical ranges overlap."""
-    from services.deduplicator import ranges_overlap
-
     assert ranges_overlap((10, 15), (10, 15)) is True
     assert ranges_overlap((5, 5), (5, 5)) is True
 
 
 def test_ranges_overlap_partial_overlap():
     """Test that partially overlapping ranges are detected."""
-    from services.deduplicator import ranges_overlap
-
     assert ranges_overlap((10, 15), (12, 18)) is True  # Overlap 12-15
     assert ranges_overlap((10, 15), (5, 12)) is True   # Overlap 10-12
     assert ranges_overlap((10, 15), (8, 20)) is True   # One contains other
@@ -128,32 +124,24 @@ def test_ranges_overlap_partial_overlap():
 
 def test_ranges_overlap_containment():
     """Test that contained ranges overlap."""
-    from services.deduplicator import ranges_overlap
-
     assert ranges_overlap((10, 20), (12, 15)) is True  # (12,15) inside (10,20)
     assert ranges_overlap((12, 15), (10, 20)) is True  # Symmetric
 
 
 def test_ranges_overlap_adjacent_no_overlap():
     """Test that adjacent ranges don't overlap."""
-    from services.deduplicator import ranges_overlap
-
     assert ranges_overlap((10, 15), (16, 20)) is False
     assert ranges_overlap((16, 20), (10, 15)) is False
 
 
 def test_ranges_overlap_separated_no_overlap():
     """Test that separated ranges don't overlap."""
-    from services.deduplicator import ranges_overlap
-
     assert ranges_overlap((10, 15), (20, 25)) is False
     assert ranges_overlap((20, 25), (10, 15)) is False
 
 
 def test_ranges_overlap_touching_boundary():
     """Test that ranges touching at boundary overlap."""
-    from services.deduplicator import ranges_overlap
-
     # Touching at 15 should overlap (inclusive)
     assert ranges_overlap((10, 15), (15, 20)) is True
     assert ranges_overlap((15, 20), (10, 15)) is True

@@ -239,7 +239,15 @@ class EvidenceGates(BaseModel):
 
 
 class DeduplicationConfig(BaseModel):
-    """Deduplication strategy configuration."""
+    """
+    Deduplication strategy configuration.
+
+    DEPRECATED: This configuration is no longer used by the deduplication algorithm.
+    The deduplicate_findings() function now uses a fixed overlap-based matching
+    strategy and does not accept a config parameter.
+
+    This model is retained for backward compatibility with TriagePolicy only.
+    """
     enabled: bool = True
     strategy: Literal["exact", "fuzzy", "symbol"] = "exact"
     exact_match_fields: list[str] = Field(

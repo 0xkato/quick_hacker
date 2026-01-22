@@ -1,5 +1,7 @@
 """Finding deduplication for VRP triage."""
-from models.schemas import Finding, DeduplicationConfig
+from collections import defaultdict
+
+from models.schemas import Finding
 
 
 def normalize_path(path: str | None) -> str:
@@ -86,45 +88,60 @@ def ranges_overlap(range1: tuple[int, int], range2: tuple[int, int]) -> bool:
     return max(start1, start2) <= min(end1, end2)
 
 
-def deduplicate_findings(
-    findings: list[Finding],
-    config: DeduplicationConfig
-) -> list[Finding]:
+def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
     """
-    Remove duplicate findings based on configured strategy.
+    Remove duplicate findings using overlap-based matching.
+
+    Deduplication strategy:
+    1. Normalize file paths and vulnerability types for comparison
+    2. Group findings by (normalized_path, normalized_vuln_type)
+    3. Within each group, check for line range overlaps
+    4. Keep first occurrence, discard subsequent overlapping findings
 
     Args:
         findings: List of findings to deduplicate
-        config: Deduplication configuration
 
     Returns:
-        Deduplicated list of findings (first occurrence preserved)
+        Deduplicated list of findings (preserves first occurrence)
 
-    Strategy:
-        - "exact": Match on configured fields (default: file_path + line_start + type + title)
-        - Others: Not implemented yet
+    Examples:
+        Same file, same type, overlapping lines -> deduplicated
+        Same file, different type -> kept separate
+        Different files -> kept separate
+        Non-overlapping lines -> kept separate
     """
-    if not config.enabled:
-        return findings
+    if not findings:
+        return []
 
-    if config.strategy != "exact":
-        raise NotImplementedError(f"Dedup strategy {config.strategy} not implemented")
-
-    seen = set()
-    deduplicated = []
+    # Group findings by (normalized_path, normalized_vuln_type)
+    groups: defaultdict[tuple[str, str], list[Finding]] = defaultdict(list)
 
     for finding in findings:
-        # Build fingerprint from configured fields
-        fingerprint_parts = []
-        for field in config.exact_match_fields:
-            value = getattr(finding, field, None)
-            if value is not None:
-                fingerprint_parts.append(str(value))
+        norm_path = normalize_path(finding.file_path)
+        norm_type = normalize_vuln_type(finding.vulnerability_type)
+        fingerprint = (norm_path, norm_type)
+        groups[fingerprint].append(finding)
 
-        fingerprint = "|".join(fingerprint_parts)
+    # Within each group, remove overlapping findings
+    deduplicated = []
 
-        if fingerprint not in seen:
-            seen.add(fingerprint)
-            deduplicated.append(finding)
+    for group_findings in groups.values():
+        kept_findings = []
+
+        for finding in group_findings:
+            range_current = get_line_range(finding)
+
+            # Check if this finding overlaps with any already kept finding
+            overlaps = False
+            for kept in kept_findings:
+                range_kept = get_line_range(kept)
+                if ranges_overlap(range_current, range_kept):
+                    overlaps = True
+                    break
+
+            if not overlaps:
+                kept_findings.append(finding)
+
+        deduplicated.extend(kept_findings)
 
     return deduplicated

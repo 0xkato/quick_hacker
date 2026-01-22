@@ -93,7 +93,7 @@ class FindingTriageService:
         GUARANTEE: len(triaged_findings) == len(findings) (after dedup/filter)
 
         Pipeline with policy:
-        1. Deduplicate (if policy.deduplication.enabled)
+        1. Deduplicate (always enabled with overlap-based matching)
         2. Pre-filter by path (if policy provided)
         3. Gather evidence
         4. Classify
@@ -118,9 +118,8 @@ class FindingTriageService:
         batch_start = time.time()
         budgets = budgets or BudgetConfig()
 
-        # Step 1 - Deduplicate
-        if policy and policy.deduplication.enabled:
-            findings = deduplicate_findings(findings, policy.deduplication)
+        # Step 1 - Deduplicate (always enabled with new algorithm)
+        findings = deduplicate_findings(findings)
 
         # Step 2 - Pre-filter
         if policy:

@@ -297,3 +297,39 @@ class TestDeduplicateFindings:
         ]
         result = deduplicate_findings(findings)
         assert len(result) == 4
+
+    def test_handles_none_file_path(self):
+        """Test that None file_path is handled gracefully."""
+        findings = [
+            Finding(
+                id="1",
+                agent_id="agent1",
+                repo_id="repo1",
+                severity=Severity.HIGH,
+                file_path="",  # Empty path (equivalent to None after normalization)
+                line_start=10,
+                vulnerability_type="SQL Injection",
+                title="Test",
+                description="Test",
+                confidence=0.9,
+                created_at=datetime.now(timezone.utc)
+            ),
+            Finding(
+                id="2",
+                agent_id="agent1",
+                repo_id="repo1",
+                severity=Severity.HIGH,
+                file_path="",  # Empty path (equivalent to None after normalization)
+                line_start=10,
+                vulnerability_type="SQL Injection",
+                title="Test 2",
+                description="Test 2",
+                confidence=0.9,
+                created_at=datetime.now(timezone.utc)
+            ),
+        ]
+
+        # Should deduplicate (both have same normalized path: "")
+        result = deduplicate_findings(findings)
+        assert len(result) == 1
+        assert result[0].id == "1"

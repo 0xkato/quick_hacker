@@ -6,7 +6,6 @@ submission based on file path, code context, and production impact.
 """
 
 from typing import Optional
-from anthropic import Anthropic
 from models.schemas import Finding, Disposition
 from protocol_config.protocol_config import ProtocolConfig
 
@@ -29,6 +28,16 @@ class ProductionRelevanceFilter:
         max_tokens: int = 300,
         temperature: float = 0
     ):
+        # Lazy import: `anthropic` is an optional dependency for deployments that
+        # don't enable LLM-based filtering.
+        try:
+            from anthropic import Anthropic  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "ProductionRelevanceFilter requires the optional 'anthropic' dependency. "
+                "Install it or disable quests/triage that depend on it."
+            ) from exc
+
         self.client = Anthropic(api_key=anthropic_api_key)
         self.model = model or ProtocolConfig.QUEST_LLM_MODEL
         self.max_tokens = max_tokens

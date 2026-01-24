@@ -5,8 +5,6 @@ import {
   MessageSquare,
   Send,
   X,
-  ChevronLeft,
-  ChevronRight,
   Bot,
   User,
   Loader2,
@@ -15,6 +13,7 @@ import {
   AlertTriangle,
   Trash2,
   Settings2,
+  Network,
 } from 'lucide-react';
 import { chat, type ChatMessage, type ChatContext } from '@/lib/api';
 import type { FileContent, Finding } from '@/types';
@@ -25,6 +24,11 @@ interface ChatPanelProps {
   currentFile: FileContent | null;
   findings: Finding[];
   onRequestSettings: () => void;
+  provider?: string;
+  model?: string;
+  flowContextPack?: unknown;
+  seedMessage?: { id: string; text: string } | null;
+  onClearFlowContext?: () => void;
 }
 
 interface Message {
@@ -40,6 +44,11 @@ export function ChatPanel({
   currentFile,
   findings,
   onRequestSettings,
+  provider,
+  model,
+  flowContextPack,
+  seedMessage,
+  onClearFlowContext,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -49,6 +58,7 @@ export function ChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
+  const lastSeedIdRef = useRef<string | null>(null);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -61,6 +71,17 @@ export function ChatPanel({
       inputRef.current?.focus();
     }
   }, [isOpen]);
+
+  // Apply externally-seeded input (best-effort)
+  useEffect(() => {
+    if (!seedMessage) return;
+    if (typeof seedMessage.id !== 'string' || !seedMessage.id) return;
+    if (lastSeedIdRef.current === seedMessage.id) return;
+    if (typeof seedMessage.text !== 'string' || !seedMessage.text.trim()) return;
+    setInput(seedMessage.text);
+    lastSeedIdRef.current = seedMessage.id;
+    inputRef.current?.focus();
+  }, [seedMessage]);
 
   // Resizable panel
   useEffect(() => {
@@ -115,8 +136,12 @@ export function ChatPanel({
       ctx.selected_text = selectedText;
     }
 
+    if (flowContextPack) {
+      ctx.flow_context_pack = flowContextPack;
+    }
+
     return ctx;
-  }, [currentFile, findings, selectedText]);
+  }, [currentFile, findings, selectedText, flowContextPack]);
 
   // Send message
   const handleSend = async () => {
@@ -152,7 +177,7 @@ export function ChatPanel({
       const context = buildContext();
 
       // Stream response
-      for await (const chunk of chat.stream(chatMessages, context)) {
+      for await (const chunk of chat.stream(chatMessages, context, provider, model)) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMessage.id
@@ -252,6 +277,29 @@ export function ChatPanel({
               <span className="text-sev-medium">
                 ({findings.filter((f) => f.file_path === currentFile.path).length} findings)
               </span>
+            )}
+          </div>
+        )}
+
+        {/* Flow context indicator */}
+        {flowContextPack != null && (
+          <div className="px-3 py-1.5 bg-vsc-bg border-b border-vsc-border-subtle text-vsc-xs text-vsc-text-muted flex items-center gap-2">
+            <Network className="w-3 h-3" />
+            <span className="truncate">
+              Flow context:{' '}
+              {typeof (flowContextPack as any)?.selected_node?.label === 'string'
+                ? (flowContextPack as any).selected_node.label
+                : 'selected node'}
+            </span>
+            {onClearFlowContext && (
+              <button
+                type="button"
+                onClick={onClearFlowContext}
+                className="ml-auto px-2 py-0.5 rounded bg-vsc-border/40 hover:bg-vsc-border/60 text-vsc-text-muted hover:text-vsc-text"
+                title="Clear flow context"
+              >
+                Clear
+              </button>
             )}
           </div>
         )}

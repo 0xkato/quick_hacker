@@ -1,6 +1,7 @@
 """Protocol layer configuration."""
 
 import os
+import sys
 from typing import Optional
 
 
@@ -37,7 +38,9 @@ class ProtocolConfig:
     def validate(cls):
         """Validate configuration."""
         if cls.ENABLE_QUESTS_BY_DEFAULT and not cls.ANTHROPIC_API_KEY:
-            print("⚠️  Warning: Quests enabled but no ANTHROPIC_API_KEY set")
+            # IMPORTANT: avoid stdout in contexts that use stdout as a protocol channel
+            # (e.g., Codex CLI MCP stdio servers).
+            print("⚠️  Warning: Quests enabled but no ANTHROPIC_API_KEY set", file=sys.stderr)
 
 
 # Validate on import

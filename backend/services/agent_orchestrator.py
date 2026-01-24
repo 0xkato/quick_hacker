@@ -7,6 +7,7 @@ The module will remain for backward compatibility but may be removed in a future
 import warnings
 import asyncio
 import logging
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -644,6 +645,16 @@ class AgentOrchestrator:
                 )
                 flow_service.update_node_status(agent_id, tool_node.id, "running")
                 current_tool_node_id = tool_node.id
+                # Attach to Structured Trace (best-effort).
+                try:
+                    flow_service.attach_node_to_structured_trace(
+                        agent_id,
+                        tool_node.id,
+                        tool_name=tool_name,
+                        args=tool_args if isinstance(tool_args, dict) else None,
+                    )
+                except Exception:
+                    pass
 
                 # Broadcast flow update
                 flow = flow_service.get_flow(agent_id)
@@ -766,6 +777,17 @@ class AgentOrchestrator:
                                     {"severity": severity_str, "finding": raw_finding}
                                 )
                                 flow_service.update_node_status(agent_id, finding_node.id, "completed")
+                                # Attach finding to Structured Trace (best-effort).
+                                try:
+                                    flow_service.attach_node_to_structured_trace(
+                                        agent_id,
+                                        finding_node.id,
+                                        tool_name="report_finding",
+                                        args=raw_finding if isinstance(raw_finding, dict) else None,
+                                        file_path=str(raw_finding.get("file_path") or "") if isinstance(raw_finding, dict) else None,
+                                    )
+                                except Exception:
+                                    pass
 
                                 # === Create Finding object and broadcast to Findings panel ===
                                 finding_counter[0] += 1
@@ -813,6 +835,10 @@ class AgentOrchestrator:
                                     )
                                     sdk_findings.append(finding_obj)
                                     agent.findings = sdk_findings
+                                    try:
+                                        flow_service.update_node_data(agent_id, finding_node.id, {"finding_id": finding_obj.id})
+                                    except Exception:
+                                        pass
 
                                     # Broadcast finding to frontend
                                     self._broadcast_message(WSMessage(
@@ -1207,18 +1233,56 @@ class AgentOrchestrator:
 
         codex_path = (getattr(config, "codex_path", None) or "").strip() or "codex"
 
+        # Validate Codex CLI is available before starting the agent loop.
+        #
+        # This most commonly fails when running the backend in Docker without
+        # installing `codex` in the image (Claude Code is installed, but Codex isn't).
+        codex_path_candidate = Path(codex_path)
+        resolved_codex_path = codex_path
+        if codex_path_candidate.is_absolute() or "/" in codex_path or "\\" in codex_path:
+            if not codex_path_candidate.exists():
+                raise RuntimeError(
+                    "Codex CLI binary not found. "
+                    f"codex_path={codex_path!r} does not exist. "
+                    "Install Codex CLI where the backend runs or set provider_config.codex_path to the correct path."
+                )
+        else:
+            resolved = shutil.which(codex_path)
+            if not resolved:
+                raise RuntimeError(
+                    "Codex CLI binary not found in PATH. "
+                    f"codex_path={codex_path!r}. "
+                    "Install Codex CLI where the backend runs or set provider_config.codex_path to the correct path. "
+                    "If you're using Docker Compose, you likely need to install Codex CLI inside the backend image (mounting a macOS `codex` binary into a Linux container will not work)."
+                )
+            resolved_codex_path = resolved
+
         provider = CodexCLIProvider(
             repo_path=str(agent.repo_path),
             project_id=str(agent.repo_id),
             agent_id=str(agent.id),
             model=str(config.model),
-            codex_path=codex_path,
+            codex_path=resolved_codex_path,
         )
         agent._codex_provider = provider
 
         # Resume session if the agent already has one (pause/resume or persisted state reload).
         resume_session_id = getattr(agent, "_codex_session_id", None)
         await provider.start_session(resume_session_id=resume_session_id)
+
+        # Ensure auth is present (copied into the isolated per-agent HOME).
+        #
+        # Codex will fail later with a vague network/auth error; surface a clear,
+        # actionable message up-front.
+        codex_home = getattr(provider, "codex_home", None)
+        if codex_home:
+            auth_json = Path(str(codex_home)) / ".codex" / "auth.json"
+            if not auth_json.exists():
+                raise RuntimeError(
+                    "Codex CLI auth not found. Expected auth file at "
+                    f"{str(auth_json)!r}. "
+                    "Run `codex login` on the machine where the backend runs, or mount/copy `~/.codex/auth.json` into that environment so it can be copied into the per-agent runtime."
+                )
 
         # Threat model prompt block (authoritative JSON + summary). If the project record
         # isn't available (e.g., some tests), fall back to AB preset-derived profile.
@@ -1336,6 +1400,7 @@ class AgentOrchestrator:
                         "upsert_sink_signal",
                         "report_finding",
                         "promote_finding",
+                        "triage_finding",
                     ],
                     model=str(config.model),
                     provider="codex_cli",
@@ -1376,7 +1441,7 @@ class AgentOrchestrator:
                     node_type = "search"
                 elif normalized_name in ("scan_repo_for_secrets", "dependency_audit"):
                     node_type = "scan"
-                elif normalized_name in ("report_finding", "promote_finding"):
+                elif normalized_name in ("report_finding", "promote_finding", "triage_finding"):
                     node_type = "finding"
                 elif normalized_name == "upsert_sink_signal":
                     kind = tool_args.get("kind", "")
@@ -1390,6 +1455,16 @@ class AgentOrchestrator:
                 tool_node = flow_service.add_node(agent.id, node_type, label, {"tool": normalized_name, "args": tool_args})
                 flow_service.update_node_status(agent.id, tool_node.id, "running")
                 current_tool_node_id = tool_node.id
+                # Attach to Structured Trace (best-effort).
+                try:
+                    flow_service.attach_node_to_structured_trace(
+                        agent.id,
+                        tool_node.id,
+                        tool_name=normalized_name,
+                        args=tool_args if isinstance(tool_args, dict) else None,
+                    )
+                except Exception:
+                    pass
 
                 flow = flow_service.get_flow(agent.id)
                 if flow:
@@ -1497,6 +1572,19 @@ class AgentOrchestrator:
                             )
                             codex_findings.append(finding_obj)
                             agent.findings = codex_findings
+                            try:
+                                if current_tool_node_id:
+                                    flow_service.update_node_data(
+                                        agent.id,
+                                        current_tool_node_id,
+                                        {
+                                            "finding_id": finding_obj.id,
+                                            "severity": severity_str,
+                                            "finding": raw_finding,
+                                        },
+                                    )
+                            except Exception:
+                                pass
 
                             self._broadcast_message(
                                 WSMessage(
@@ -1592,6 +1680,7 @@ class AgentOrchestrator:
                     "- upsert_sink_signal",
                     "- report_finding",
                     "- promote_finding",
+                    "- triage_finding",
                 ]
             )
             guardrails = "\n".join(

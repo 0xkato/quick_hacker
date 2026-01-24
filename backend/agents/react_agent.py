@@ -719,6 +719,12 @@ class ReActSecurityAgent:
 
         try:
             candidates = attack_surface_service.scan_candidates(repo_path=self.repo_path)
+            # Populate Structured Trace roots (entrypoints + sinks) from static candidates.
+            # Best-effort; should not block the scan/triage flow.
+            try:
+                flow_service.populate_structured_from_candidates(self.id, candidates)
+            except Exception:
+                pass
             triaged = await attack_surface_service.triage(
                 agent_id=self.id,
                 repo_path=self.repo_path,
@@ -994,6 +1000,26 @@ class ReActSecurityAgent:
             return
 
         self._active_investigation_candidate_node_id = task.flow_node_id
+
+        # Route Structured Trace attachments for this investigation.
+        try:
+            root_key = "global_recon"
+            flow = flow_service.get_flow(self.id)
+            candidate_node = None
+            if flow:
+                candidate_node = next((n for n in flow.nodes if n.id == task.flow_node_id), None)
+
+            fingerprint = None
+            if candidate_node and isinstance(candidate_node.data, dict):
+                fingerprint = candidate_node.data.get("attack_surface_candidate_id")
+
+            if candidate_node and candidate_node.type == "entry_point" and isinstance(fingerprint, str) and fingerprint:
+                root_key = f"entry_point:{fingerprint}"
+                flow_service.mark_structured_entrypoint_touched(self.id, fingerprint)
+
+            flow_service.set_structured_trace_root(self.id, root_key)
+        except Exception:
+            pass
 
         # Mark the candidate node as running and branch under it.
         flow_service.update_node_status(self.id, task.flow_node_id, "running")
@@ -1539,6 +1565,16 @@ class ReActSecurityAgent:
                 {"tool": tool_name, "args": arguments}
             )
             flow_service.update_node_status(self.id, tool_node.id, "running")
+            # Attach tool node into Structured Trace under the active root.
+            try:
+                flow_service.attach_node_to_structured_trace(
+                    self.id,
+                    tool_node.id,
+                    tool_name=tool_name,
+                    args=arguments,
+                )
+            except Exception:
+                pass
             self._broadcast_flow_update()
 
             start_time = datetime.utcnow()
@@ -1678,24 +1714,56 @@ class ReActSecurityAgent:
                                 {"rejected": True, "reason": verify_reason, "verification": "failed"},
                             )
                         else:
-                            await self._create_finding(finding_data)
+                            finding = await self._create_finding(finding_data)
                             result_str = "Finding reported successfully."
 
                             # Add finding node to flow
-                            flow_service.add_node(
+                            finding_node = flow_service.add_node(
                                 self.id, "finding", finding_data.get("title", "Finding"),
-                                {"severity": finding_data.get("severity", "medium")}
+                                {
+                                    "severity": finding_data.get("severity", "medium"),
+                                    "finding_id": getattr(finding, "id", None),
+                                    "file_path": finding_data.get("file_path"),
+                                    "line_start": finding_data.get("line_start"),
+                                    "line_end": finding_data.get("line_end"),
+                                },
                             )
+                            try:
+                                flow_service.attach_node_to_structured_trace(
+                                    self.id,
+                                    finding_node.id,
+                                    tool_name="report_finding",
+                                    args=finding_data if isinstance(finding_data, dict) else None,
+                                    file_path=str(finding_data.get("file_path") or "") if isinstance(finding_data, dict) else None,
+                                )
+                            except Exception:
+                                pass
                             flow_service.update_node_data(self.id, tool_node.id, {"verification": "passed"})
                     else:
-                        await self._create_finding(finding_data)
+                        finding = await self._create_finding(finding_data)
                         result_str = "Finding reported successfully."
 
                         # Add finding node to flow
-                        flow_service.add_node(
+                        finding_node = flow_service.add_node(
                             self.id, "finding", finding_data.get("title", "Finding"),
-                            {"severity": finding_data.get("severity", "medium")}
+                            {
+                                "severity": finding_data.get("severity", "medium"),
+                                "finding_id": getattr(finding, "id", None),
+                                "file_path": finding_data.get("file_path"),
+                                "line_start": finding_data.get("line_start"),
+                                "line_end": finding_data.get("line_end"),
+                            },
                         )
+                        try:
+                            flow_service.attach_node_to_structured_trace(
+                                self.id,
+                                finding_node.id,
+                                tool_name="report_finding",
+                                args=finding_data if isinstance(finding_data, dict) else None,
+                                file_path=str(finding_data.get("file_path") or "") if isinstance(finding_data, dict) else None,
+                            )
+                        except Exception:
+                            pass
             else:
                 # Format result for LLM
                 if result.success:
@@ -1870,8 +1938,10 @@ class ReActSecurityAgent:
             self._broadcast(WSMessageType.FINDING, finding.model_dump(mode='json'))
             self._log(f"Finding reported: {finding.title} ({finding.severity.value})")
 
+            return finding
         except Exception as e:
             self._log(f"Failed to create finding: {e}", "error")
+            return None
 
     def _compact_messages(self):
         """Compact conversation history to stay within limits.

@@ -13,16 +13,19 @@ import ReactFlow, {
   MarkerType,
   Position,
   NodeMouseHandler,
+  ReactFlowInstance,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
   Search,
   FileText,
   AlertTriangle,
+  Folder,
   Code,
   MessageSquare,
   Loader2,
   CheckCircle,
+  X,
   XCircle,
   Brain,
   Scan,
@@ -37,6 +40,9 @@ import { FlowNodePopover } from './FlowNodePopover';
 import { CollapseButton } from './CollapseButton';
 import { SearchToolbar } from './SearchToolbar';
 import { parseSearchQuery, matchesQuery } from './searchUtils';
+import { computeStructuredTraceRiskLevels, getStructuredTraceRiskRingClass } from './structuredTraceRisk';
+import { indexNodesByType, expandAncestors } from './flowNavigator';
+import { buildFlowContextPack } from './flowContextPack';
 
 // Types matching backend
 interface FlowNode {
@@ -58,6 +64,7 @@ interface FlowEdge {
   source: string;
   target: string;
   label?: string;
+  kind?: string;
 }
 
 interface InvestigationFlow {
@@ -73,7 +80,10 @@ interface FlowVisualizationProps {
   emptySelectionText?: string;
   emptyFlowText?: string;
   onQueueInvestigation?: (nodeId: string) => Promise<void> | void;
-  variant?: 'investigation' | 'calltree';
+  onOpenFile?: (filePath: string) => void;
+  findings?: any[];
+  onOpenChat?: (payload: { contextPack: unknown; filePath?: string; seedText?: string }) => void;
+  variant?: 'investigation' | 'calltree' | 'structured';
 }
 
 interface CollapsedState {
@@ -137,6 +147,8 @@ interface FlowNodeData extends FlowNode {
   isCollapsed?: boolean;
   descendantCount?: number;
   onToggleCollapse?: (nodeId: string) => void;
+  viewVariant?: 'investigation' | 'calltree' | 'structured';
+  structured_risk?: 'none' | 'sink' | 'finding';
 }
 
 // Custom node component
@@ -160,6 +172,11 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
     entry_point: <Network className="w-4 h-4" />,
     dangerous_sink: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
     investigation: <Brain className="w-4 h-4" />,
+    structured_root: <Network className="w-4 h-4 text-vsc-accent" />,
+    global_recon: <Scan className="w-4 h-4 text-vsc-text-muted" />,
+    folder: <Folder className="w-4 h-4 text-vsc-text-muted" />,
+    steps: <Code className="w-4 h-4 text-vsc-text-muted" />,
+    sinks_group: <AlertTriangle className="w-4 h-4 text-sev-medium" />,
     // NEW architectural nodes
     file: <FileText className="w-4 h-4 text-blue-400" />,
     function: <Code className="w-4 h-4 text-purple-400" />,
@@ -179,10 +196,21 @@ function FlowNodeComponent({ data }: { data: FlowNodeData }) {
 
   // Apply appropriate border color based on node type
   let borderRing = '';
-  if (data.type === 'triage_gateway' && data.data?.by_disposition) {
-    borderRing = getTriageGatewayBorderColor(data.data.by_disposition as Record<string, number>);
-  } else if (data.confidence_score !== undefined) {
-    borderRing = getConfidenceBorderColor(data.confidence_score);
+  const isTouchedEntrypoint = data.type === 'entry_point' && Boolean((data.data as any)?.touched);
+  if (data.viewVariant === 'structured') {
+    borderRing = getStructuredTraceRiskRingClass({
+      risk: data.structured_risk || 'none',
+      isTouchedEntrypoint,
+    });
+  } else {
+    if (data.type === 'triage_gateway' && data.data?.by_disposition) {
+      borderRing = getTriageGatewayBorderColor(data.data.by_disposition as Record<string, number>);
+    } else if (data.confidence_score !== undefined) {
+      borderRing = getConfidenceBorderColor(data.confidence_score);
+    }
+    if (isTouchedEntrypoint && !borderRing) {
+      borderRing = 'ring-2 ring-vsc-accent ring-offset-1 ring-offset-vsc-bg';
+    }
   }
 
   return (
@@ -314,10 +342,14 @@ export function FlowVisualization({
   emptySelectionText,
   emptyFlowText,
   onQueueInvestigation,
+  onOpenFile,
+  findings,
+  onOpenChat,
   variant = 'investigation',
 }: FlowVisualizationProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [selectedNode, setSelectedNode] = useState<FlowNode | null>(null);
   const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -332,6 +364,11 @@ export function FlowVisualization({
   const [searchMatches, setSearchMatches] = useState<string[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
+  // Structured Trace quick-jump navigator (via clickable legend).
+  type NavigatorKind = 'finding' | 'dangerous_sink' | 'entry_point';
+  const [navigatorKind, setNavigatorKind] = useState<NavigatorKind | null>(null);
+  const [navigatorSelectedId, setNavigatorSelectedId] = useState<string | null>(null);
+
   // Toggle collapse for a node
   const toggleCollapse = useCallback((nodeId: string) => {
     setCollapsedNodes(prev => ({
@@ -339,6 +376,22 @@ export function FlowVisualization({
       [nodeId]: !prev[nodeId]
     }));
   }, []);
+
+  // Structured Trace: collapse "steps" nodes by default as they appear.
+  useEffect(() => {
+    if (variant !== 'structured' || !flow) return;
+    setCollapsedNodes(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const node of flow.nodes || []) {
+        if (node.type === 'steps' && next[node.id] === undefined) {
+          next[node.id] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [variant, flow]);
 
   // Get all descendants of a node
   const getDescendants = useCallback((nodeId: string, edges: Edge[]): string[] => {
@@ -464,6 +517,54 @@ export function FlowVisualization({
     }
   }, [onQueueInvestigation, selectedNode]);
 
+  const handleOpenChatForNode = useCallback(
+    (node: FlowNode) => {
+      if (!onOpenChat) return;
+      const contextPack = buildFlowContextPack({
+        flow: flow || { session_id: agentId || '', nodes: [], edges: [] },
+        nodeId: node.id,
+        findings: Array.isArray(findings) ? findings : [],
+      });
+
+      const data = (node.data as any) || {};
+      let filePath: string | undefined;
+      if (typeof data.file_path === 'string' && data.file_path.trim()) {
+        filePath = data.file_path.trim();
+      } else if (typeof data.file === 'string' && data.file.trim()) {
+        filePath = data.file.trim();
+      } else if (typeof (contextPack as any)?.finding?.file_path === 'string') {
+        filePath = String((contextPack as any).finding.file_path);
+      }
+
+      const seedText =
+        'Validate this node: confirm reachability + dataflow, and suggest the next best checks to prove or disprove impact.';
+
+      onOpenChat({ contextPack, filePath, seedText });
+    },
+    [agentId, findings, flow, onOpenChat]
+  );
+
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      if (!nodeId) return;
+      setCollapsedNodes((prev) =>
+        expandAncestors(prev, nodeId, edges as unknown as { source: string; target: string }[])
+      );
+      setNavigatorSelectedId(nodeId);
+
+      // Best-effort viewport centering (after expand).
+      requestAnimationFrame(() => {
+        if (!reactFlowInstance) return;
+        const target = nodes.find((n) => n.id === nodeId);
+        if (!target) return;
+        const x = target.position.x + (target.width ?? 160) / 2;
+        const y = target.position.y + (target.height ?? 60) / 2;
+        reactFlowInstance.setCenter(x, y, { zoom: 1.1, duration: 300 });
+      });
+    },
+    [edges, nodes, reactFlowInstance]
+  );
+
   // Convert investigation flow to ReactFlow nodes/edges
   useEffect(() => {
     if (!flow || flow.nodes.length === 0) {
@@ -472,11 +573,34 @@ export function FlowVisualization({
       return;
     }
 
-    // Layout nodes in a tree structure
-    const nodePositions = calculateLayout(flow.nodes, flow.edges);
+    const isStructuralNode = (node: FlowNode) => (node.data as any)?.trace_kind === 'structural';
+    const isStructuredEdge = (edge: FlowEdge) => (edge.kind || 'legacy') === 'structured';
 
-    const rfNodes: Node[] = flow.nodes.map((node, index) => {
-      const descendantCount = getDescendantCount(node.id, flow.edges);
+    let nodesForView: FlowNode[] = [];
+    let edgesForView: FlowEdge[] = [];
+
+    if (variant === 'structured') {
+      edgesForView = flow.edges.filter(isStructuredEdge);
+      const nodeIds = new Set(edgesForView.flatMap((e) => [e.source, e.target]));
+      nodesForView = flow.nodes.filter((n) => nodeIds.has(n.id));
+    } else {
+      nodesForView = flow.nodes.filter((n) => !isStructuralNode(n));
+      const allowed = new Set(nodesForView.map((n) => n.id));
+      edgesForView = flow.edges
+        .filter((e) => !isStructuredEdge(e))
+        .filter((e) => allowed.has(e.source) && allowed.has(e.target));
+    }
+
+    // Layout nodes in a tree structure
+    const nodePositions = calculateLayout(nodesForView, edgesForView);
+
+    const structuredRiskLevels =
+      variant === 'structured'
+        ? computeStructuredTraceRiskLevels(nodesForView as any, edgesForView as any)
+        : null;
+
+    const rfNodes: Node[] = nodesForView.map((node, index) => {
+      const descendantCount = getDescendantCount(node.id, edgesForView as unknown as Edge[]);
       const isCollapsed = collapsedNodes[node.id] || false;
 
       return {
@@ -485,6 +609,11 @@ export function FlowVisualization({
         position: nodePositions.get(node.id) || { x: 100, y: index * 80 },
         data: {
           ...node,
+          viewVariant: variant,
+          structured_risk:
+            variant === 'structured'
+              ? (structuredRiskLevels?.[node.id] as FlowNodeData['structured_risk'])
+              : undefined,
           isCollapsed,
           descendantCount,
           onToggleCollapse: toggleCollapse,
@@ -494,25 +623,56 @@ export function FlowVisualization({
       };
     });
 
-    const rfEdges: Edge[] = flow.edges.map((edge) => ({
+    const rfEdges: Edge[] = edgesForView.map((edge) => ({
       id: edge.id,
       source: edge.source,
       target: edge.target,
       label: edge.label,
-      animated: isNodeRunning(flow.nodes, edge.target),
+      animated: isNodeRunning(nodesForView, edge.target),
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 15,
         height: 15,
       },
       style: {
-        stroke: isNodeRunning(flow.nodes, edge.target) ? '#007acc' : '#404040',
+        stroke: isNodeRunning(nodesForView, edge.target) ? '#007acc' : '#404040',
       },
     }));
 
     setNodes(rfNodes);
     setEdges(rfEdges);
-  }, [flow, setNodes, setEdges, collapsedNodes, getDescendantCount, toggleCollapse]);
+  }, [flow, variant, setNodes, setEdges, collapsedNodes, getDescendantCount, toggleCollapse]);
+
+  const navigableFlowNodes = useMemo(
+    () => nodes.map((n) => n.data as unknown as FlowNode),
+    [nodes]
+  );
+  const findingItems = useMemo(
+    () => indexNodesByType(navigableFlowNodes as any, 'finding'),
+    [navigableFlowNodes]
+  );
+  const sinkItems = useMemo(
+    () => indexNodesByType(navigableFlowNodes as any, 'dangerous_sink'),
+    [navigableFlowNodes]
+  );
+  const entrypointItems = useMemo(
+    () => indexNodesByType(navigableFlowNodes as any, 'entry_point'),
+    [navigableFlowNodes]
+  );
+
+  const navigatorItems = useMemo(() => {
+    if (navigatorKind === 'finding') return findingItems;
+    if (navigatorKind === 'dangerous_sink') return sinkItems;
+    if (navigatorKind === 'entry_point') return entrypointItems;
+    return [];
+  }, [navigatorKind, findingItems, sinkItems, entrypointItems]);
+
+  const navigatorTitle = useMemo(() => {
+    if (navigatorKind === 'finding') return `Findings (${findingItems.length})`;
+    if (navigatorKind === 'dangerous_sink') return `Sinks (${sinkItems.length})`;
+    if (navigatorKind === 'entry_point') return `Entrypoints (${entrypointItems.length})`;
+    return '';
+  }, [navigatorKind, findingItems.length, sinkItems.length, entrypointItems.length]);
 
   // Calculate which nodes to show based on collapse state
   const visibleNodes = useMemo(() => {
@@ -665,6 +825,7 @@ export function FlowVisualization({
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
+        onInit={setReactFlowInstance}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
@@ -676,6 +837,12 @@ export function FlowVisualization({
         <MiniMap
           nodeColor={(node) => {
             const data = node.data as FlowNode;
+            if (variant === 'structured') {
+              const risk = (data as any)?.structured_risk;
+              if (risk === 'finding') return '#f44336';
+              if (risk === 'sink') return '#f9a825';
+              return '#4caf50';
+            }
             // Color by confidence if available
             if (data.confidence_score !== undefined) {
               if (data.confidence_score >= 0.8) return '#4caf50';
@@ -702,91 +869,224 @@ export function FlowVisualization({
           onQueueInvestigation={onQueueInvestigation ? handleQueueInvestigation : undefined}
           isQueueing={isQueueing}
           queueError={queueError}
+          onOpenFile={onOpenFile}
+          onOpenChat={onOpenChat ? handleOpenChatForNode : undefined}
         />
       )}
 
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 bg-vsc-sidebar border border-vsc-border rounded-lg p-3 text-vsc-xs">
-        <div className="font-medium mb-2 text-vsc-text-muted">Node Types</div>
-        {variant === 'calltree' ? (
-          <div className="space-y-1.5 text-vsc-text">
-            <div className="flex items-center gap-2">
-              <Network className="w-3 h-3 text-vsc-text-muted" />
-              <span>Entry Point / Sink</span>
+      {/* Legend + Structured Trace quick-jump */}
+      <div className="absolute bottom-4 left-4 space-y-2">
+        {variant === 'structured' && navigatorKind && (
+          <div className="bg-vsc-sidebar border border-vsc-border rounded-lg p-3 text-vsc-xs w-[320px] shadow-xl">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-medium text-vsc-text-muted">{navigatorTitle}</div>
+              <button
+                type="button"
+                onClick={() => setNavigatorKind(null)}
+                className="p-1 rounded hover:bg-vsc-hover text-vsc-text-muted hover:text-vsc-text"
+                aria-label="Close navigator"
+                title="Close"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
-            <div className="flex items-center gap-2">
-              <FileText className="w-3 h-3 text-blue-400" />
-              <span>File Explored</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Code className="w-3 h-3 text-purple-400" />
-              <span>Function Analyzed</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <ArrowRight className="w-3 h-3 text-green-400" />
-              <span>Function Call</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-3 h-3 text-sev-high" />
-              <span>Finding</span>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-1.5 text-vsc-text">
-            <div className="flex items-center gap-2">
-              <Network className="w-3 h-3 text-vsc-text-muted" />
-              <span>Entry Point</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-3 h-3 text-sev-medium" />
-              <span>Dangerous Sink</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Code className="w-3 h-3 text-vsc-text-muted" />
-              <span>Function</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-3 h-3 text-vsc-text-muted" />
-              <span>User Input</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Search className="w-3 h-3 text-vsc-text-muted" />
-              <span>Search</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <FileText className="w-3 h-3 text-vsc-text-muted" />
-              <span>Read File</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-3 h-3 text-sev-high" />
-              <span>Finding</span>
-            </div>
+            {navigatorItems.length === 0 ? (
+              <div className="text-vsc-text-muted">No nodes.</div>
+            ) : (
+              <div className="max-h-56 overflow-auto space-y-1">
+                {navigatorItems.map((item: any) => {
+                  const severity = typeof item.severity === 'string' ? item.severity : undefined;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => focusNode(String(item.id))}
+                      className={clsx(
+                        'w-full text-left px-2 py-1 rounded border border-transparent hover:border-vsc-border-subtle hover:bg-vsc-bg/60',
+                        navigatorSelectedId === item.id && 'bg-vsc-bg/60 border-vsc-border-subtle'
+                      )}
+                      title={item.label}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-vsc-text truncate">{item.label}</div>
+                        {navigatorKind === 'finding' && (
+                          <span
+                            className={clsx(
+                              'text-[10px] px-1.5 py-0.5 rounded uppercase font-medium flex-shrink-0',
+                              severity === 'critical' && 'bg-sev-critical/30 text-sev-critical',
+                              severity === 'high' && 'bg-sev-high/30 text-sev-high',
+                              severity === 'medium' && 'bg-sev-medium/30 text-sev-medium',
+                              severity === 'low' && 'bg-sev-low/30 text-sev-low',
+                              (!severity || severity === 'unknown') && 'bg-vsc-border/50 text-vsc-text-muted'
+                            )}
+                          >
+                            {severity || 'unknown'}
+                          </span>
+                        )}
+                      </div>
+                      {typeof item.file_path === 'string' && item.file_path.trim() && (
+                        <div className="text-vsc-text-muted truncate mt-0.5">
+                          {item.file_path}
+                          {typeof item.line_number === 'number' && item.line_number > 0
+                            ? `:${item.line_number}`
+                            : ''}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
-        {variant === 'investigation' &&
-          flow.nodes.some((n) => n.confidence_score !== undefined) && (
-            <div className="border-t border-vsc-border mt-2 pt-2">
-              <div className="font-medium mb-2 text-vsc-text-muted">Confidence</div>
-              <div className="space-y-1 text-vsc-text">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-vsc-success" />
-                  <span>High (80%+)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-sev-medium" />
-                  <span>Medium (60%+)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-sev-high" />
-                  <span>Low (40%+)</span>
-                </div>
+        <div className="bg-vsc-sidebar border border-vsc-border rounded-lg p-3 text-vsc-xs">
+          <div className="font-medium mb-2 text-vsc-text-muted">Node Types</div>
+          {variant === 'calltree' ? (
+            <div className="space-y-1.5 text-vsc-text">
+              <div className="flex items-center gap-2">
+                <Network className="w-3 h-3 text-vsc-text-muted" />
+                <span>Entry Point / Sink</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <FileText className="w-3 h-3 text-blue-400" />
+                <span>File Explored</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Code className="w-3 h-3 text-purple-400" />
+                <span>Function Analyzed</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <ArrowRight className="w-3 h-3 text-green-400" />
+                <span>Function Call</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-3 h-3 text-sev-high" />
+                <span>Finding</span>
+              </div>
+            </div>
+          ) : variant === 'structured' ? (
+            <div className="space-y-1.5 text-vsc-text">
+              <div className="flex items-center gap-2">
+                <Network className="w-3 h-3 text-vsc-accent" />
+                <span>Structured Trace</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Scan className="w-3 h-3 text-vsc-text-muted" />
+                <span>Global Recon</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNavigatorKind((prev) => (prev === 'entry_point' ? null : 'entry_point'))}
+                className="w-full flex items-center justify-between gap-2 px-1 py-0.5 rounded hover:bg-vsc-hover"
+                title="Jump to entrypoints"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Network className="w-3 h-3 text-vsc-text-muted" />
+                  <span className="truncate">Entrypoint (touched = highlighted)</span>
+                </span>
+                <span className="text-vsc-text-muted tabular-nums">{entrypointItems.length}</span>
+              </button>
+              <div className="flex items-center gap-2">
+                <Folder className="w-3 h-3 text-vsc-text-muted" />
+                <span>Folder</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <FileText className="w-3 h-3 text-blue-400" />
+                <span>File</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Code className="w-3 h-3 text-purple-400" />
+                <span>Function</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Code className="w-3 h-3 text-vsc-text-muted" />
+                <span>Steps (collapsed)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setNavigatorKind((prev) => (prev === 'dangerous_sink' ? null : 'dangerous_sink'))
+                }
+                className="w-full flex items-center justify-between gap-2 px-1 py-0.5 rounded hover:bg-vsc-hover"
+                title="Jump to sinks"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <AlertTriangle className="w-3 h-3 text-sev-medium" />
+                  <span className="truncate">Dangerous Sink</span>
+                </span>
+                <span className="text-vsc-text-muted tabular-nums">{sinkItems.length}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNavigatorKind((prev) => (prev === 'finding' ? null : 'finding'))}
+                className="w-full flex items-center justify-between gap-2 px-1 py-0.5 rounded hover:bg-vsc-hover"
+                title="Jump to findings"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <AlertTriangle className="w-3 h-3 text-sev-high" />
+                  <span className="truncate">Finding</span>
+                </span>
+                <span className="text-vsc-text-muted tabular-nums">{findingItems.length}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-1.5 text-vsc-text">
+              <div className="flex items-center gap-2">
+                <Network className="w-3 h-3 text-vsc-text-muted" />
+                <span>Entry Point</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-3 h-3 text-sev-medium" />
+                <span>Dangerous Sink</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Code className="w-3 h-3 text-vsc-text-muted" />
+                <span>Function</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-3 h-3 text-vsc-text-muted" />
+                <span>User Input</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Search className="w-3 h-3 text-vsc-text-muted" />
+                <span>Search</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <FileText className="w-3 h-3 text-vsc-text-muted" />
+                <span>Read File</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-3 h-3 text-sev-high" />
+                <span>Finding</span>
               </div>
             </div>
           )}
 
-        <div className="border-t border-vsc-border mt-2 pt-2 text-vsc-text-muted">
-          <span className="italic">Click nodes for details</span>
+          {variant === 'investigation' &&
+            flow.nodes.some((n) => n.confidence_score !== undefined) && (
+              <div className="border-t border-vsc-border mt-2 pt-2">
+                <div className="font-medium mb-2 text-vsc-text-muted">Confidence</div>
+                <div className="space-y-1 text-vsc-text">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-vsc-success" />
+                    <span>High (80%+)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-sev-medium" />
+                    <span>Medium (60%+)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-sev-high" />
+                    <span>Low (40%+)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          <div className="border-t border-vsc-border mt-2 pt-2 text-vsc-text-muted">
+            <span className="italic">Click nodes for details</span>
+          </div>
         </div>
       </div>
 

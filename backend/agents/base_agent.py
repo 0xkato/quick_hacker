@@ -175,6 +175,12 @@ class BaseAgent(ABC):
                 return
 
             candidates = attack_surface_service.scan_candidates(repo_path=self.repo_path)
+            # Populate Structured Trace roots (entrypoints + sinks) from static candidates.
+            # Best-effort; should not block the scan/triage flow.
+            try:
+                flow_service.populate_structured_from_candidates(self.id, candidates)
+            except Exception:
+                pass
             triaged = await attack_surface_service.triage(
                 agent_id=self.id,
                 repo_path=self.repo_path,
@@ -330,6 +336,7 @@ class BaseAgent(ABC):
         """
         from models.observability import AgentStateSnapshot
         from services.observability_service import observability_service
+        from services.flow_service import flow_service
 
         repo_path = str(self.repo_path)
 
@@ -357,6 +364,11 @@ class BaseAgent(ABC):
             if isinstance(session_id, str) and session_id:
                 provider_config["session_id"] = session_id
 
+        flow = flow_service.get_flow(self.id)
+        flow_nodes = [n.to_dict() for n in flow.nodes] if flow else []
+        flow_edges = [e.to_dict() for e in flow.edges] if flow else []
+        current_flow_node_id = flow.current_node_id if flow else None
+
         return AgentStateSnapshot(
             id=str(uuid.uuid4())[:12],
             agent_id=self.id,
@@ -373,9 +385,9 @@ class BaseAgent(ABC):
             conversation_history=[],  # BaseAgent doesn't track conversation
             llm_interactions=[i.model_dump(mode="json", exclude_none=True) for i in observability_service.get_interactions(self.id)],
             tool_details=[d.model_dump(mode="json", exclude_none=True) for d in observability_service.get_tool_details(self.id)],
-            flow_nodes=[],
-            flow_edges=[],
-            current_flow_node_id=None,
+            flow_nodes=flow_nodes,
+            flow_edges=flow_edges,
+            current_flow_node_id=current_flow_node_id,
             investigation_context={
                 "focus_areas": self.focus_areas,
                 "target_files": self.target_files,

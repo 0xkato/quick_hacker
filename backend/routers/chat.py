@@ -43,12 +43,112 @@ CHAT_SYSTEM_PROMPT_FILES = {
     "findings_analysis": "chat/findings_analysis.md",
 }
 
+FLOW_CONTEXT_MAX_FIELD_CHARS = 2500
+FLOW_CONTEXT_MAX_PATH_NODES = 30
+
 
 def _get_chat_system_prompt(name: str) -> str:
     relative_path = CHAT_SYSTEM_PROMPT_FILES.get(name)
     if not relative_path:
         raise ValueError(f"Unknown chat system prompt: {name}")
     return load_prompt(relative_path)
+
+
+def _truncate_text(value: str, max_chars: int = FLOW_CONTEXT_MAX_FIELD_CHARS) -> str:
+    if not isinstance(value, str):
+        return ""
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars] + "\n... [truncated]"
+
+
+def _format_flow_context_pack(pack: dict) -> str:
+    """Format a compact, safe 'context pack' for post-scan follow-up chat."""
+    if not isinstance(pack, dict):
+        return ""
+
+    selected = pack.get("selected_node")
+    selected = selected if isinstance(selected, dict) else {}
+
+    def _get_str(obj: dict, key: str) -> str:
+        val = obj.get(key)
+        return val.strip() if isinstance(val, str) else ""
+
+    def _get_int(obj: dict, key: str) -> int | None:
+        val = obj.get(key)
+        return val if isinstance(val, int) else None
+
+    selected_id = _get_str(selected, "id")
+    selected_type = _get_str(selected, "type")
+    selected_label = _get_str(selected, "label")
+
+    lines: list[str] = []
+    lines.append("Flow Context (from scan diagram)")
+    if selected_label or selected_type or selected_id:
+        header_bits = []
+        if selected_type:
+            header_bits.append(f"[{selected_type}]")
+        if selected_label:
+            header_bits.append(selected_label)
+        if selected_id:
+            header_bits.append(f"(id={selected_id})")
+        lines.append("Selected node: " + " ".join(header_bits))
+
+    path = pack.get("path")
+    if isinstance(path, list) and path:
+        path_lines: list[str] = []
+        for item in path[:FLOW_CONTEXT_MAX_PATH_NODES]:
+            if not isinstance(item, dict):
+                continue
+            node_type = _get_str(item, "type") or "node"
+            node_label = _get_str(item, "label") or _get_str(item, "id") or "(unnamed)"
+            file_path = _get_str(item, "file_path")
+            line_num = _get_int(item, "line_number") or _get_int(item, "line_start")
+            loc = ""
+            if file_path:
+                loc = f" ({file_path}{':' + str(line_num) if isinstance(line_num, int) else ''})"
+            path_lines.append(f"- {node_type}: {node_label}{loc}")
+        if path_lines:
+            lines.append("")
+            lines.append("Path:")
+            lines.extend(path_lines)
+
+    finding = pack.get("finding")
+    if isinstance(finding, dict) and finding:
+        severity = _get_str(finding, "severity") or "unknown"
+        title = _get_str(finding, "title") or "Unknown finding"
+        file_path = _get_str(finding, "file_path")
+        line_start = _get_int(finding, "line_start")
+        vuln_type = _get_str(finding, "vulnerability_type")
+        loc = ""
+        if file_path:
+            loc = f" ({file_path}{':' + str(line_start) if isinstance(line_start, int) else ''})"
+        meta_bits = []
+        if vuln_type:
+            meta_bits.append(f"type={vuln_type}")
+        lines.append("")
+        lines.append(f"Finding: [{severity}] {title}{loc}" + (f" ({', '.join(meta_bits)})" if meta_bits else ""))
+        description = _get_str(finding, "description")
+        if description:
+            lines.append("")
+            lines.append("Finding description:")
+            lines.append(_truncate_text(description))
+
+    # Selected node details (best-effort; capped).
+    for key, title in (
+        ("tool_result_summary", "Tool result summary"),
+        ("code_context", "Code context"),
+        ("llm_reasoning", "LLM reasoning"),
+    ):
+        raw = selected.get(key)
+        if isinstance(raw, str) and raw.strip():
+            lines.append("")
+            lines.append(f"{title}:")
+            lines.append("```")
+            lines.append(_truncate_text(raw))
+            lines.append("```")
+
+    return "\n".join(lines)
 
 
 def get_system_prompt(context: Optional[dict]) -> str:
@@ -82,6 +182,11 @@ def get_system_prompt(context: Optional[dict]) -> str:
 
     if context.get("selected_text"):
         prompt_parts.append(f"\nUser selected code:\n```\n{context['selected_text']}\n```")
+
+    if context.get("flow_context_pack"):
+        flow_section = _format_flow_context_pack(context.get("flow_context_pack"))
+        if flow_section:
+            prompt_parts.append("\n" + flow_section)
 
     return "\n\n".join(prompt_parts)
 

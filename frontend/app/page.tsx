@@ -26,7 +26,6 @@ import { ChatPanel } from '@/components/ChatPanel/ChatPanel';
 import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
 import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
 import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualization';
-import { TreeLayout } from '@/components/InvestigationFlow';
 import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
 import { ReportModal } from '@/components/ReportPanel';
 import { ThreatModelModal } from '@/components/ThreatModel/ThreatModelModal';
@@ -35,15 +34,12 @@ import { SessionControls } from '@/components/SessionControls';
 import { ResumeDialog } from '@/components/ResumeDialog';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '@/hooks/useAuth';
-import { useInvestigationFlow } from '@/hooks/useInvestigationFlow';
 import { useAgentManagement } from '@/hooks/useAgentManagement';
 import { useFindingsManagement } from '@/hooks/useFindingsManagement';
 import { useProjectWorkspace } from '@/hooks/useProjectWorkspace';
 import { usePanelLayout, type ActivityView } from '@/hooks/usePanelLayout';
 import { useSessionManagement } from '@/hooks/useSessionManagement';
 import { useObservability } from '@/hooks/useObservability';
-import { useCallTree } from '@/hooks/useCallTree';
-import { featureFlags, FeatureFlag } from '@/lib/featureFlags';
 import { agents as agentsApi, projects as projectsApi, files as filesApi, setAuthFunctions, type Project } from '@/lib/api';
 import { fetchProjectBootstrapData } from '@/lib/projectBootstrap';
 import type {
@@ -67,12 +63,12 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
 
+  // Chat state (post-scan contextual chat)
+  const [chatFlowContextPack, setChatFlowContextPack] = useState<unknown | null>(null);
+  const [chatSeedMessage, setChatSeedMessage] = useState<{ id: string; text: string } | null>(null);
+
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
-
-  // Feature flag state
-  const [useSpanBasedFlow, setUseSpanBasedFlow] = useState(false);
-  const [diagramMode, setDiagramMode] = useState<'investigation' | 'calltree'>('investigation');
 
   // Custom hooks for state management
   const panels = usePanelLayout();
@@ -93,32 +89,6 @@ export default function Home() {
     selectedAgentId: agentMgmt.selectedAgentId,
     isAuthenticated,
   });
-  const callTree = useCallTree({
-    projectId: currentProject?.id || null,
-    diagramMode,
-    isAuthenticated,
-  });
-
-  // Span-based flow reconstruction (only when feature enabled)
-  const flowEvents = agentMgmt.agentFlow?.nodes || [];
-  const { spans, edges: spanEdges, isLoading: isReconstructing } = useInvestigationFlow(
-    agentMgmt.selectedAgentId || '',
-    useSpanBasedFlow ? flowEvents : []
-  );
-
-  // Fetch feature flags on mount
-  useEffect(() => {
-    if (user) {
-      featureFlags.fetchFlags(user.id).then(() => {
-        const enabled = featureFlags.isEnabled(FeatureFlag.SPAN_BASED_FLOW);
-        setUseSpanBasedFlow(enabled);
-      }).catch(error => {
-        console.error('Failed to fetch feature flags:', error);
-        // Default to false on error
-        setUseSpanBasedFlow(false);
-      });
-    }
-  }, [user]);
 
   // Auto-select agent for findings view - now handled by useFindingsManagement hook
   // Persist selected agent across refreshes - now handled by useAgentManagement hook
@@ -302,7 +272,32 @@ export default function Home() {
   // Navigate to file from drawer
   const handleNavigateToFile = async (filePath: string) => {
     await handleFileSelect(filePath);
+    panels.setActiveView('explorer');
   };
+
+  const handleClearChatFlowContext = useCallback(() => {
+    setChatFlowContextPack(null);
+  }, []);
+
+  const handleOpenChatFromFlow = useCallback(
+    async (payload: { contextPack: unknown; filePath?: string; seedText?: string }) => {
+      setChatFlowContextPack(payload.contextPack);
+
+      if (typeof payload.filePath === 'string' && payload.filePath.trim()) {
+        try {
+          await workspace.selectFile(payload.filePath.trim());
+        } catch (err) {
+          console.error('Failed to load file for chat context:', err);
+        }
+      }
+
+      panels.setShowChat(true);
+      if (typeof payload.seedText === 'string' && payload.seedText.trim()) {
+        setChatSeedMessage({ id: String(Date.now()), text: payload.seedText });
+      }
+    },
+    [panels, workspace]
+  );
 
   // Agent callbacks
   const handleAgentCreated = (agent: any) => {
@@ -692,102 +687,50 @@ export default function Home() {
 
         {/* Main content area */}
         <main className="flex-1 flex flex-col overflow-hidden bg-vsc-bg">
-          {/* Flow visualization view */}
-          {panels.activeView === 'flow' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Diagram selector */}
-              <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
-                <Network className="w-4 h-4 text-vsc-text-muted" />
-                <select
-                  value={diagramMode}
-                  onChange={(e) => setDiagramMode(e.target.value as 'investigation' | 'calltree')}
-                  className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
-                  data-testid="diagram-mode-select"
-                >
-                  <option value="investigation">Investigation Flow</option>
-                  <option value="calltree">Call Tree (FastAPI)</option>
-                </select>
-
-                {diagramMode === 'investigation' ? (
-                  <select
-                    value={agentMgmt.selectedAgentId || ''}
-                    onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
-                    className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
-                  >
-                    <option value="">Select agent...</option>
-                    {agentMgmt.agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name} ({agent.status})
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <select
-                    value={callTree.selectedRouteId || ''}
-                    onChange={(e) => callTree.setSelectedRouteId(e.target.value || null)}
-                    className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm min-w-[320px]"
-                    disabled={callTree.isCallTreeRoutesLoading}
-                    data-testid="calltree-route-select"
-                  >
-                    <option value="">
-                      {callTree.isCallTreeRoutesLoading
-                        ? 'Loading routes...'
-                        : callTree.callTreeRoutes.length === 0
-                          ? 'No FastAPI routes found'
-                          : 'Select route...'}
-                    </option>
-                    {callTree.callTreeRoutes.map((route) => (
-                      <option key={route.id} value={route.id}>
-                        {(route.label || `${route.method} ${route.path}`)} ({route.handler})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-              <div className="flex-1">
-                {diagramMode === 'investigation' ? (
-                  useSpanBasedFlow ? (
-                    // New span-based visualization
-                    isReconstructing ? (
-                      <div className="flex items-center justify-center h-full text-vsc-fg">
-                        Reconstructing investigation flow...
-                      </div>
-                    ) : (
-                      <TreeLayout spans={spans} edges={spanEdges} />
-                    )
-                  ) : (
-                    // Legacy flow visualization
-                    <FlowVisualization
-                      agentId={agentMgmt.selectedAgentId}
-                      flow={agentMgmt.agentFlow}
-                      variant="investigation"
-                      onQueueInvestigation={
-                        canQueueInvestigations
-                          ? async (nodeId) => {
-                            if (!agentMgmt.selectedAgentId) return;
-                            const res = await agentsApi.queueInvestigation(agentMgmt.selectedAgentId, nodeId);
-                            if (!res.queued) {
-                              throw new Error(res.reason || 'Not queued');
-                            }
-                            const updated = await agentsApi.getFlow(agentMgmt.selectedAgentId);
-                            agentMgmt.setAgentFlow(updated);
-                          }
-                          : undefined
-                      }
-                    />
-                  )
-                ) : (
-                  <FlowVisualization
-                    agentId={callTree.selectedRouteId}
-                    flow={callTree.callTreeFlow}
-                    variant="calltree"
-                    emptySelectionText="Select a route to view call tree"
-                    emptyFlowText={callTree.isCallTreeLoading ? 'Building call tree...' : 'No call tree data'}
-                  />
-                )}
-              </div>
-            </div>
-          )}
+	          {/* Flow visualization view */}
+	          {panels.activeView === 'flow' && (
+	            <div className="flex-1 flex flex-col overflow-hidden">
+	              <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
+	                <Network className="w-4 h-4 text-vsc-text-muted" />
+	                <span className="text-vsc-sm text-vsc-text-muted">Structured Trace</span>
+	                <select
+	                  value={agentMgmt.selectedAgentId || ''}
+	                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
+	                  className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+	                >
+	                  <option value="">Select agent...</option>
+	                  {agentMgmt.agents.map((agent) => (
+	                    <option key={agent.id} value={agent.id}>
+	                      {agent.name} ({agent.status})
+	                    </option>
+	                  ))}
+	                </select>
+	              </div>
+	              <div className="flex-1">
+	                <FlowVisualization
+	                  agentId={agentMgmt.selectedAgentId}
+	                  flow={agentMgmt.agentFlow}
+	                  variant="structured"
+	                  findings={findingsMgmt.findings}
+	                  onOpenChat={handleOpenChatFromFlow}
+	                  onOpenFile={handleNavigateToFile}
+	                  onQueueInvestigation={
+	                    canQueueInvestigations
+	                      ? async (nodeId) => {
+	                        if (!agentMgmt.selectedAgentId) return;
+	                        const res = await agentsApi.queueInvestigation(agentMgmt.selectedAgentId, nodeId);
+	                        if (!res.queued) {
+	                          throw new Error(res.reason || 'Not queued');
+	                        }
+	                        const updated = await agentsApi.getFlow(agentMgmt.selectedAgentId);
+	                        agentMgmt.setAgentFlow(updated);
+	                      }
+	                      : undefined
+	                  }
+	                />
+	              </div>
+	            </div>
+	          )}
 
           {/* LLM Interactions view */}
           {panels.activeView === 'llm' && (
@@ -936,6 +879,11 @@ export default function Home() {
         currentFile={workspace.currentFile}
         findings={findingsMgmt.findings}
         onRequestSettings={() => setShowSettings(true)}
+        provider={selectedAgent?.provider_config?.provider}
+        model={selectedAgent?.provider_config?.model}
+        flowContextPack={chatFlowContextPack}
+        seedMessage={chatSeedMessage}
+        onClearFlowContext={handleClearChatFlowContext}
       />
 
       {/* Settings Modal */}

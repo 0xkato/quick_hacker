@@ -3,7 +3,7 @@
 'use client';
 
 import { ReactNode } from 'react';
-import { X, Clock, FileText, Code, Brain, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { X, Clock, FileText, Code, Brain, AlertTriangle, CheckCircle, XCircle, ExternalLink, MessageSquare } from 'lucide-react';
 import clsx from 'clsx';
 
 interface FlowNode {
@@ -27,6 +27,8 @@ interface FlowNodePopoverProps {
   onQueueInvestigation?: () => void;
   isQueueing?: boolean;
   queueError?: string | null;
+  onOpenFile?: (filePath: string) => void;
+  onOpenChat?: (node: FlowNode) => void;
 }
 
 export function FlowNodePopover({
@@ -36,6 +38,8 @@ export function FlowNodePopover({
   onQueueInvestigation,
   isQueueing,
   queueError,
+  onOpenFile,
+  onOpenChat,
 }: FlowNodePopoverProps): JSX.Element {
   const typeLabels: Record<string, string> = {
     user_input: 'User Input',
@@ -49,6 +53,11 @@ export function FlowNodePopover({
     entry_point: 'Entry Point',
     dangerous_sink: 'Dangerous Sink',
     investigation: 'Investigation',
+    structured_root: 'Structured Trace',
+    global_recon: 'Global Recon',
+    folder: 'Folder',
+    steps: 'Steps',
+    sinks_group: 'Sinks',
     function: 'Function',
     external: 'External Call',
     cycle: 'Cycle',
@@ -79,6 +88,8 @@ export function FlowNodePopover({
   const isCandidate = Boolean((node.data as any)?.attack_surface_candidate_id);
   const isQueued = Boolean((node.data as any)?.queued);
   const isInProgress = node.status === 'running' || Boolean((node.data as any)?.in_progress);
+  const filePath = ((node.data as any)?.file_path || (node.data as any)?.file || (node.data as any)?.full_path) as string | undefined;
+  const lineNumber = ((node.data as any)?.line_number || (node.data as any)?.line_start) as number | undefined;
 
   return (
     <div
@@ -122,6 +133,50 @@ export function FlowNodePopover({
           <div className="text-xs text-vsc-text-muted mb-1">Label</div>
           <div className="text-sm text-vsc-text">{node.label}</div>
         </div>
+
+        {/* File quick action */}
+        {onOpenFile && typeof filePath === 'string' && filePath.trim() && (
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs text-vsc-text-muted mb-1">File</div>
+              <div className="text-sm text-vsc-text truncate">
+                {filePath}{typeof lineNumber === 'number' && lineNumber > 0 ? `:${lineNumber}` : ''}
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                onOpenFile(filePath);
+                onClose();
+              }}
+              className="px-2 py-1 rounded text-vsc-xs bg-vsc-accent text-white hover:bg-vsc-accent/80 flex items-center gap-1 flex-shrink-0"
+              title="Open in editor"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Open
+            </button>
+          </div>
+        )}
+
+        {/* Chat quick action */}
+        {onOpenChat && (
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs text-vsc-text-muted mb-1">Chat</div>
+              <div className="text-sm text-vsc-text truncate">Ask follow-up questions with scan context</div>
+            </div>
+            <button
+              onClick={() => {
+                onOpenChat(node);
+                onClose();
+              }}
+              className="px-2 py-1 rounded text-vsc-xs bg-vsc-border/60 text-vsc-text hover:bg-vsc-border/80 flex items-center gap-1 flex-shrink-0"
+              title="Open in chat"
+            >
+              <MessageSquare className="w-3 h-3" />
+              Chat
+            </button>
+          </div>
+        )}
 
         {/* Timestamp & Duration */}
         <div className="flex gap-4">

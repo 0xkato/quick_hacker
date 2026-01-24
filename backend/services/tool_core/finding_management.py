@@ -200,8 +200,9 @@ class FindingManagementMixin:
         Returns:
             Dict with decision ("keep" or "filter") and reason
         """
-        # Import here to avoid circular dependencies
-        from services.finding_filters import ProductionRelevanceFilter
+        # NOTE: This tool is used by the Codex CLI MCP stdio server.
+        # It must not raise due to missing optional dependencies (e.g., anthropic),
+        # and it must never write to stdout via import-time side effects.
         from protocol_config.protocol_config import ProtocolConfig
         from models.schemas import Finding, Severity
 
@@ -210,7 +211,8 @@ class FindingManagementMixin:
         if not api_key:
             return {
                 "decision": "keep",
-                "reason": "No API key configured - filter unavailable"
+                "reason": "No API key configured - filter unavailable",
+                "is_production_code": True,
             }
 
         # Create minimal Finding object for filter
@@ -229,6 +231,8 @@ class FindingManagementMixin:
 
         # Run production relevance filter
         try:
+            from services.finding_filters import ProductionRelevanceFilter
+
             production_filter = ProductionRelevanceFilter(api_key)
             is_relevant, reason = production_filter.is_production_relevant(finding)
 
@@ -237,10 +241,18 @@ class FindingManagementMixin:
                 "reason": reason,
                 "is_production_code": is_relevant
             }
+        except (ImportError, ModuleNotFoundError) as e:
+            return {
+                "decision": "keep",
+                "reason": f"Filter unavailable: {str(e)}",
+                "is_production_code": True,
+                "error": True,
+            }
         except Exception as e:
             # On error, default to keeping
             return {
                 "decision": "keep",
                 "reason": f"Filter error: {str(e)}",
-                "error": True
+                "is_production_code": True,
+                "error": True,
             }

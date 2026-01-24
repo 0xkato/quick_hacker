@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import type { CallTreeRoute, InvestigationFlow } from '@/types';
 import { calltree as calltreeApi } from '@/lib/api';
 
-export type DiagramMode = 'investigation' | 'calltree';
+export type DiagramMode = 'investigation' | 'calltree' | 'structured';
 
 export interface UseCallTreeOptions {
   projectId: string | null;
@@ -35,6 +35,11 @@ export function useCallTree({
   const [callTreeFlow, setCallTreeFlow] = useState<InvestigationFlow | null>(null);
   const [isCallTreeRoutesLoading, setIsCallTreeRoutesLoading] = useState(false);
   const [isCallTreeLoading, setIsCallTreeLoading] = useState(false);
+
+  // Keep internal state in sync with external mode selection.
+  useEffect(() => {
+    setDiagramMode(diagramMode);
+  }, [diagramMode]);
 
   // Load call-tree routes when enabled
   useEffect(() => {

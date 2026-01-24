@@ -538,6 +538,7 @@ export interface ChatContext {
   file_content?: string;
   findings?: Finding[];
   selected_text?: string;
+  flow_context_pack?: unknown;
 }
 
 export const chat = {

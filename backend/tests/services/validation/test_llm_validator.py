@@ -199,3 +199,69 @@ async def test_validate_error_handling(mock_finding, mock_evidence, mock_classif
     assert "error" in result.categories
     assert result.confidence == 0
     assert any("Test error" in reason for reason in result.reasoning)
+
+
+def test_build_validation_prompt(mock_finding, mock_evidence, mock_classification):
+    """Verify prompt contains all required sections."""
+    api_key = "test-api-key"
+    repo_root = "/test/repo"
+
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+    )
+
+    threat_model_profile = Mock()
+
+    # Call _build_validation_prompt
+    prompt = validator._build_validation_prompt(
+        finding=mock_finding,
+        evidence=mock_evidence,
+        classification=mock_classification,
+        threat_model_profile=threat_model_profile,
+        criticism_level="high",
+    )
+
+    # Verify prompt is a string
+    assert isinstance(prompt, str)
+
+    # Verify required sections are present
+    assert "You are a security validation expert" in prompt
+    assert "Criticism Level: HIGH" in prompt
+    assert mock_finding.title in prompt
+    assert mock_finding.file_path in prompt
+    assert "Task 1: Validate Attacker Control" in prompt
+    assert "Task 2: Validate Reachability" in prompt
+    assert "DECISION: VALID | INVALID" in prompt
+
+    # Verify checklist items are present
+    assert "Source Controlled Input" in prompt or "source_controlled_input" in prompt
+    assert "Sink Present" in prompt or "sink_present" in prompt
+    assert "proven" in prompt  # Status from checklist (lowercase)
+    assert "Network input from request.args" in prompt  # Reason from checklist
+
+
+def test_build_validation_prompt_medium_criticism(mock_finding, mock_evidence, mock_classification):
+    """Verify criticism level adapts to medium."""
+    api_key = "test-api-key"
+    repo_root = "/test/repo"
+
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+    )
+
+    threat_model_profile = Mock()
+
+    # Call _build_validation_prompt with medium criticism
+    prompt = validator._build_validation_prompt(
+        finding=mock_finding,
+        evidence=mock_evidence,
+        classification=mock_classification,
+        threat_model_profile=threat_model_profile,
+        criticism_level="medium",
+    )
+
+    # Verify medium criticism level is present
+    assert "Criticism Level: MEDIUM" in prompt
+    assert "Criticism Level: HIGH" not in prompt

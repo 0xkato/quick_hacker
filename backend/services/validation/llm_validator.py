@@ -94,16 +94,16 @@ class LLMFindingValidator:
                 output = result.stdout[:5000]  # Limit to 5000 chars
                 return output
             elif result.returncode == 1:
-                return "No matches found"
+                return f"No matches found for pattern: {pattern}"
             else:
-                return f"Error: {result.stderr[:500]}"
+                return f"Grep error: {result.stderr[:500]}"
 
         except FileNotFoundError:
-            return "Error: ripgrep (rg) not installed"
+            return "Error: ripgrep (rg) not found - install ripgrep"
         except subprocess.TimeoutExpired:
-            return "Error: Search timeout after 10 seconds"
+            return "Grep timeout - pattern may be too broad"
         except Exception as e:
-            return f"Error: {str(e)[:500]}"
+            return f"Grep error: {str(e)}"
 
     def _tool_glob_files(self, pattern: str) -> str:
         """Find files by glob pattern."""
@@ -113,6 +113,7 @@ class LLMFindingValidator:
 
             # Find matching files
             matches = glob_module.glob(full_pattern, recursive=True)
+            original_count = len(matches)  # Save original count for overflow message
 
             # Convert absolute paths to relative paths
             relative_paths = []
@@ -127,14 +128,14 @@ class LLMFindingValidator:
             # Limit to 100 files
             if len(relative_paths) > 100:
                 limited_paths = relative_paths[:100]
-                additional = len(relative_paths) - 100
+                additional = original_count - 100
                 limited_paths.append(f"... ({additional} more files)")
                 return "\n".join(limited_paths)
 
-            return "\n".join(relative_paths) if relative_paths else "No files found"
+            return "\n".join(relative_paths) if relative_paths else f"No files found matching: {pattern}"
 
         except Exception as e:
-            return f"Error: {str(e)[:500]}"
+            return f"Glob error: {str(e)}"
 
     def _get_tool_definitions(self) -> list[dict]:
         """

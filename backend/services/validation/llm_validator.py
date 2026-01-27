@@ -2,6 +2,7 @@
 import asyncio
 import glob as glob_module
 import logging
+import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -414,6 +415,78 @@ Be highly skeptical. Default to INVALID unless you can prove it's exploitable.""
                 "tool_use_id": tool_id,
                 "content": f"Tool error: {str(e)}"
             }
+
+    def _parse_validation_response(self, response_text: str) -> ValidationResult:
+        """
+        Parse validation response from LLM.
+
+        Extracts DECISION, CATEGORY, and REASONING from the LLM's response text.
+
+        Args:
+            response_text: Raw response text from LLM
+
+        Returns:
+            ValidationResult with parsed decision and reasoning
+        """
+        try:
+            # Extract DECISION using regex
+            decision_match = re.search(
+                r"DECISION:\s*(VALID|INVALID)",
+                response_text,
+                re.IGNORECASE
+            )
+            if not decision_match:
+                raise ValueError("DECISION not found in response")
+
+            is_valid = decision_match.group(1).upper() == "VALID"
+
+            # Extract CATEGORY using regex
+            category_match = re.search(
+                r"CATEGORY:\s*(\w+(?:_\w+)*)",
+                response_text,
+                re.IGNORECASE
+            )
+            category = category_match.group(1) if category_match else "unknown"
+
+            # Extract REASONING bullets using regex
+            reasoning_match = re.search(
+                r"REASONING:\s*((?:^-.*$\n?)+)",
+                response_text,
+                re.MULTILINE | re.IGNORECASE
+            )
+
+            if reasoning_match:
+                reasoning_text = reasoning_match.group(1)
+                # Split by newlines and filter lines starting with "-"
+                reasoning = []
+                for line in reasoning_text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("-"):
+                        # Strip "- " prefix and whitespace
+                        reasoning.append(line[1:].strip())
+            else:
+                reasoning = ["No reasoning provided"]
+
+            return ValidationResult(
+                is_valid=is_valid,
+                reasoning=reasoning,
+                categories=[category],
+                confidence=95 if is_valid else 0,
+                timestamp=datetime.now(UTC),
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to parse validation response: {e}")
+            return ValidationResult(
+                is_valid=False,
+                reasoning=[
+                    "Failed to parse validator response",
+                    f"Parse error: {str(e)[:200]}"
+                ],
+                categories=["parse_error"],
+                confidence=0,
+                timestamp=datetime.now(UTC),
+            )
 
     async def _run_validation(
         self,

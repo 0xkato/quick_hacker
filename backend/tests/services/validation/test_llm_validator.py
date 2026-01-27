@@ -638,3 +638,70 @@ async def test_execute_tool_call_tool_error():
         assert result["tool_use_id"] == "tool_789"
         # Should contain error message from path traversal protection
         assert "Error:" in result["content"] or "denied" in result["content"].lower() or "Access denied" in result["content"]
+
+
+# Response Parsing Tests
+
+
+def test_parse_validation_response_valid():
+    """Test parsing VALID decision with security_issue category."""
+    validator = LLMFindingValidator(
+        anthropic_api_key="test-key",
+        repo_root="/test/repo"
+    )
+
+    response_text = """DECISION: VALID
+CATEGORY: security_issue
+REASONING:
+- exec() is reachable from HTTP endpoint /api/run
+- User input flows directly to exec without sanitization
+- Clear path from untrusted source to dangerous sink"""
+
+    result = validator._parse_validation_response(response_text)
+
+    # Verify result structure
+    assert isinstance(result, ValidationResult)
+    assert result.is_valid is True
+    assert result.categories == ["security_issue"]
+    assert len(result.reasoning) == 3
+    assert "exec() is reachable" in result.reasoning[0]
+
+
+def test_parse_validation_response_invalid():
+    """Test parsing INVALID decision with hardening category."""
+    validator = LLMFindingValidator(
+        anthropic_api_key="test-key",
+        repo_root="/test/repo"
+    )
+
+    response_text = """DECISION: INVALID
+CATEGORY: hardening
+REASONING:
+- exec() function is defined but never called
+- No route registration found for /api/run endpoint
+- Code appears to be dead/unreachable"""
+
+    result = validator._parse_validation_response(response_text)
+
+    # Verify result structure
+    assert isinstance(result, ValidationResult)
+    assert result.is_valid is False
+    assert result.categories == ["hardening"]
+    assert len(result.reasoning) == 3
+
+
+def test_parse_validation_response_malformed():
+    """Test handling of malformed response without expected format."""
+    validator = LLMFindingValidator(
+        anthropic_api_key="test-key",
+        repo_root="/test/repo"
+    )
+
+    response_text = "This is not a valid response format"
+
+    result = validator._parse_validation_response(response_text)
+
+    # Verify conservative error handling
+    assert isinstance(result, ValidationResult)
+    assert result.is_valid is False
+    assert "parse" in result.categories[0].lower()

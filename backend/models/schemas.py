@@ -1,6 +1,6 @@
 """Pydantic schemas for quick_hack API."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
@@ -91,6 +91,16 @@ class ChecklistStatus(str, Enum):
     PROVEN = "proven"
     DISPROVEN = "disproven"
     UNKNOWN = "unknown"
+
+
+class ValidationResult(BaseModel):
+    """Result from LLM-based finding validation."""
+    is_valid: bool
+    reasoning: list[str]  # Bullet points explaining decision
+    categories: list[str]  # e.g., ["security_issue"], ["hardening", "by_design"]
+    investigation_steps: Optional[list[str]] = None  # Tool calls made
+    confidence: Optional[int] = None  # 0-100, validator's confidence
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class VulnerabilityCategory(str, Enum):
@@ -528,6 +538,13 @@ class ProtocolPolicy(BaseModel):
     enable_evidence_quests: bool = True
     quest_categories: list[VulnerabilityCategory] = Field(default_factory=list)
 
+    # NEW: LLM validation settings
+    enable_llm_validation: bool = True  # Default enabled, can be disabled
+    validation_criticism_level: Literal["high", "medium", "low"] = "high"
+    validation_model: Optional[str] = None  # Override model
+    validation_timeout_seconds: int = 120  # Per-finding timeout
+    validation_fallback_on_error: Literal["invalid", "valid", "skip"] = "invalid"
+
 
 class EvidenceQuest(BaseModel):
     """Configuration for autonomous evidence gathering agent."""
@@ -677,6 +694,9 @@ class Finding(BaseModel):
     # Protocol evaluation result
     submission_result: Optional[SubmissionResult] = None
 
+    # LLM validation result
+    validation_result: Optional[ValidationResult] = None
+
     # Quest tracking (also stored in submission_result.quest_id if quest ran during protocol evaluation)
     evidence_quest_id: Optional[str] = None
     evidence_quest_completed: bool = False
@@ -767,7 +787,7 @@ class FileReadRecord(BaseModel):
     path: str
     relevance_score: float = 0.0
     summary: Optional[str] = None
-    read_at: datetime = Field(default_factory=datetime.utcnow)
+    read_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class TechStack(BaseModel):
@@ -838,7 +858,7 @@ class WSMessage(BaseModel):
     type: WSMessageType
     agent_id: str
     data: dict[str, Any]
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # === Sandbox ===

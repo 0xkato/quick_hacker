@@ -1,0 +1,200 @@
+"""Tests for LLM validator."""
+from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import Mock, patch, AsyncMock
+
+import pytest
+from models.schemas import (
+    Finding,
+    Evidence,
+    ProofChecklist,
+    ChecklistItem,
+    ChecklistStatus,
+    Disposition,
+    Severity,
+    VulnerabilityCategory,
+    ValidationResult,
+    InputChannel,
+)
+from services.classification.classifier import ClassificationResult
+from services.validation.llm_validator import LLMFindingValidator
+
+
+@pytest.fixture
+def mock_finding():
+    """Create a basic finding for testing."""
+    return Finding(
+        id="test-1",
+        agent_id="agent-1",
+        repo_id="repo-1",
+        severity=Severity.HIGH,
+        title="SQL Injection",
+        description="SQL injection vulnerability",
+        file_path="/src/main.py",
+        line_start=10,
+        vulnerability_type="sql_injection",
+        confidence=0.9,
+        created_at=datetime.now(UTC),
+        category=VulnerabilityCategory.SQL_INJECTION,
+    )
+
+
+@pytest.fixture
+def mock_evidence():
+    """Create basic evidence."""
+    return Evidence(
+        finding_id="test-1",
+        snippet="user_input = request.args.get('id')\nquery = f'SELECT * FROM users WHERE id = {user_input}'",
+        input_channel=InputChannel.network,
+        input_channel_deterministic=True,
+    )
+
+
+@pytest.fixture
+def mock_classification():
+    """Create a classification result with full proof checklist."""
+    return ClassificationResult(
+        disposition=Disposition.VALID_SECURITY_ISSUE,
+        classification_confidence=95,
+        exploit_confidence=90,
+        proof_checklist=ProofChecklist(
+            source_controlled_input=ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Network input from request.args",
+            ),
+            sink_present=ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="SQL query execution",
+            ),
+            dataflow_evidenced=ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Direct flow from input to query",
+            ),
+            reachable=ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Route is publicly accessible",
+            ),
+            boundary_crossed=ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Trust boundary crossed",
+            ),
+            not_only_misconfig=ChecklistItem(
+                value=True,
+                status=ChecklistStatus.PROVEN,
+                reason="Code-level vulnerability",
+            ),
+        ),
+        reasoning=["Clear SQL injection pattern", "User input flows directly to query"],
+        category=VulnerabilityCategory.SQL_INJECTION,
+    )
+
+
+def test_llm_validator_initialization():
+    """Verify initialization with API key, repo_root, and custom model."""
+    api_key = "test-api-key"
+    repo_root = Path("/test/repo")
+    model = "claude-opus-4-5-20251101"
+
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+        model=model,
+    )
+
+    # Verify attributes are set correctly
+    assert validator.repo_root == repo_root
+    assert validator.model == model
+    # Verify Anthropic client was created (we'll check this indirectly)
+    assert hasattr(validator, 'client')
+    # Verify tools are initialized
+    assert hasattr(validator, 'tools')
+    assert isinstance(validator.tools, dict)
+
+
+def test_llm_validator_default_model():
+    """Verify default model is claude-sonnet-3-5-20241022."""
+    api_key = "test-api-key"
+    repo_root = Path("/test/repo")
+
+    # Initialize without specifying model
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+    )
+
+    # Verify default model is set
+    assert validator.model == "claude-sonnet-3-5-20241022"
+
+
+@pytest.mark.asyncio
+async def test_validate_timeout(mock_finding, mock_evidence, mock_classification):
+    """Verify timeout handling returns is_valid=False with timeout category."""
+    api_key = "test-api-key"
+    repo_root = Path("/test/repo")
+
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+    )
+
+    # Create a threat model profile mock
+    threat_model_profile = Mock()
+
+    # Call validate with very short timeout (0.1 seconds)
+    result = await validator.validate(
+        finding=mock_finding,
+        evidence=mock_evidence,
+        classification=mock_classification,
+        threat_model_profile=threat_model_profile,
+        criticism_level="high",
+        timeout_seconds=0.1,
+    )
+
+    # Verify timeout handling
+    assert isinstance(result, ValidationResult)
+    assert result.is_valid is False
+    assert "timeout" in result.categories
+    assert result.confidence == 0
+
+
+@pytest.mark.asyncio
+async def test_validate_error_handling(mock_finding, mock_evidence, mock_classification):
+    """Verify error handling returns is_valid=False with error category."""
+    api_key = "test-api-key"
+    repo_root = Path("/test/repo")
+
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+    )
+
+    # Create a threat model profile mock
+    threat_model_profile = Mock()
+
+    # Mock _run_validation to raise an exception
+    async def mock_run_validation(*args, **kwargs):
+        raise RuntimeError("Test error")
+
+    validator._run_validation = mock_run_validation
+
+    # Call validate
+    result = await validator.validate(
+        finding=mock_finding,
+        evidence=mock_evidence,
+        classification=mock_classification,
+        threat_model_profile=threat_model_profile,
+        criticism_level="high",
+        timeout_seconds=30,
+    )
+
+    # Verify error handling
+    assert isinstance(result, ValidationResult)
+    assert result.is_valid is False
+    assert "error" in result.categories
+    assert result.confidence == 0
+    assert any("Test error" in reason for reason in result.reasoning)

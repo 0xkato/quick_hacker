@@ -6,6 +6,7 @@ import type { Finding } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
 import { SubmissionBadge } from '@/components/FindingsList/SubmissionBadge';
 import { SubmissionPanel } from '@/components/FindingDrawer/SubmissionPanel';
+import { ValidationBadge } from '@/components/ValidationBadge';
 
 // Import constants from FindingsList
 const DISPOSITION_COLORS: Record<string, string> = {
@@ -182,6 +183,12 @@ export function FindingDrawer({ finding, onClose, onNavigateToFile }: FindingDra
               )}
             </div>
             <h2 className="text-vsc-base text-vsc-text font-medium">{finding.title}</h2>
+            {/* Validation badge */}
+            {finding.validation_result && (
+              <div className="mt-2">
+                <ValidationBadge validationResult={finding.validation_result} />
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}

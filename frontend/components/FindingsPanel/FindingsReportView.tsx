@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { X, FileCode, ExternalLink } from 'lucide-react';
 import type { Finding } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
 import { SubmissionBadge } from '@/components/FindingsList/SubmissionBadge';
 import { SubmissionPanel } from '@/components/FindingDrawer/SubmissionPanel';
+import { ValidationBadge } from '@/components/ValidationBadge';
 
 interface FindingsReportViewProps {
   findings: Finding[];
@@ -48,6 +49,9 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
 const REPORTABLE_DISPOSITIONS = new Set(['valid_security_issue', 'bug']);
 
 export function FindingsReportView({ findings, onClose, onNavigateToFile }: FindingsReportViewProps) {
+  // State for validation filter
+  const [showValidatedOnly, setShowValidatedOnly] = useState(false);
+
   // ESC key handler
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -66,8 +70,14 @@ export function FindingsReportView({ findings, onClose, onNavigateToFile }: Find
       document.body.style.overflow = '';
     };
   }, []);
+
+  // Filter findings by validation status
+  const filteredByValidation = showValidatedOnly
+    ? findings.filter(f => f.validation_result?.is_valid === true)
+    : findings;
+
   // Sort by severity
-  const sortedFindings = [...findings].sort((a, b) => {
+  const sortedFindings = [...filteredByValidation].sort((a, b) => {
     const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
     const aOrder = a.severity ? severityOrder[a.severity] ?? 999 : 999;
     const bOrder = b.severity ? severityOrder[b.severity] ?? 999 : 999;
@@ -99,20 +109,34 @@ export function FindingsReportView({ findings, onClose, onNavigateToFile }: Find
         }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-vsc-border-subtle">
-          <div>
-            <h2 className="text-vsc-base text-vsc-text font-medium">All Findings Report</h2>
-            <p className="text-vsc-sm text-vsc-text-muted mt-1">
-              {findings.length} {findings.length === 1 ? 'finding' : 'findings'}
-            </p>
+        <div className="px-6 py-4 border-b border-vsc-border-subtle">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-vsc-base text-vsc-text font-medium">All Findings Report</h2>
+              <p className="text-vsc-sm text-vsc-text-muted mt-1">
+                {sortedFindings.length} of {findings.length} {findings.length === 1 ? 'finding' : 'findings'}
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="btn-icon ml-4"
+              title="Close (Esc)"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="btn-icon ml-4"
-            title="Close (Esc)"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {/* Filter Controls */}
+          <div className="mt-3 flex items-center gap-3">
+            <label className="flex items-center gap-2 text-vsc-sm text-vsc-text cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showValidatedOnly}
+                onChange={(e) => setShowValidatedOnly(e.target.checked)}
+                className="w-4 h-4 rounded border-vsc-border bg-vsc-input text-vsc-accent focus:ring-2 focus:ring-vsc-accent"
+              />
+              <span>Show only LLM-validated findings</span>
+            </label>
+          </div>
         </div>
 
         {/* Findings - scrollable */}
@@ -216,6 +240,12 @@ export function FindingsReportView({ findings, onClose, onNavigateToFile }: Find
                 )}
               </div>
               <h3 className="text-vsc-base text-vsc-text font-medium">{finding.title}</h3>
+              {/* Validation badge */}
+              {finding.validation_result && (
+                <div className="mt-2">
+                  <ValidationBadge validationResult={finding.validation_result} />
+                </div>
+              )}
             </div>
 
             {/* File path */}

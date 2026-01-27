@@ -497,9 +497,10 @@ Be highly skeptical. Default to INVALID unless you can prove it's exploitable.""
         criticism_level: str,
     ) -> ValidationResult:
         """
-        Run the actual validation logic (stub for now).
+        Run the actual validation logic with full agentic loop.
 
-        This will be implemented in later tasks with the full agentic loop.
+        Orchestrates multi-turn conversation with Anthropic API, allowing the LLM
+        to use tools to investigate the codebase and reach a validation decision.
 
         Args:
             finding: The finding to validate
@@ -509,15 +510,102 @@ Be highly skeptical. Default to INVALID unless you can prove it's exploitable.""
             criticism_level: Criticism level
 
         Returns:
-            ValidationResult
+            ValidationResult with validation decision
         """
-        # Stub: simulate work that takes time
-        await asyncio.sleep(10)
+        # Build system prompt and tool definitions
+        system_prompt = self._build_validation_prompt(
+            finding=finding,
+            evidence=evidence,
+            classification=classification,
+            threat_model_profile=threat_model_profile,
+            criticism_level=criticism_level,
+        )
+        tools = self._get_tool_definitions()
 
+        # Initialize conversation
+        messages = [{"role": "user", "content": "Begin investigation."}]
+        max_turns = 10
+        investigation_steps = []
+
+        # Main agentic loop
+        for turn in range(max_turns):
+            try:
+                # Call Anthropic API (synchronous call from async method)
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    system=system_prompt,
+                    messages=messages,
+                    tools=tools,
+                )
+
+                # Handle end_turn - LLM has finished investigation
+                if response.stop_reason == "end_turn":
+                    # Find text block in response
+                    for block in response.content:
+                        if hasattr(block, 'type') and block.type == "text":
+                            return self._parse_validation_response(block.text)
+
+                    # No text block found - error
+                    logger.error("LLM ended turn without text response")
+                    return ValidationResult(
+                        is_valid=False,
+                        reasoning=[
+                            "LLM ended turn without providing decision",
+                            "Missing expected response format"
+                        ],
+                        categories=["error"],
+                        confidence=0,
+                        timestamp=datetime.now(UTC),
+                    )
+
+                # Handle tool_use - LLM wants to use tools
+                elif response.stop_reason == "tool_use":
+                    tool_results = []
+
+                    # Process each tool use in response
+                    for block in response.content:
+                        if hasattr(block, 'type') and block.type == "tool_use":
+                            # Track investigation step
+                            investigation_steps.append(f"{block.name}({block.input})")
+
+                            # Execute tool
+                            result = await self._execute_tool_call(block)
+                            tool_results.append(result)
+
+                    # Append assistant message with tool use
+                    messages.append({"role": "assistant", "content": response.content})
+
+                    # Append user message with tool results
+                    messages.append({"role": "user", "content": tool_results})
+
+                # Handle unexpected stop reason
+                else:
+                    logger.warning(f"Unexpected stop_reason: {response.stop_reason}")
+                    return ValidationResult(
+                        is_valid=False,
+                        reasoning=[
+                            f"Unexpected API stop_reason: {response.stop_reason}",
+                            "Could not complete validation"
+                        ],
+                        categories=["error"],
+                        confidence=0,
+                        timestamp=datetime.now(UTC),
+                    )
+
+            except Exception as e:
+                logger.error(f"Error in validation loop turn {turn}: {e}")
+                raise  # Re-raise to be caught by validate()
+
+        # Max turns exceeded - conservative filtering
         return ValidationResult(
-            is_valid=True,
-            reasoning=["Stub implementation"],
-            categories=["security_issue"],
-            confidence=95,
+            is_valid=False,
+            reasoning=[
+                f"Investigation exceeded maximum {max_turns} tool use rounds",
+                "Could not reach conclusion - filtered conservatively"
+            ],
+            categories=["inconclusive"],
+            investigation_steps=investigation_steps,
+            confidence=0,
             timestamp=datetime.now(UTC),
         )

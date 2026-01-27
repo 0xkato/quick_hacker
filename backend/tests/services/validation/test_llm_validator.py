@@ -1,4 +1,5 @@
 """Tests for LLM validator."""
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
@@ -143,6 +144,19 @@ async def test_validate_timeout(mock_finding, mock_evidence, mock_classification
         anthropic_api_key=api_key,
         repo_root=repo_root,
     )
+
+    # Mock _run_validation to sleep longer than timeout
+    async def slow_validation(*args, **kwargs):
+        await asyncio.sleep(1.0)  # Sleep longer than timeout
+        return ValidationResult(
+            is_valid=True,
+            reasoning=["Should not reach here"],
+            categories=["should_not_reach"],
+            confidence=95,
+            timestamp=datetime.now(UTC),
+        )
+
+    validator._run_validation = slow_validation
 
     # Create a threat model profile mock
     threat_model_profile = Mock()
@@ -705,3 +719,139 @@ def test_parse_validation_response_malformed():
     assert isinstance(result, ValidationResult)
     assert result.is_valid is False
     assert "parse" in result.categories[0].lower()
+
+
+# Agentic Loop Tests
+
+
+@pytest.mark.asyncio
+async def test_run_validation_with_tool_use(mock_finding, mock_evidence, mock_classification):
+    """Test multi-turn conversation with tool use."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test file for tool to read
+        test_file = os.path.join(tmpdir, "app.py")
+        with open(test_file, "w") as f:
+            f.write("def handler():\n    exec(user_input)\n")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        # Mock Anthropic API response structures
+        class MockTextBlock:
+            def __init__(self, text):
+                self.type = "text"
+                self.text = text
+
+        class MockToolUse:
+            def __init__(self, name, tool_input, tool_id):
+                self.type = "tool_use"
+                self.name = name
+                self.input = tool_input
+                self.id = tool_id
+
+        class MockMessage:
+            def __init__(self, stop_reason, content):
+                self.stop_reason = stop_reason
+                self.content = content
+
+        # Track call count
+        call_count = 0
+
+        def mock_create(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+
+            # First call: Return tool_use (LLM wants to read file)
+            if call_count == 1:
+                tool_use = MockToolUse("read_file", {"file_path": "app.py"}, "tool_1")
+                return MockMessage("tool_use", [tool_use])
+
+            # Second call: Return end_turn with decision
+            elif call_count == 2:
+                decision_text = """DECISION: VALID
+CATEGORY: security_issue
+REASONING:
+- exec() is reachable from handler
+- User input flows directly to exec
+- Clear security vulnerability"""
+                text_block = MockTextBlock(decision_text)
+                return MockMessage("end_turn", [text_block])
+
+        # Mock the client.messages.create call
+        validator.client.messages.create = mock_create
+
+        # Create threat model profile mock
+        threat_model_profile = Mock()
+
+        # Call _run_validation
+        result = await validator._run_validation(
+            finding=mock_finding,
+            evidence=mock_evidence,
+            classification=mock_classification,
+            threat_model_profile=threat_model_profile,
+            criticism_level="high"
+        )
+
+        # Verify result
+        assert isinstance(result, ValidationResult)
+        assert call_count == 2  # Should have made 2 API calls
+        assert result.is_valid is True
+        assert result.categories == ["security_issue"]
+
+
+@pytest.mark.asyncio
+async def test_run_validation_max_turns(mock_finding, mock_evidence, mock_classification):
+    """Test max turns limit prevents infinite loops."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        # Mock Anthropic API response structures
+        class MockToolUse:
+            def __init__(self, name, tool_input, tool_id):
+                self.type = "tool_use"
+                self.name = name
+                self.input = tool_input
+                self.id = tool_id
+
+        class MockMessage:
+            def __init__(self, stop_reason, content):
+                self.stop_reason = stop_reason
+                self.content = content
+
+        # Track call count
+        call_count = 0
+
+        def mock_create(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+
+            # Always return tool_use (never finishes)
+            tool_use = MockToolUse("read_file", {"file_path": "app.py"}, f"tool_{call_count}")
+            return MockMessage("tool_use", [tool_use])
+
+        # Mock the client.messages.create call
+        validator.client.messages.create = mock_create
+
+        # Create threat model profile mock
+        threat_model_profile = Mock()
+
+        # Call _run_validation
+        result = await validator._run_validation(
+            finding=mock_finding,
+            evidence=mock_evidence,
+            classification=mock_classification,
+            threat_model_profile=threat_model_profile,
+            criticism_level="high"
+        )
+
+        # Verify result
+        assert isinstance(result, ValidationResult)
+        assert result.is_valid is False
+        assert call_count == 10  # Should have hit max turns limit
+        assert any("exceeded" in reason.lower() for reason in result.reasoning)
+        assert "inconclusive" in result.categories

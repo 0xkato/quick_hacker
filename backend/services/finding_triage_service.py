@@ -25,14 +25,20 @@ from models.schemas import (
     ProtocolPolicy,
     TriagePolicy,
     PolicyDecision,
+    Evidence,
+    ValidationResult,
+    SubmissionResult,
 )
 from services.evidence import EvidenceGatherer, EvidenceQuestOrchestrator
 from services.classification import StrictClassifier
+from services.classification.classifier import ClassificationResult
 from services.protocol_evaluator import ProtocolEvaluator
 from services.protocol_policies import ProtocolPolicyLoader
 from services.deduplicator import deduplicate_findings
 from services.policy_evaluator import PolicyEvaluator
 from services.finding_filters import PathFilter, ProductionRelevanceFilter
+from services.validation.pre_validation_gates import PreValidationGates
+from services.validation.llm_validator import LLMFindingValidator
 from protocol_config.protocol_config import ProtocolConfig
 
 
@@ -51,6 +57,8 @@ class FindingTriageService:
         self.quest_orchestrator: Optional[EvidenceQuestOrchestrator] = None
         self.protocol_evaluator = ProtocolEvaluator()
         self.policy_evaluator = PolicyEvaluator()
+        self.pre_gates = PreValidationGates()
+        self.llm_validators = {}  # Cache validators per config
 
         # Initialize LLM-based production relevance filter
         api_key = ProtocolConfig.ANTHROPIC_API_KEY
@@ -59,6 +67,115 @@ class FindingTriageService:
             self.production_filter = ProductionRelevanceFilter(api_key)
         else:
             print("⚠️  Warning: No ANTHROPIC_API_KEY - production filter disabled")
+
+    async def triage_finding(
+        self,
+        finding: Finding,
+        evidence: Evidence,
+        classification: ClassificationResult,
+        policy: ProtocolPolicy
+    ) -> SubmissionResult:
+        """
+        Triage a single finding through validation and protocol gates.
+
+        This is the new LLM-validation-aware pipeline:
+        1. Pre-validation gates (fast rule-based checks)
+        2. LLM validation (expensive agentic investigation)
+        3. Protocol evaluation (existing submission logic)
+
+        Args:
+            finding: The finding to triage
+            evidence: Evidence bundle for the finding
+            classification: Classification result with disposition and checklist
+            policy: Protocol policy with submission rules
+
+        Returns:
+            SubmissionResult with submission decision
+        """
+        # Step 1: Pre-validation gates (fast rule-based checks)
+        if policy.enable_llm_validation:
+            gate_result = self.pre_gates.check_gates(finding, evidence, classification, policy)
+
+            if gate_result:
+                # Fast reject - convert to SubmissionResult
+                return self._validation_to_submission_result(gate_result, policy.id)
+
+        # Step 2: LLM validation (expensive agentic investigation)
+        validation_result = None
+        if policy.enable_llm_validation:
+            # Get or create validator
+            config_key = (
+                policy.validation_model or "claude-sonnet-4-20250514",
+                policy.validation_criticism_level
+            )
+
+            if config_key not in self.llm_validators:
+                api_key = ProtocolConfig.ANTHROPIC_API_KEY
+                if not api_key:
+                    # No API key - skip validation and continue to protocol evaluation
+                    pass
+                else:
+                    self.llm_validators[config_key] = LLMFindingValidator(
+                        anthropic_api_key=api_key,
+                        model=config_key[0],
+                        repo_root="."
+                    )
+
+            validator = self.llm_validators.get(config_key)
+
+            # Run validation if validator is available
+            if validator:
+                validation_result = await validator.validate(
+                    finding=finding,
+                    evidence=evidence,
+                    classification=classification,
+                    threat_model_profile=policy.default_threat_model_preset,
+                    criticism_level=config_key[1],
+                    timeout_seconds=policy.validation_timeout_seconds
+                )
+
+                # Store on finding for later reference
+                finding.validation_result = validation_result
+
+                # If INVALID, convert to submission result and return early
+                if not validation_result.is_valid:
+                    return self._validation_to_submission_result(validation_result, policy.id)
+
+        # Step 3: Protocol evaluation (existing logic)
+        submission_result, new_disposition = self.protocol_evaluator.evaluate(
+            finding=finding,
+            evidence=evidence,
+            classification=classification,
+            policy=policy
+        )
+
+        # Update disposition if evaluator changed it
+        if new_disposition:
+            finding.disposition = new_disposition
+
+        # Add validation context to reasons if validated
+        if validation_result and validation_result.is_valid:
+            confidence_str = f"{validation_result.confidence}%" if validation_result.confidence else "N/A"
+            submission_result.reasons.insert(0, f"LLM validation: VALID (confidence: {confidence_str})")
+
+        return submission_result
+
+    def _validation_to_submission_result(
+        self,
+        validation: ValidationResult,
+        protocol_id: str
+    ) -> SubmissionResult:
+        """Convert ValidationResult to SubmissionResult for backward compatibility."""
+        return SubmissionResult(
+            protocol_id=protocol_id,
+            decision=SubmissionDecision.DONT_SUBMIT,
+            reasons=[
+                f"LLM validation: {'VALID' if validation.is_valid else 'INVALID'}",
+                *validation.reasoning
+            ],
+            missing_evidence=[],
+            suggested_next_steps=[]
+        )
 
     def _classification_from_disposition(
         self, disposition: Disposition | None, current: FindingClassification

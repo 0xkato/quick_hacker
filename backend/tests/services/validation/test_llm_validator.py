@@ -301,7 +301,7 @@ def test_get_tool_definitions():
 
     # Verify grep_code tool
     grep_code_tool = tools_by_name["grep_code"]
-    assert grep_code_tool["description"] == "Search codebase for patterns"
+    assert grep_code_tool["description"] == "Search codebase for patterns using regex"
     assert "input_schema" in grep_code_tool
     assert grep_code_tool["input_schema"]["type"] == "object"
     assert "pattern" in grep_code_tool["input_schema"]["properties"]

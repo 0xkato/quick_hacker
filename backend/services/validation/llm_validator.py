@@ -83,7 +83,7 @@ class LLMFindingValidator:
                     "properties": {
                         "file_path": {
                             "type": "string",
-                            "description": "Path to the file to read"
+                            "description": "Path to file relative to repo root"
                         }
                     },
                     "required": ["file_path"]
@@ -91,7 +91,7 @@ class LLMFindingValidator:
             },
             {
                 "name": "grep_code",
-                "description": "Search codebase for patterns",
+                "description": "Search codebase for patterns using regex",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -101,7 +101,7 @@ class LLMFindingValidator:
                         },
                         "glob": {
                             "type": "string",
-                            "description": "Optional glob pattern to filter files"
+                            "description": "Optional glob pattern to filter files (e.g., '*.py')"
                         }
                     },
                     "required": ["pattern"]
@@ -115,7 +115,7 @@ class LLMFindingValidator:
                     "properties": {
                         "pattern": {
                             "type": "string",
-                            "description": "Glob pattern to match files"
+                            "description": "Glob pattern (e.g., '**/*.py', 'src/**/*test*.py')"
                         }
                     },
                     "required": ["pattern"]

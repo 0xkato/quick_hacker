@@ -265,3 +265,57 @@ def test_build_validation_prompt_medium_criticism(mock_finding, mock_evidence, m
     # Verify medium criticism level is present
     assert "Criticism Level: MEDIUM" in prompt
     assert "Criticism Level: HIGH" not in prompt
+
+
+def test_get_tool_definitions():
+    """Verify tool definitions are formatted correctly for Anthropic API."""
+    api_key = "test-api-key"
+    repo_root = "/test/repo"
+
+    validator = LLMFindingValidator(
+        anthropic_api_key=api_key,
+        repo_root=repo_root,
+    )
+
+    # Call _get_tool_definitions
+    tool_defs = validator._get_tool_definitions()
+
+    # Verify we get a list with 3 tools
+    assert isinstance(tool_defs, list)
+    assert len(tool_defs) == 3
+
+    # Extract tools by name for easier testing
+    tools_by_name = {tool["name"]: tool for tool in tool_defs}
+    assert "read_file" in tools_by_name
+    assert "grep_code" in tools_by_name
+    assert "glob_files" in tools_by_name
+
+    # Verify read_file tool
+    read_file_tool = tools_by_name["read_file"]
+    assert read_file_tool["description"] == "Read source file contents"
+    assert "input_schema" in read_file_tool
+    assert read_file_tool["input_schema"]["type"] == "object"
+    assert "file_path" in read_file_tool["input_schema"]["properties"]
+    assert read_file_tool["input_schema"]["properties"]["file_path"]["type"] == "string"
+    assert "file_path" in read_file_tool["input_schema"]["required"]
+
+    # Verify grep_code tool
+    grep_code_tool = tools_by_name["grep_code"]
+    assert grep_code_tool["description"] == "Search codebase for patterns"
+    assert "input_schema" in grep_code_tool
+    assert grep_code_tool["input_schema"]["type"] == "object"
+    assert "pattern" in grep_code_tool["input_schema"]["properties"]
+    assert grep_code_tool["input_schema"]["properties"]["pattern"]["type"] == "string"
+    assert "glob" in grep_code_tool["input_schema"]["properties"]
+    assert grep_code_tool["input_schema"]["properties"]["glob"]["type"] == "string"
+    assert "pattern" in grep_code_tool["input_schema"]["required"]
+    assert "glob" not in grep_code_tool["input_schema"]["required"]
+
+    # Verify glob_files tool
+    glob_files_tool = tools_by_name["glob_files"]
+    assert glob_files_tool["description"] == "Find files by name pattern"
+    assert "input_schema" in glob_files_tool
+    assert glob_files_tool["input_schema"]["type"] == "object"
+    assert "pattern" in glob_files_tool["input_schema"]["properties"]
+    assert glob_files_tool["input_schema"]["properties"]["pattern"]["type"] == "string"
+    assert "pattern" in glob_files_tool["input_schema"]["required"]

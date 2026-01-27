@@ -67,6 +67,62 @@ class LLMFindingValidator:
         """Stub for glob_files tool."""
         return f"Files matching: {pattern}"
 
+    def _get_tool_definitions(self) -> list[dict]:
+        """
+        Get tool definitions in Anthropic API format.
+
+        Returns:
+            List of tool definition dictionaries with name, description, and input_schema
+        """
+        return [
+            {
+                "name": "read_file",
+                "description": "Read source file contents",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file to read"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            {
+                "name": "grep_code",
+                "description": "Search codebase for patterns",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regex pattern to search for"
+                        },
+                        "glob": {
+                            "type": "string",
+                            "description": "Optional glob pattern to filter files"
+                        }
+                    },
+                    "required": ["pattern"]
+                }
+            },
+            {
+                "name": "glob_files",
+                "description": "Find files by name pattern",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob pattern to match files"
+                        }
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        ]
+
     def _build_validation_prompt(
         self,
         finding: Finding,

@@ -5,8 +5,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional, Any
 
-from anthropic import Anthropic
-
 from models.schemas import Finding, Evidence, ValidationResult
 from services.classification.classifier import ClassificationResult
 
@@ -24,7 +22,7 @@ class LLMFindingValidator:
     def __init__(
         self,
         anthropic_api_key: str,
-        repo_root: Path,
+        repo_root: str,
         model: str = "claude-sonnet-3-5-20241022",
     ):
         """
@@ -39,10 +37,14 @@ class LLMFindingValidator:
             RuntimeError: If anthropic package not installed
         """
         try:
-            self.client = Anthropic(api_key=anthropic_api_key)
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize Anthropic client: {e}")
+            from anthropic import Anthropic
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "LLMFindingValidator requires the 'anthropic' dependency. "
+                "Install it or disable LLM validation."
+            ) from exc
 
+        self.client = Anthropic(api_key=anthropic_api_key)
         self.repo_root = Path(repo_root)
         self.model = model
 
@@ -108,8 +110,8 @@ class LLMFindingValidator:
             return ValidationResult(
                 is_valid=False,
                 reasoning=[
-                    f"Validation timed out after {timeout_seconds} seconds",
-                    "Unable to complete validation within time limit",
+                    f"Validation timeout after {timeout_seconds}s",
+                    "Insufficient time to prove exploitability - filtered conservatively",
                 ],
                 categories=["timeout"],
                 confidence=0,
@@ -120,8 +122,8 @@ class LLMFindingValidator:
             return ValidationResult(
                 is_valid=False,
                 reasoning=[
-                    f"Error during validation: {str(e)}",
-                    "Unable to complete validation due to error",
+                    f"Validation error: {str(e)[:200]}",
+                    "Could not complete investigation - filtered conservatively",
                 ],
                 categories=["error"],
                 confidence=0,

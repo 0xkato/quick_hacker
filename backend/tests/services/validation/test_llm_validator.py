@@ -97,7 +97,7 @@ def mock_classification():
 def test_llm_validator_initialization():
     """Verify initialization with API key, repo_root, and custom model."""
     api_key = "test-api-key"
-    repo_root = Path("/test/repo")
+    repo_root = "/test/repo"
     model = "claude-opus-4-5-20251101"
 
     validator = LLMFindingValidator(
@@ -107,7 +107,7 @@ def test_llm_validator_initialization():
     )
 
     # Verify attributes are set correctly
-    assert validator.repo_root == repo_root
+    assert validator.repo_root == Path(repo_root)
     assert validator.model == model
     # Verify Anthropic client was created (we'll check this indirectly)
     assert hasattr(validator, 'client')
@@ -119,7 +119,7 @@ def test_llm_validator_initialization():
 def test_llm_validator_default_model():
     """Verify default model is claude-sonnet-3-5-20241022."""
     api_key = "test-api-key"
-    repo_root = Path("/test/repo")
+    repo_root = "/test/repo"
 
     # Initialize without specifying model
     validator = LLMFindingValidator(
@@ -135,7 +135,7 @@ def test_llm_validator_default_model():
 async def test_validate_timeout(mock_finding, mock_evidence, mock_classification):
     """Verify timeout handling returns is_valid=False with timeout category."""
     api_key = "test-api-key"
-    repo_root = Path("/test/repo")
+    repo_root = "/test/repo"
 
     validator = LLMFindingValidator(
         anthropic_api_key=api_key,
@@ -160,13 +160,14 @@ async def test_validate_timeout(mock_finding, mock_evidence, mock_classification
     assert result.is_valid is False
     assert "timeout" in result.categories
     assert result.confidence == 0
+    assert "Validation timeout" in result.reasoning[0]
 
 
 @pytest.mark.asyncio
 async def test_validate_error_handling(mock_finding, mock_evidence, mock_classification):
     """Verify error handling returns is_valid=False with error category."""
     api_key = "test-api-key"
-    repo_root = Path("/test/repo")
+    repo_root = "/test/repo"
 
     validator = LLMFindingValidator(
         anthropic_api_key=api_key,

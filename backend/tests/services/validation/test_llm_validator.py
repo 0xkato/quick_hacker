@@ -2,6 +2,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
+import tempfile
+import os
 
 import pytest
 from models.schemas import (
@@ -319,3 +321,163 @@ def test_get_tool_definitions():
     assert "pattern" in glob_files_tool["input_schema"]["properties"]
     assert glob_files_tool["input_schema"]["properties"]["pattern"]["type"] == "string"
     assert "pattern" in glob_files_tool["input_schema"]["required"]
+
+
+# Tool Execution Tests
+
+
+def test_tool_read_file_success():
+    """Test read_file tool reads file successfully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test file
+        test_file = os.path.join(tmpdir, "test.py")
+        with open(test_file, "w") as f:
+            f.write("def vulnerable_function(user_input):\n    exec(user_input)\n")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_read_file("test.py")
+
+        assert "def vulnerable_function" in result
+        assert "exec(user_input)" in result
+
+
+def test_tool_read_file_not_found():
+    """Test read_file tool handles missing file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_read_file("nonexistent.py")
+
+        assert "Error: File not found" in result
+
+
+def test_tool_read_file_size_limit():
+    """Test read_file tool respects size limit."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create large file
+        test_file = os.path.join(tmpdir, "large.py")
+        with open(test_file, "w") as f:
+            f.write("x" * 200000)  # 200KB
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_read_file("large.py")
+
+        # Should be truncated to 100KB
+        assert len(result) <= 100000
+
+
+def test_tool_grep_code_basic():
+    """Test grep_code tool finds pattern."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files
+        test_file1 = os.path.join(tmpdir, "app.py")
+        with open(test_file1, "w") as f:
+            f.write("def handler():\n    exec(user_input)\n")
+
+        test_file2 = os.path.join(tmpdir, "utils.py")
+        with open(test_file2, "w") as f:
+            f.write("def helper():\n    print('safe')\n")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_grep_code("exec")
+
+        assert "app.py" in result
+        assert "exec(user_input)" in result
+        assert "utils.py" not in result
+
+
+def test_tool_grep_code_with_glob():
+    """Test grep_code tool with glob filter."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files
+        test_py = os.path.join(tmpdir, "test.py")
+        with open(test_py, "w") as f:
+            f.write("exec(cmd)")
+
+        test_js = os.path.join(tmpdir, "test.js")
+        with open(test_js, "w") as f:
+            f.write("exec(cmd)")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_grep_code("exec", glob="*.py")
+
+        assert "test.py" in result
+        assert "test.js" not in result
+
+
+def test_tool_glob_files():
+    """Test glob_files tool finds files by pattern."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files
+        os.makedirs(os.path.join(tmpdir, "src"))
+        test_file1 = os.path.join(tmpdir, "app.py")
+        with open(test_file1, "w") as f:
+            f.write("content")
+
+        test_file2 = os.path.join(tmpdir, "src", "utils.py")
+        with open(test_file2, "w") as f:
+            f.write("content")
+
+        test_file3 = os.path.join(tmpdir, "README.md")
+        with open(test_file3, "w") as f:
+            f.write("content")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_glob_files("**/*.py")
+
+        assert "app.py" in result
+        assert "utils.py" in result or "src/utils.py" in result
+        assert "README.md" not in result
+
+
+def test_tool_glob_files_specific_pattern():
+    """Test glob_files tool with specific pattern."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files
+        test_file1 = os.path.join(tmpdir, "test_app.py")
+        with open(test_file1, "w") as f:
+            f.write("content")
+
+        test_file2 = os.path.join(tmpdir, "app.py")
+        with open(test_file2, "w") as f:
+            f.write("content")
+
+        test_file3 = os.path.join(tmpdir, "test_utils.py")
+        with open(test_file3, "w") as f:
+            f.write("content")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_glob_files("test_*.py")
+
+        # Split result by lines to check exact matches
+        result_lines = result.split("\n")
+        assert "test_app.py" in result_lines
+        assert "test_utils.py" in result_lines
+        assert "app.py" not in result_lines

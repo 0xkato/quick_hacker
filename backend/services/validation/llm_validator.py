@@ -1,6 +1,8 @@
 """LLM-based finding validator using Anthropic API with tool use."""
 import asyncio
+import glob as glob_module
 import logging
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional, Any
@@ -56,16 +58,83 @@ class LLMFindingValidator:
         }
 
     def _tool_read_file(self, file_path: str) -> str:
-        """Stub for read_file tool."""
-        return f"File content: {file_path}"
+        """Read file from repo."""
+        full_path = self.repo_root / file_path
+
+        if not full_path.exists():
+            return f"Error: File not found: {file_path}"
+
+        if not full_path.is_file():
+            return f"Error: Not a file: {file_path}"
+
+        try:
+            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read(100000)  # Limit to 100KB
+            return content
+        except Exception as e:
+            return f"Error reading file: {str(e)}"
 
     def _tool_grep_code(self, pattern: str, glob: Optional[str] = None) -> str:
-        """Stub for grep_code tool."""
-        return f"Grep results for: {pattern}"
+        """Search codebase using ripgrep."""
+        try:
+            cmd = ["rg", "--no-heading", "--line-number", pattern, str(self.repo_root)]
+
+            if glob:
+                cmd.extend(["--glob", glob])
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            # Return code 0 = found matches, 1 = no matches, 2+ = error
+            if result.returncode == 0:
+                output = result.stdout[:5000]  # Limit to 5000 chars
+                return output
+            elif result.returncode == 1:
+                return "No matches found"
+            else:
+                return f"Error: {result.stderr[:500]}"
+
+        except FileNotFoundError:
+            return "Error: ripgrep (rg) not installed"
+        except subprocess.TimeoutExpired:
+            return "Error: Search timeout after 10 seconds"
+        except Exception as e:
+            return f"Error: {str(e)[:500]}"
 
     def _tool_glob_files(self, pattern: str) -> str:
-        """Stub for glob_files tool."""
-        return f"Files matching: {pattern}"
+        """Find files by glob pattern."""
+        try:
+            # Build full pattern path
+            full_pattern = str(self.repo_root / pattern)
+
+            # Find matching files
+            matches = glob_module.glob(full_pattern, recursive=True)
+
+            # Convert absolute paths to relative paths
+            relative_paths = []
+            for match in matches:
+                try:
+                    rel_path = Path(match).relative_to(self.repo_root)
+                    relative_paths.append(str(rel_path))
+                except ValueError:
+                    # Path is not relative to repo_root, skip it
+                    continue
+
+            # Limit to 100 files
+            if len(relative_paths) > 100:
+                limited_paths = relative_paths[:100]
+                additional = len(relative_paths) - 100
+                limited_paths.append(f"... ({additional} more files)")
+                return "\n".join(limited_paths)
+
+            return "\n".join(relative_paths) if relative_paths else "No files found"
+
+        except Exception as e:
+            return f"Error: {str(e)[:500]}"
 
     def _get_tool_definitions(self) -> list[dict]:
         """

@@ -557,3 +557,59 @@ def test_tool_glob_files_blocks_absolute_pattern():
 
     # Should reject absolute patterns
     assert "Error:" in result or "Pattern must be relative" in result
+
+
+# Tool Execution Dispatcher Tests
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_read_file():
+    """Test _execute_tool_call routes to read_file tool successfully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test file
+        test_file = os.path.join(tmpdir, "test.py")
+        with open(test_file, "w") as f:
+            f.write("exec(cmd)")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        # Create mock tool_use object
+        tool_use = Mock()
+        tool_use.name = "read_file"
+        tool_use.input = {"file_path": "test.py"}
+        tool_use.id = "tool_123"
+
+        # Execute tool call
+        result = await validator._execute_tool_call(tool_use)
+
+        # Verify result format
+        assert result["type"] == "tool_result"
+        assert result["tool_use_id"] == "tool_123"
+        assert "exec(cmd)" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_unknown_tool():
+    """Test _execute_tool_call handles unknown tool gracefully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        # Create mock tool_use with unknown tool
+        tool_use = Mock()
+        tool_use.name = "unknown_tool"
+        tool_use.input = {}
+        tool_use.id = "tool_456"
+
+        # Execute tool call
+        result = await validator._execute_tool_call(tool_use)
+
+        # Verify error handling
+        assert result["type"] == "tool_result"
+        assert result["tool_use_id"] == "tool_456"
+        assert "Unknown tool" in result["content"]

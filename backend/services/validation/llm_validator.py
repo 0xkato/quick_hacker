@@ -376,6 +376,45 @@ Be highly skeptical. Default to INVALID unless you can prove it's exploitable.""
                 timestamp=datetime.now(UTC),
             )
 
+    async def _execute_tool_call(self, tool_use) -> dict:
+        """
+        Execute a single tool call and return result.
+
+        Args:
+            tool_use: Tool use object with name, input, and id attributes
+
+        Returns:
+            Tool result dict with type, tool_use_id, and content
+        """
+        tool_name = tool_use.name
+        tool_input = tool_use.input
+        tool_id = tool_use.id
+
+        # Check if tool exists
+        if tool_name not in self.tools:
+            return {
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": f"Unknown tool: {tool_name}"
+            }
+
+        # Execute tool
+        try:
+            tool_fn = self.tools[tool_name]
+            result = tool_fn(**tool_input)
+            return {
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": result
+            }
+        except Exception as e:
+            logger.error(f"Tool execution error for {tool_name}: {e}")
+            return {
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": f"Tool error: {str(e)}"
+            }
+
     async def _run_validation(
         self,
         finding: Finding,

@@ -59,8 +59,22 @@ class LLMFindingValidator:
 
     def _tool_read_file(self, file_path: str) -> str:
         """Read file from repo."""
-        full_path = self.repo_root / file_path
+        try:
+            # Build full path and resolve to absolute canonical path
+            full_path = (self.repo_root / file_path).resolve()
+            repo_root_resolved = self.repo_root.resolve()
 
+            # SECURITY: Verify path is within repo_root
+            try:
+                # relative_to raises ValueError if path is not relative
+                full_path.relative_to(repo_root_resolved)
+            except ValueError:
+                return f"Error: Access denied - path outside repository: {file_path}"
+
+        except Exception as e:
+            return f"Error: Invalid path: {str(e)}"
+
+        # Now proceed with original logic
         if not full_path.exists():
             return f"Error: File not found: {file_path}"
 
@@ -108,31 +122,46 @@ class LLMFindingValidator:
     def _tool_glob_files(self, pattern: str) -> str:
         """Find files by glob pattern."""
         try:
+            # SECURITY: Reject patterns that obviously escape repo
+            if pattern.startswith('/') or '..' in pattern:
+                return f"Glob error: Pattern must be relative to repository root"
+
             # Build full pattern path
             full_pattern = str(self.repo_root / pattern)
+            repo_root_resolved = self.repo_root.resolve()
 
             # Find matching files
             matches = glob_module.glob(full_pattern, recursive=True)
-            original_count = len(matches)  # Save original count for overflow message
+            original_count = len(matches)
 
-            # Convert absolute paths to relative paths
+            # Convert to relative paths and validate security
             relative_paths = []
             for match in matches:
                 try:
-                    rel_path = Path(match).relative_to(self.repo_root)
+                    match_resolved = Path(match).resolve()
+
+                    # SECURITY: Only include files within repo_root
+                    try:
+                        match_resolved.relative_to(repo_root_resolved)
+                    except ValueError:
+                        continue  # Skip files outside repo
+
+                    # Convert to relative path for display
+                    rel_path = match_resolved.relative_to(repo_root_resolved)
                     relative_paths.append(str(rel_path))
-                except ValueError:
-                    # Path is not relative to repo_root, skip it
+                except (ValueError, OSError):
                     continue
+
+            if not relative_paths:
+                return f"No files found matching: {pattern}"
 
             # Limit to 100 files
             if len(relative_paths) > 100:
                 limited_paths = relative_paths[:100]
-                additional = original_count - 100
-                limited_paths.append(f"... ({additional} more files)")
-                return "\n".join(limited_paths)
+                additional = len(relative_paths) - 100
+                return "\n".join(limited_paths) + f"\n... ({additional} more files)"
 
-            return "\n".join(relative_paths) if relative_paths else f"No files found matching: {pattern}"
+            return "\n".join(relative_paths)
 
         except Exception as e:
             return f"Glob error: {str(e)}"

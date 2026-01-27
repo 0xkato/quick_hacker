@@ -481,3 +481,79 @@ def test_tool_glob_files_specific_pattern():
         assert "test_app.py" in result_lines
         assert "test_utils.py" in result_lines
         assert "app.py" not in result_lines
+
+
+# Security Tests
+
+
+def test_tool_read_file_blocks_parent_traversal():
+    """Test read_file blocks ../ path traversal."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create file outside repo
+        parent = Path(tmpdir).parent
+        secret = parent / "secret.txt"
+        secret.write_text("SECRET_DATA")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_read_file("../secret.txt")
+
+        # Should NOT read the secret file
+        assert "SECRET_DATA" not in result
+        assert "Error: Access denied" in result
+
+        # Cleanup
+        secret.unlink()
+
+
+def test_tool_read_file_blocks_absolute_path():
+    """Test read_file blocks absolute path access."""
+    validator = LLMFindingValidator(
+        anthropic_api_key="test-key",
+        repo_root="/tmp"
+    )
+
+    result = validator._tool_read_file("/etc/passwd")
+
+    # Should NOT read system files
+    assert "root:" not in result
+    assert ("Error: Access denied" in result or "Error: File not found" in result)
+
+
+def test_tool_glob_files_blocks_parent_traversal():
+    """Test glob_files blocks ../ patterns."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create file outside repo
+        parent = Path(tmpdir).parent
+        secret = parent / "secret.py"
+        secret.write_text("SECRET_FILE")
+
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        result = validator._tool_glob_files("../*.py")
+
+        # Should NOT list files outside repo
+        assert "secret.py" not in result
+        assert ("Error:" in result or "No files found" in result or "Pattern must be relative" in result)
+
+        # Cleanup
+        secret.unlink()
+
+
+def test_tool_glob_files_blocks_absolute_pattern():
+    """Test glob_files blocks absolute path patterns."""
+    validator = LLMFindingValidator(
+        anthropic_api_key="test-key",
+        repo_root="/tmp"
+    )
+
+    result = validator._tool_glob_files("/etc/*.conf")
+
+    # Should reject absolute patterns
+    assert "Error:" in result or "Pattern must be relative" in result

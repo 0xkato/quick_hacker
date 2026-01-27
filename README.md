@@ -52,6 +52,76 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 - **Findings Panel:** Filter, group, and export vulnerability reports
 - **Code Graph:** Interactive call graph exploration with relevance scoring
 
+## LLM-Based Validation
+
+Quick Hacker includes an intelligent LLM-based validation system that autonomously investigates security findings to reduce false positives.
+
+### How It Works
+
+The validation system uses a two-tier approach:
+
+1. **Pre-Validation Gates** - Fast rule-based checks that filter out obvious non-issues:
+   - Disposition filtering (HARDENING findings are auto-rejected)
+   - Checklist quality gates (minimum PROVEN items required)
+   - Social engineering detection (no SE-only attacks)
+
+2. **LLM Validator** - Agentic investigation using Claude:
+   - Reads source code files
+   - Searches codebase for patterns
+   - Traces dataflow and reachability
+   - Analyzes call chains
+   - Returns VALID/INVALID decision with reasoning
+
+### Configuration
+
+Enable LLM validation in protocol policies:
+
+```python
+from models.schemas import ProtocolPolicy
+
+protocol = ProtocolPolicy(
+    id="github-vrp",
+    display_name="GitHub VRP",
+    enable_llm_validation=True,
+    validation_criticism_level="high",  # low, medium, or high
+    validation_model="claude-sonnet-4-20250514",  # or claude-opus-4-20250514
+    validation_timeout_seconds=120,
+    # ... other policy settings
+)
+```
+
+### Criticism Levels
+
+- **High** (default): Strict validation, filters aggressively
+- **Medium**: Balanced approach
+- **Low**: Permissive, fewer rejections
+
+### Environment Variables
+
+Set your Anthropic API key:
+
+```bash
+export ANTHROPIC_API_KEY=your-api-key-here
+```
+
+### UI Features
+
+- **Validation Badges**: Findings display ✓ LLM Validated or ✗ LLM Rejected badges
+- **Filter Toggle**: Show only LLM-validated findings in the report view
+- **Reasoning Display**: View the LLM's investigation reasoning for each finding
+
+### Cost Considerations
+
+LLM validation uses the Anthropic API and incurs costs:
+- Pre-validation gates filter ~30-50% of findings before LLM calls
+- Each validation typically uses 1-3 API calls (multi-turn investigation)
+- Monitor your API usage in the Anthropic console
+
+### Documentation
+
+- [LLM Validation Configuration Guide](docs/llm-validation-guide.md) - Detailed validation configuration
+- [Manual Testing Checklist](docs/manual-testing-checklist.md) - Testing procedures
+
 ## Protocol-Aware Reportability
 
 QuickHack includes a protocol-aware submission evaluation system that determines if findings are worth reporting to bug bounties, VRPs, or responsible disclosure programs.

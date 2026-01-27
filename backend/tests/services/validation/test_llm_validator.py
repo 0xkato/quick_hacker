@@ -613,3 +613,28 @@ async def test_execute_tool_call_unknown_tool():
         assert result["type"] == "tool_result"
         assert result["tool_use_id"] == "tool_456"
         assert "Unknown tool" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_tool_error():
+    """Test _execute_tool_call handles tool execution errors gracefully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        validator = LLMFindingValidator(
+            anthropic_api_key="test-key",
+            repo_root=tmpdir
+        )
+
+        # Create mock tool_use with invalid parameters that will cause error
+        tool_use = Mock()
+        tool_use.name = "read_file"
+        tool_use.input = {"file_path": "../../../etc/passwd"}  # Path traversal attempt (blocked by security)
+        tool_use.id = "tool_789"
+
+        # Execute tool call
+        result = await validator._execute_tool_call(tool_use)
+
+        # Verify error is returned as content (not raised as exception)
+        assert result["type"] == "tool_result"
+        assert result["tool_use_id"] == "tool_789"
+        # Should contain error message from path traversal protection
+        assert "Error:" in result["content"] or "denied" in result["content"].lower() or "Access denied" in result["content"]

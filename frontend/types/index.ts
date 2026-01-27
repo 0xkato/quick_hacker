@@ -183,6 +183,20 @@ export interface Agent {
   error_message?: string;
 }
 
+// === LLM Validation ===
+
+/**
+ * Result of LLM-based validation investigation
+ */
+export interface ValidationResult {
+  is_valid: boolean;
+  reasoning: string[];
+  categories: string[];
+  confidence: number | null;
+  investigation_steps: string[] | null;
+  timestamp: string;
+}
+
 // === Finding ===
 
 export interface Finding {
@@ -224,6 +238,8 @@ export interface Finding {
   submission_result?: SubmissionResult;
   evidence_quest_id?: string;
   evidence_quest_completed?: boolean;
+  // LLM validation result
+  validation_result?: ValidationResult | null;
 }
 
 // === WebSocket ===

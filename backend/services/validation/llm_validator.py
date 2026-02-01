@@ -554,6 +554,7 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
         threat_model_profile: Any,
         criticism_level: str,
         timeout_seconds: int = 120,
+        validation_profile: Optional[Any] = None,
     ) -> ValidationResult:
         """
         Validate a finding using LLM with tool use.
@@ -565,6 +566,7 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
             threat_model_profile: Threat model profile for context
             criticism_level: Level of criticism to apply (low, medium, high)
             timeout_seconds: Timeout in seconds (default: 120)
+            validation_profile: Optional ValidationProfile for strict validation
 
         Returns:
             ValidationResult with validation decision
@@ -578,6 +580,7 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
                     classification=classification,
                     threat_model_profile=threat_model_profile,
                     criticism_level=criticism_level,
+                    validation_profile=validation_profile,
                 ),
                 timeout=timeout_seconds,
             )
@@ -720,6 +723,84 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
                 timestamp=datetime.now(UTC),
             )
 
+    def _parse_validation_response_with_profile(self, response_text: str) -> ValidationResult:
+        """
+        Parse validation response from profile-based validation prompt.
+
+        Extracts VERDICT, EVIDENCE, REJECT_REASON, and REASONING from the response.
+
+        Args:
+            response_text: Raw response text from LLM
+
+        Returns:
+            ValidationResult with parsed decision and reasoning
+        """
+        try:
+            # Extract VERDICT using regex (CANDIDATE = valid, NOT_ACTIONABLE = invalid)
+            verdict_match = re.search(
+                r"VERDICT:\s*(CANDIDATE|NOT_ACTIONABLE)",
+                response_text,
+                re.IGNORECASE
+            )
+            if not verdict_match:
+                raise ValueError("VERDICT not found in response")
+
+            is_valid = verdict_match.group(1).upper() == "CANDIDATE"
+
+            # Extract REJECT_REASON if present
+            reject_match = re.search(
+                r"REJECT_REASON:\s*(.+?)(?=\n\n|\nREASONING:|$)",
+                response_text,
+                re.IGNORECASE | re.DOTALL
+            )
+            reject_reason = reject_match.group(1).strip() if reject_match else None
+
+            # Extract REASONING bullets
+            reasoning_match = re.search(
+                r"REASONING:\s*((?:^-.*$\n?)+)",
+                response_text,
+                re.MULTILINE | re.IGNORECASE
+            )
+
+            reasoning = []
+            if reasoning_match:
+                reasoning_text = reasoning_match.group(1)
+                for line in reasoning_text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("-"):
+                        reasoning.append(line[1:].strip())
+
+            # Add reject reason to reasoning if not valid
+            if not is_valid and reject_reason:
+                reasoning.insert(0, f"Reject reason: {reject_reason}")
+
+            if not reasoning:
+                reasoning = ["No reasoning provided"]
+
+            # Determine category based on verdict
+            category = "security_issue" if is_valid else "filtered_by_profile"
+
+            return ValidationResult(
+                is_valid=is_valid,
+                reasoning=reasoning,
+                categories=[category],
+                confidence=95 if is_valid else 0,
+                timestamp=datetime.now(UTC),
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to parse profile validation response: {e}")
+            return ValidationResult(
+                is_valid=False,
+                reasoning=[
+                    "Failed to parse validator response",
+                    f"Parse error: {str(e)[:200]}"
+                ],
+                categories=["parse_error"],
+                confidence=0,
+                timestamp=datetime.now(UTC),
+            )
+
     async def _run_validation(
         self,
         finding: Finding,
@@ -727,6 +808,7 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
         classification: ClassificationResult,
         threat_model_profile: Any,
         criticism_level: str,
+        validation_profile: Optional[Any] = None,
     ) -> ValidationResult:
         """
         Run the actual validation logic with full agentic loop.
@@ -740,18 +822,28 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
             classification: Classification result
             threat_model_profile: Threat model profile
             criticism_level: Criticism level
+            validation_profile: Optional ValidationProfile for strict validation
 
         Returns:
             ValidationResult with validation decision
         """
-        # Build system prompt and tool definitions
-        system_prompt = self._build_validation_prompt(
-            finding=finding,
-            evidence=evidence,
-            classification=classification,
-            threat_model_profile=threat_model_profile,
-            criticism_level=criticism_level,
-        )
+        # Track whether we're using profile-based validation
+        use_profile_validation = validation_profile is not None
+
+        # Build system prompt - use profile-aware prompt if validation_profile provided
+        if use_profile_validation:
+            system_prompt = self._build_validation_prompt_with_profile(
+                finding=finding,
+                validation_profile=validation_profile,
+            )
+        else:
+            system_prompt = self._build_validation_prompt(
+                finding=finding,
+                evidence=evidence,
+                classification=classification,
+                threat_model_profile=threat_model_profile,
+                criticism_level=criticism_level,
+            )
         tools = self._get_tool_definitions()
 
         # Initialize conversation
@@ -776,6 +868,8 @@ Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
                     # Find text block in response
                     for block in response.content:
                         if hasattr(block, 'type') and block.type == "text":
+                            if use_profile_validation:
+                                return self._parse_validation_response_with_profile(block.text)
                             return self._parse_validation_response(block.text)
 
                     # No text block found - error

@@ -74,12 +74,14 @@ class FindingTriageService:
         finding: Finding,
         evidence: Evidence,
         classification: ClassificationResult,
-        policy: ProtocolPolicy
+        policy: ProtocolPolicy,
+        validation_profile: Optional[ValidationProfile] = None,
     ) -> SubmissionResult:
         """
         Triage a single finding through validation and protocol gates.
 
         This is the new LLM-validation-aware pipeline:
+        0. Path exclusion check (skip files in excluded paths)
         1. Pre-validation gates (fast rule-based checks)
         2. LLM validation (expensive agentic investigation)
         3. Protocol evaluation (existing submission logic)
@@ -89,10 +91,24 @@ class FindingTriageService:
             evidence: Evidence bundle for the finding
             classification: Classification result with disposition and checklist
             policy: Protocol policy with submission rules
+            validation_profile: Optional ValidationProfile for path exclusions and strict validation
 
         Returns:
             SubmissionResult with submission decision
         """
+        # Step 0: Check path exclusions from validation profile
+        if validation_profile and should_skip_by_path(finding.file_path, validation_profile):
+            return SubmissionResult(
+                protocol_id=policy.id,
+                decision=SubmissionDecision.DONT_SUBMIT,
+                reasons=[
+                    f"File excluded by validation profile: {finding.file_path}",
+                    f"Excluded paths: {validation_profile.excluded_paths}",
+                ],
+                missing_evidence=[],
+                suggested_next_steps=[],
+            )
+
         # Step 1: Pre-validation gates (fast rule-based checks)
         if policy.enable_llm_validation:
             gate_result = self.pre_gates.check_gates(finding, evidence, classification, policy)
@@ -110,19 +126,27 @@ class FindingTriageService:
                 policy.validation_criticism_level
             )
 
-            if config_key not in self.llm_validators:
+            # Include enabled_verifiers from validation profile in cache key
+            enabled_verifiers = []
+            if validation_profile and validation_profile.enabled_verifiers:
+                enabled_verifiers = validation_profile.enabled_verifiers
+
+            validator_key = (config_key[0], config_key[1], tuple(enabled_verifiers))
+
+            if validator_key not in self.llm_validators:
                 api_key = ProtocolConfig.ANTHROPIC_API_KEY
                 if not api_key:
                     # No API key - skip validation and continue to protocol evaluation
                     pass
                 else:
-                    self.llm_validators[config_key] = LLMFindingValidator(
+                    self.llm_validators[validator_key] = LLMFindingValidator(
                         anthropic_api_key=api_key,
                         model=config_key[0],
-                        repo_root="."
+                        repo_root=".",
+                        enabled_verifiers=enabled_verifiers,
                     )
 
-            validator = self.llm_validators.get(config_key)
+            validator = self.llm_validators.get(validator_key)
 
             # Run validation if validator is available
             if validator:
@@ -132,7 +156,8 @@ class FindingTriageService:
                     classification=classification,
                     threat_model_profile=policy.default_threat_model_preset,
                     criticism_level=config_key[1],
-                    timeout_seconds=policy.validation_timeout_seconds
+                    timeout_seconds=policy.validation_timeout_seconds,
+                    validation_profile=validation_profile,
                 )
 
                 # Store on finding for later reference

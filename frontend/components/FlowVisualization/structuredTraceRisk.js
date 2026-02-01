@@ -82,16 +82,15 @@ function computeStructuredTraceRiskLevels(nodes, edges) {
 /**
  * Tailwind ring classes for Structured Trace tiering.
  *
- * Priority: finding (red) > sink (yellow) > touched (accent) > normal (green)
+ * Priority: finding (red) > sink (yellow) > touched (blue) > normal (green)
  *
  * @param {{risk: 'none'|'sink'|'finding', isTouchedEntrypoint: boolean}} opts
  */
-function getStructuredTraceRiskRingClass(opts) {
-  const base = 'ring-2 ring-offset-1 ring-offset-vsc-bg';
-  if (opts.risk === 'finding') return `${base} ring-sev-critical`;
-  if (opts.risk === 'sink') return `${base} ring-sev-medium`;
-  if (opts.isTouchedEntrypoint) return `${base} ring-vsc-accent`;
-  return `${base} ring-vsc-success`;
+function getStructuredTraceRiskRingClass({ risk, isTouchedEntrypoint }) {
+  if (risk === 'finding') return 'ring-2 ring-node-finding ring-offset-1 ring-offset-vsc-bg';
+  if (risk === 'sink') return 'ring-2 ring-node-sink ring-offset-1 ring-offset-vsc-bg';
+  if (isTouchedEntrypoint) return 'ring-2 ring-node-touched ring-offset-1 ring-offset-vsc-bg';
+  return 'ring-2 ring-node-normal ring-offset-1 ring-offset-vsc-bg';
 }
 
 module.exports = {

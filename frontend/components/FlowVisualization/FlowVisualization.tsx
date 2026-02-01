@@ -154,9 +154,9 @@ interface FlowNodeData extends FlowNode {
 // Custom node component
 function FlowNodeComponent({ data }: { data: FlowNodeData }) {
   const statusColors = {
-    pending: 'border-vsc-border bg-vsc-sidebar',
-    running: 'border-vsc-accent bg-vsc-accent/20 animate-pulse',
-    completed: 'border-vsc-success bg-vsc-success/20',
+    pending: 'border-border-default bg-bg-secondary',
+    running: 'border-accent bg-accent/20 animate-pulse',
+    completed: 'border-status-confirmed bg-status-confirmed/20',
     failed: 'border-sev-critical bg-sev-critical/20',
   };
 
@@ -635,7 +635,7 @@ export function FlowVisualization({
         height: 15,
       },
       style: {
-        stroke: isNodeRunning(nodesForView, edge.target) ? '#007acc' : '#404040',
+        stroke: isNodeRunning(nodesForView, edge.target) ? '#60a5fa' : '#2a3040',
       },
     }));
 
@@ -832,31 +832,31 @@ export function FlowVisualization({
         maxZoom={2}
         defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
       >
-        <Background color="#333" gap={20} />
+        <Background color="#2a3040" gap={20} />
         <Controls className="!bg-vsc-sidebar !border-vsc-border" />
         <MiniMap
           nodeColor={(node) => {
             const data = node.data as FlowNode;
             if (variant === 'structured') {
               const risk = (data as any)?.structured_risk;
-              if (risk === 'finding') return '#f44336';
-              if (risk === 'sink') return '#f9a825';
-              return '#4caf50';
+              if (risk === 'finding') return '#ff5f5f';  // sev-critical
+              if (risk === 'sink') return '#fbbf24';     // status-needs-review (yellow)
+              return '#4ade80';                           // status-confirmed (green)
             }
             // Color by confidence if available
             if (data.confidence_score !== undefined) {
-              if (data.confidence_score >= 0.8) return '#4caf50';
-              if (data.confidence_score >= 0.6) return '#f9a825';
-              if (data.confidence_score >= 0.4) return '#ff9800';
-              return '#f44336';
+              if (data.confidence_score >= 0.8) return '#4ade80';
+              if (data.confidence_score >= 0.6) return '#fbbf24';
+              if (data.confidence_score >= 0.4) return '#f59e0b';
+              return '#ff5f5f';
             }
-            if (data.status === 'running') return '#007acc';
-            if (data.status === 'completed') return '#4caf50';
-            if (data.status === 'failed') return '#f44336';
-            if (data.type === 'finding') return '#ff9800';
-            return '#555';
+            if (data.status === 'running') return '#60a5fa';
+            if (data.status === 'completed') return '#4ade80';
+            if (data.status === 'failed') return '#ff5f5f';
+            if (data.type === 'finding') return '#f0b429';
+            return '#2a3040';
           }}
-          style={{ background: '#1e1e1e' }}
+          style={{ background: '#0a0c10' }}
         />
       </ReactFlow>
 

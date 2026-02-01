@@ -16,6 +16,7 @@ from models.schemas import (
     WSMessage,
     WSMessageType,
 )
+from models.validation_profile import ValidationProfile
 from providers import BaseProvider, get_provider
 from services.attack_surface_service import attack_surface_service
 from services.flow_service import flow_service
@@ -397,3 +398,37 @@ class BaseAgent(ABC):
             total_api_calls=0,
             last_error=self.error_message,
         )
+
+
+def filter_excluded_paths(
+    files: list[str],
+    validation_profile: Optional[ValidationProfile],
+) -> list[str]:
+    """
+    Filter out files matching excluded paths from validation profile.
+
+    Args:
+        files: List of file paths to filter
+        validation_profile: Validation profile with excluded_paths
+
+    Returns:
+        List of files not matching any excluded path pattern
+    """
+    if not validation_profile or not validation_profile.excluded_paths:
+        return files
+
+    excluded = validation_profile.excluded_paths
+
+    def is_excluded(file_path: str) -> bool:
+        for pattern in excluded:
+            # Normalize pattern (remove trailing slash for comparison)
+            pattern = pattern.rstrip("/")
+            # Check if file is under excluded path
+            if file_path.startswith(pattern + "/"):
+                return True
+            # Also check for pattern appearing in path
+            if f"/{pattern}/" in f"/{file_path}":
+                return True
+        return False
+
+    return [f for f in files if not is_excluded(f)]

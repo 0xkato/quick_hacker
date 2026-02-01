@@ -392,8 +392,8 @@ export default function Home() {
   // Auth gate: Show loading while checking authentication
   if (isAuthLoading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-vsc-bg">
-        <RefreshCw className="w-8 h-8 text-vsc-accent animate-spin" />
+      <div className="h-screen flex items-center justify-center bg-bg-primary">
+        <RefreshCw className="w-8 h-8 text-accent animate-spin" />
       </div>
     );
   }
@@ -405,8 +405,8 @@ export default function Home() {
 
   if (isProjectLoading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-vsc-bg">
-        <RefreshCw className="w-8 h-8 text-vsc-accent animate-spin" />
+      <div className="h-screen flex items-center justify-center bg-bg-primary">
+        <RefreshCw className="w-8 h-8 text-accent animate-spin" />
       </div>
     );
   }
@@ -422,26 +422,26 @@ export default function Home() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-vsc-bg">
+    <div className="h-screen flex flex-col bg-bg-primary scanlines">
       {/* Project header bar */}
-      <header className="h-9 bg-vsc-activitybar flex items-center justify-between px-3 border-b border-vsc-border-subtle select-none">
+      <header className="h-9 bg-bg-secondary flex items-center justify-between px-3 border-b border-border-subtle select-none">
         <div className="flex items-center gap-3">
-          <span className="text-vsc-text-muted text-vsc-xs">quick_hack</span>
-          <div className="flex items-center gap-2 text-vsc-text">
-            <FolderGit2 className="w-4 h-4 text-vsc-accent" />
-            <span className="text-vsc-sm font-medium">{currentProject.name}</span>
+          <span className="text-text-muted text-xs">quick_hack</span>
+          <div className="flex items-center gap-2 text-text-primary">
+            <FolderGit2 className="w-4 h-4 text-accent" />
+            <span className="text-sm font-medium">{currentProject.name}</span>
             {currentProject.repo_name && (
-              <span className="text-vsc-xs text-vsc-text-muted">
+              <span className="text-xs text-text-muted">
                 ({currentProject.repo_name})
               </span>
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-vsc-xs text-vsc-text-muted">Threat model</span>
+            <span className="text-xs text-text-muted">Threat model</span>
             <select
               value={(currentProject.threat_model || 'AB') as ThreatModel}
               onChange={(e) => openThreatModelModal(e.target.value as ThreatModel)}
-              className="px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-xs"
+              className="px-2 py-1 bg-bg-tertiary border border-border-default rounded text-xs"
               title="Opens the Project Threat Model editor (changes require explicit reset/save)"
             >
               <option value="A">Internet (A)</option>
@@ -451,7 +451,7 @@ export default function Home() {
             {currentProject.profile_review_status === 'unreviewed' && (
               <button
                 onClick={() => openThreatModelModal()}
-                className="px-2 py-0.5 rounded text-vsc-xs bg-yellow-900/40 text-yellow-200 border border-yellow-800 hover:bg-yellow-900/60"
+                className="px-2 py-0.5 rounded text-xs bg-yellow-900/40 text-yellow-200 border border-yellow-800 hover:bg-yellow-900/60"
                 title="Preset-derived profile; review to confirm attacker capabilities + repo_checkout semantics"
               >
                 Unreviewed
@@ -509,7 +509,7 @@ export default function Home() {
       {/* Main layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Activity bar */}
-        <aside className="w-12 bg-vsc-activitybar flex flex-col items-center py-1 border-r border-vsc-border-subtle">
+        <aside className="w-12 bg-bg-secondary flex flex-col items-center py-1 border-r border-border-subtle">
           <button
             onClick={() => {
               panels.setActiveView('explorer');
@@ -531,12 +531,12 @@ export default function Home() {
             <Bug className="w-6 h-6" />
             {runningAgents > 0 && (
               <span
-                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-vsc-accent scan-indicator"
+                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-accent scan-indicator"
               />
             )}
             {runningAgents === 0 && agentMgmt.agents.some(a => a.status === 'paused') && (
               <span
-                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-vsc-accent scan-indicator-paused"
+                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-accent scan-indicator-paused"
               />
             )}
             {runningAgents === 0 && agentMgmt.agents.some(a => a.status === 'completed' && a.findings_count > 0) &&
@@ -544,7 +544,7 @@ export default function Home() {
               <span
                 className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${
                   findingsMgmt.findings.some(f => f.severity === 'critical') ? 'bg-sev-critical' :
-                  findingsMgmt.findings.some(f => f.severity === 'high') ? 'bg-sev-high' : 'bg-vsc-accent'
+                  findingsMgmt.findings.some(f => f.severity === 'high') ? 'bg-sev-high' : 'bg-accent'
                 }`}
               />
             )}
@@ -582,7 +582,7 @@ export default function Home() {
           >
             <Brain className="w-6 h-6" />
             {observability.llmInteractions.length > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-vsc-accent rounded-full" />
+              <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full" />
             )}
           </button>
 
@@ -607,7 +607,7 @@ export default function Home() {
 
         {/* Sidebar */}
         {panels.showSidebar && (
-          <aside className="w-64 bg-vsc-sidebar flex flex-col border-r border-vsc-border-subtle">
+          <aside className="w-64 bg-bg-secondary flex flex-col border-r border-border-subtle">
             {/* Sidebar header with view title */}
             <div className="panel-header">
               <span>
@@ -649,15 +649,15 @@ export default function Home() {
               {panels.activeView === 'findings' && (
                 <div className="h-full flex flex-col overflow-hidden">
                   {/* Agent selector for findings */}
-                  <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2 flex-shrink-0">
-                    <Bug className="w-4 h-4 text-vsc-text-muted" />
+                  <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2 flex-shrink-0">
+                    <Bug className="w-4 h-4 text-text-muted" />
                     <select
                       value={findingsMgmt.selectedFindingsAgentId || ''}
                       onChange={(e) => {
                         findingsMgmt.setUserSelectedFindingsAgentId(true);
                         findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
                       }}
-                      className="flex-1 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+                      className="flex-1 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
                     >
                       {!findingsMgmt.selectedFindingsAgentId && <option value="">Select an agent...</option>}
                       {agentMgmt.agents.map((agent) => (
@@ -686,17 +686,17 @@ export default function Home() {
         )}
 
         {/* Main content area */}
-        <main className="flex-1 flex flex-col overflow-hidden bg-vsc-bg">
+        <main className="flex-1 flex flex-col overflow-hidden bg-bg-primary">
 	          {/* Flow visualization view */}
 	          {panels.activeView === 'flow' && (
 	            <div className="flex-1 flex flex-col overflow-hidden">
-	              <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
-	                <Network className="w-4 h-4 text-vsc-text-muted" />
-	                <span className="text-vsc-sm text-vsc-text-muted">Structured Trace</span>
+	              <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
+	                <Network className="w-4 h-4 text-text-muted" />
+	                <span className="text-sm text-text-muted">Structured Trace</span>
 	                <select
 	                  value={agentMgmt.selectedAgentId || ''}
 	                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
-	                  className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+	                  className="ml-2 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
 	                >
 	                  <option value="">Select agent...</option>
 	                  {agentMgmt.agents.map((agent) => (
@@ -736,13 +736,13 @@ export default function Home() {
           {panels.activeView === 'llm' && (
             <div className="flex-1 flex flex-col overflow-hidden">
               {/* Agent selector for LLM view */}
-              <div className="h-10 bg-vsc-sidebar border-b border-vsc-border-subtle flex items-center px-3 gap-2">
-                <Brain className="w-4 h-4 text-vsc-text-muted" />
-                <span className="text-vsc-sm text-vsc-text-muted">LLM Interactions</span>
+              <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
+                <Brain className="w-4 h-4 text-text-muted" />
+                <span className="text-sm text-text-muted">LLM Interactions</span>
                 <select
                   value={agentMgmt.selectedAgentId || ''}
                   onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
-                  className="ml-2 px-2 py-1 bg-vsc-input border border-vsc-border rounded text-vsc-sm"
+                  className="ml-2 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
                 >
                   <option value="">Select agent...</option>
                   {agentMgmt.agents.map((agent) => (
@@ -765,14 +765,14 @@ export default function Home() {
 
           {/* Tab bar */}
           {panels.activeView !== 'flow' && panels.activeView !== 'llm' && workspace.currentFile && (
-            <div className="h-9 bg-vsc-sidebar flex items-end border-b border-vsc-border-subtle">
+            <div className="h-9 bg-bg-secondary flex items-end border-b border-border-subtle">
               <div className="tab active">
                 <span className="truncate max-w-[200px]">
                   {workspace.currentFile.path.split('/').pop()}
                 </span>
                 <button
                   onClick={workspace.clearFile}
-                  className="ml-1 p-0.5 rounded hover:bg-vsc-hover"
+                  className="ml-1 p-0.5 rounded hover:bg-bg-tertiary"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -782,11 +782,11 @@ export default function Home() {
 
           {/* Breadcrumb */}
           {panels.activeView !== 'flow' && panels.activeView !== 'llm' && workspace.currentFile && (
-            <div className="breadcrumb border-b border-vsc-border-subtle">
+            <div className="breadcrumb border-b border-border-subtle">
               {workspace.currentFile.path.split('/').map((part, idx, arr) => (
                 <span key={idx} className="flex items-center">
                   {idx > 0 && <ChevronRight className="breadcrumb-separator w-3 h-3" />}
-                  <span className={idx === arr.length - 1 ? 'text-vsc-text' : 'breadcrumb-item'}>
+                  <span className={idx === arr.length - 1 ? 'text-text-primary' : 'breadcrumb-item'}>
                     {part}
                   </span>
                 </span>
@@ -807,7 +807,7 @@ export default function Home() {
 
         {/* Right panel - can show agents or findings in split view */}
         {panels.showPanel && workspace.currentFile && findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path).length > 0 && (
-          <aside className="w-80 bg-vsc-sidebar border-l border-vsc-border-subtle flex flex-col">
+          <aside className="w-80 bg-bg-secondary border-l border-border-subtle flex flex-col">
             <div className="panel-header">
               <span>FILE FINDINGS</span>
               <button
@@ -829,11 +829,11 @@ export default function Home() {
       </div>
 
       {/* Status bar */}
-      <footer className="h-6 bg-vsc-statusbar flex items-center px-3 text-vsc-xs text-white select-none">
+      <footer className="h-6 bg-bg-primary border-t border-border-default flex items-center px-3 text-xs text-text-secondary select-none">
         <div className="flex items-center gap-3">
           {/* Connection status */}
           <span className="flex items-center gap-1" data-testid="ws-connection-status">
-            <Circle className={`w-2 h-2 ${isConnected ? 'fill-vsc-success text-vsc-success' : 'fill-vsc-error text-vsc-error'}`} />
+            <Circle className={`w-2 h-2 ${isConnected ? 'fill-status-confirmed text-status-confirmed' : 'fill-sev-critical text-sev-critical'}`} />
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>
 

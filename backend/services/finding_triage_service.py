@@ -29,6 +29,7 @@ from models.schemas import (
     ValidationResult,
     SubmissionResult,
 )
+from models.validation_profile import ValidationProfile
 from services.evidence import EvidenceGatherer, EvidenceQuestOrchestrator
 from services.classification import StrictClassifier
 from services.classification.classifier import ClassificationResult
@@ -834,6 +835,33 @@ class FindingTriageService:
             timeout_count=timeout_count,
             timeout_rate=timeout_rate
         )
+
+
+def should_skip_by_path(
+    file_path: str,
+    validation_profile: Optional[ValidationProfile],
+) -> bool:
+    """
+    Check if a finding should be skipped based on validation profile exclusions.
+
+    Args:
+        file_path: Path to the file containing the finding
+        validation_profile: Validation profile with excluded_paths
+
+    Returns:
+        True if finding should be skipped, False otherwise
+    """
+    if not validation_profile or not validation_profile.excluded_paths:
+        return False
+
+    for pattern in validation_profile.excluded_paths:
+        pattern = pattern.rstrip("/")
+        if file_path.startswith(pattern + "/"):
+            return True
+        if f"/{pattern}/" in f"/{file_path}":
+            return True
+
+    return False
 
 
 # Singleton instance

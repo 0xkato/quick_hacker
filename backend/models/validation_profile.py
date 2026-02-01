@@ -88,7 +88,7 @@ class ValidationProfile(BaseModel):
     boundaries, evidence requirements, and other validation settings.
 
     Attributes:
-        excluded_paths: Glob patterns for paths to skip during analysis.
+        excluded_paths: Directory path prefixes to skip during analysis (e.g., "tools/", "test/").
         attacker_roles: Named attacker role definitions (e.g., remote_network, local_user).
         trust_boundaries: Named trust boundary definitions.
         evidence_gates: Evidence requirements per vulnerability category.

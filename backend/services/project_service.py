@@ -51,6 +51,14 @@ class Project(BaseModel):
     last_accessed: datetime = Field(default_factory=datetime.utcnow)
     is_cloned: bool = False
     path: str = ""
+    validation_profile: Optional[dict] = None
+
+    def get_validation_profile(self) -> "ValidationProfile":
+        """Get validation profile as a ValidationProfile object."""
+        from models.validation_profile import ValidationProfile
+        if self.validation_profile is None:
+            return ValidationProfile()
+        return ValidationProfile.model_validate(self.validation_profile)
 
     def ensure_threat_model_profile(self, *, source: Literal["preset", "custom", "migrated"]) -> None:
         # Hard-invariant: threat_model and threat_model_preset must match.

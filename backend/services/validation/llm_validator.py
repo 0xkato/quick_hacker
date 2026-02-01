@@ -413,6 +413,139 @@ REASONING:
 
 Be highly skeptical. Default to INVALID unless you can prove it's exploitable."""
 
+    def _build_validation_prompt_with_profile(
+        self,
+        finding: Finding,
+        validation_profile: "ValidationProfile",
+    ) -> str:
+        """Build validation prompt using ValidationProfile configuration."""
+        from models.validation_profile import ValidationProfile, CategoryEvidenceGate
+
+        # Format attacker roles
+        attacker_lines = []
+        for role_name, role in validation_profile.attacker_roles.items():
+            attacker_lines.append(f"**{role_name}**:")
+            if role.can_control:
+                attacker_lines.append(f"  - Can control: {', '.join(role.can_control)}")
+            if role.cannot_control:
+                attacker_lines.append(f"  - Cannot control: {', '.join(role.cannot_control)}")
+            if role.inherits:
+                attacker_lines.append(f"  - Inherits from: {role.inherits}")
+            if role.trust_boundary:
+                attacker_lines.append(f"  - Trust boundary: {role.trust_boundary}")
+            if role.exceptions:
+                for channel, condition in role.exceptions.items():
+                    attacker_lines.append(f"  - Exception for {channel}: {condition}")
+        attacker_section = "\n".join(attacker_lines) if attacker_lines else "No attacker roles defined - use default threat model"
+
+        # Format trust boundaries
+        boundary_lines = []
+        for boundary_name, boundary in validation_profile.trust_boundaries.items():
+            boundary_lines.append(f"**{boundary_name}**:")
+            boundary_lines.append(f"  - Untrusted: {', '.join(boundary.untrusted_side)}")
+            boundary_lines.append(f"  - Trusted: {', '.join(boundary.trusted_side)}")
+            if boundary.description:
+                boundary_lines.append(f"  - Meaning: {boundary.description}")
+        boundary_section = "\n".join(boundary_lines) if boundary_lines else "No trust boundaries defined"
+
+        # Get evidence gate for this category
+        category = self._normalize_category(finding.vulnerability_type)
+        default_gate = CategoryEvidenceGate()
+        gate = validation_profile.evidence_gates.get(category, default_gate)
+
+        # Format required evidence
+        required_evidence = "\n".join([f"- {req}" for req in gate.required])
+
+        # Format reject conditions
+        reject_conditions = gate.reject_if.copy()
+        if validation_profile.excluded_paths:
+            reject_conditions.append(f"File in excluded paths: {validation_profile.excluded_paths}")
+        reject_section = "\n".join([f"- {cond}" for cond in reject_conditions])
+
+        return f"""You are validating a potential security vulnerability.
+
+## Attacker Model
+
+### Attacker Roles
+{attacker_section}
+
+### Trust Boundaries
+{boundary_section}
+
+**CRITICAL RULES:**
+- Only consider input channels listed in attacker roles as attacker-controlled
+- Do NOT treat CLI args/env vars/local files as attacker-controlled unless:
+  - You prove a remote attacker can influence them
+  - An explicit exception condition is met
+- Crossing a trust boundary from untrusted to trusted side indicates escalation
+
+## Evidence Requirements
+
+To output "CANDIDATE vulnerability", you MUST provide ALL of:
+{required_evidence}
+
+If ANY required evidence is MISSING, output "NOT_ACTIONABLE" with list of missing items.
+
+## Auto-Reject Conditions
+
+Immediately reject and output "NOT_ACTIONABLE" if:
+{reject_section}
+
+## Finding Under Review
+
+- Title: {finding.title}
+- Type: {finding.vulnerability_type}
+- File: {finding.file_path}:{finding.line_start}
+- Code:
+```
+{finding.code_snippet}
+```
+
+## Available Tools
+
+- read_file(file_path): Read source file contents
+- grep_code(pattern, glob): Search codebase with regex
+- glob_files(pattern): Find files by name pattern
+{self._format_verifier_tools(gate.verifiers)}
+
+## Response Format
+
+```
+VERDICT: CANDIDATE | NOT_ACTIONABLE
+
+EVIDENCE:
+  source: <identified source or MISSING>
+  sink: <identified sink or MISSING>
+  dataflow: <chain description or MISSING>
+  reachability: <shipped proof or MISSING>
+  impact: <security impact or MISSING>
+
+REJECT_REASON: <if NOT_ACTIONABLE, which condition triggered>
+
+REASONING:
+- [Investigation step 1]
+- [Investigation step 2]
+- [Final determination]
+```
+
+Be highly skeptical. Default to NOT_ACTIONABLE unless all evidence is proven.
+"""
+
+    def _normalize_category(self, vuln_type: str) -> str:
+        """Normalize vulnerability type to category name."""
+        if not vuln_type:
+            return "unknown"
+        return vuln_type.lower().replace(" ", "_").replace("-", "_")
+
+    def _format_verifier_tools(self, verifiers: list[str]) -> str:
+        """Format verifier tools section for prompt."""
+        if not verifiers:
+            return ""
+        lines = []
+        if "gdb" in verifiers:
+            lines.append("- gdb_debug(binary_path, commands): Run GDB for memory corruption analysis")
+        return "\n".join(lines)
+
     async def validate(
         self,
         finding: Finding,

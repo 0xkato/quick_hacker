@@ -10,6 +10,8 @@ from services.project_service import project_service, Project
 from services.sink_signal_service import sink_signal_service
 from models.sink_signals import SinkSignal, SinkSignalStatus
 from models.threat_model_profile import ThreatModelProfile, ThreatModelPreset, compute_profile_hash, preset_to_profile
+from models.validation_profile import ValidationProfile
+from services.validation.presets import VALIDATION_PRESETS, get_preset
 
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -39,6 +41,10 @@ class ProjectStatus(BaseModel):
 
 class UpdateSinkSignalStatusRequest(BaseModel):
     status: SinkSignalStatus
+
+
+class ApplyPresetRequest(BaseModel):
+    preset: str
 
 
 class ThreatModelProfileResponse(BaseModel):
@@ -117,6 +123,12 @@ async def get_project_status():
         in_project=current is not None,
         current_project=current
     )
+
+
+@router.get("/validation-presets")
+async def list_validation_presets() -> dict[str, dict]:
+    """List available validation presets."""
+    return {name: profile.model_dump() for name, profile in VALIDATION_PRESETS.items()}
 
 
 @router.get("/{project_id}", response_model=Project)
@@ -211,6 +223,48 @@ async def update_threat_model_profile(project_id: str, request: ThreatModelProfi
         return _profile_response(project)
 
     raise HTTPException(status_code=400, detail={"error": "unknown_action", "action": request.action})
+
+
+@router.get("/{project_id}/validation-profile")
+async def get_validation_profile(project_id: str) -> dict:
+    """Get validation profile for project."""
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project.get_validation_profile().model_dump()
+
+
+@router.put("/{project_id}/validation-profile")
+async def update_validation_profile(
+    project_id: str,
+    profile: ValidationProfile,
+) -> dict:
+    """Replace validation profile for project."""
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.validation_profile = profile.model_dump()
+    await project_service._save_projects()
+    return profile.model_dump()
+
+
+@router.post("/{project_id}/validation-profile/apply-preset")
+async def apply_validation_preset(
+    project_id: str,
+    request: ApplyPresetRequest,
+) -> dict:
+    """Apply a preset validation profile."""
+    preset = get_preset(request.preset)
+    if preset is None:
+        raise HTTPException(status_code=404, detail=f"Unknown preset: {request.preset}")
+
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project.validation_profile = preset.model_dump()
+    await project_service._save_projects()
+    return preset.model_dump()
 
 
 @router.delete("/{project_id}")

@@ -3,7 +3,6 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import tempfile
-import os
 
 
 class TestGDBTool:
@@ -86,3 +85,35 @@ class TestGDBTool:
             commands=["run"],
         )
         assert "timeout" in result.lower()
+
+    def test_gdb_tool_input_file_outside_repo(self, validator):
+        """Test that input_file outside repo is rejected."""
+        result = validator._tool_gdb_debug(
+            binary_path="test_binary.sh",
+            commands=["run"],
+            input_file="/etc/passwd"
+        )
+        assert "Error" in result
+        assert "within" in result.lower()
+
+    @patch("subprocess.run")
+    def test_gdb_tool_input_file_valid(self, mock_run, validator, temp_repo):
+        """Test GDB with valid input file."""
+        # Create test input file
+        input_path = Path(temp_repo) / "input.txt"
+        input_path.write_text("test input")
+
+        mock_run.return_value = MagicMock(
+            stdout="Program output",
+            stderr="",
+            returncode=0,
+        )
+        result = validator._tool_gdb_debug(
+            binary_path="test_binary.sh",
+            commands=["bt"],
+            input_file="input.txt"
+        )
+        assert mock_run.called
+        # Verify the script contains properly quoted path
+        call_args = mock_run.call_args
+        assert "run <" in call_args.kwargs['input']

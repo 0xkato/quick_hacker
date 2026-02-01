@@ -3,6 +3,7 @@ import asyncio
 import glob as glob_module
 import logging
 import re
+import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -194,6 +195,15 @@ class LLMFindingValidator:
             if not full_binary.exists():
                 return f"Error: Binary not found: {binary_path}"
 
+            # Validate commands input
+            if not commands:
+                return "Error: No commands provided"
+            if len(commands) > 100:
+                return "Error: Too many commands (max 100)"
+            total_cmd_size = sum(len(cmd) for cmd in commands)
+            if total_cmd_size > 50000:
+                return "Error: Commands too large (max 50KB)"
+
             # Build GDB script from commands
             gdb_script = "\n".join(commands)
 
@@ -204,7 +214,7 @@ class LLMFindingValidator:
                     full_input.relative_to(repo_root_resolved)
                 except ValueError:
                     return "Error: input_file must be within repository"
-                gdb_script = f"run < {full_input}\n" + gdb_script
+                gdb_script = f"run < {shlex.quote(str(full_input))}\n" + gdb_script
 
             cmd = ["gdb", "-batch", "-x", "-", str(full_binary)]
 

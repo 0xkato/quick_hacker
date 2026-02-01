@@ -2,40 +2,89 @@
 @tailwind components;
 @tailwind utilities;
 
-/* VSCode Dark+ Theme Variables */
+/* Futuristic Dark Theme Variables */
 :root {
-  --vsc-bg: #1e1e1e;
-  --vsc-sidebar: #252526;
-  --vsc-activitybar: #333333;
-  --vsc-input: #3c3c3c;
-  --vsc-border: #454545;
-  --vsc-border-subtle: #3c3c3c;
-  --vsc-text: #cccccc;
-  --vsc-text-muted: #858585;
-  --vsc-accent: #0078d4;
-  --vsc-hover: #2a2d2e;
-  --vsc-selection: #264f78;
-  --vsc-statusbar: #007acc;
-}
+  /* Base colors */
+  --bg-primary: #0a0c10;
+  --bg-secondary: #12151c;
+  --bg-tertiary: #1a1e28;
+  --bg-elevated: #222833;
 
-/* Soft UI Design Tokens */
-:root {
-  /* Border radius scale */
+  /* Borders */
+  --border-default: #2a3040;
+  --border-subtle: #1e2430;
+  --border-accent: #3a4560;
+
+  /* Text */
+  --text-primary: #e4e6eb;
+  --text-secondary: #8892a0;
+  --text-muted: #5a6270;
+
+  /* Accent */
+  --accent: #60a5fa;
+  --accent-hover: #7db8fc;
+
+  /* Severity */
+  --sev-critical: #ff5f5f;
+  --sev-high: #f0b429;
+  --sev-medium: #f59e0b;
+  --sev-low: #60a5fa;
+  --sev-info: #94a3b8;
+
+  /* Validation Status */
+  --status-confirmed: #4ade80;
+  --status-needs-review: #fbbf24;
+  --status-rejected: #f87171;
+  --status-unprocessed: #e4e6eb;
+
+  /* Node colors */
+  --node-finding: #ff5f5f;
+  --node-sink: #fbbf24;
+  --node-touched: #60a5fa;
+  --node-normal: #4ade80;
+
+  /* Legacy compatibility */
+  --vsc-bg: #0a0c10;
+  --vsc-sidebar: #12151c;
+  --vsc-activitybar: #0d0f14;
+  --vsc-input: #1a1e28;
+  --vsc-border: #2a3040;
+  --vsc-border-subtle: #1e2430;
+  --vsc-text: #e4e6eb;
+  --vsc-text-muted: #8892a0;
+  --vsc-accent: #60a5fa;
+  --vsc-hover: #1a2030;
+  --vsc-selection: #2a3a50;
+  --vsc-statusbar: #0d1117;
+
+  /* Design tokens */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-full: 12px;
 
-  /* Shadows */
-  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.4);
 
-  /* Transitions */
   --transition-default: all 150ms ease-out;
 
-  /* Card background */
-  --bg-card: #2d2d2d;
-  --bg-hover-soft: rgba(55, 55, 61, 0.8);
+  --bg-card: #12151c;
+  --bg-hover-soft: rgba(42, 48, 64, 0.6);
+}
+
+/* Terminal scanlines overlay (subtle) */
+.scanlines::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.015) 2px,
+    rgba(0, 0, 0, 0.015) 4px
+  );
+  z-index: 9999;
 }
 
 /* Scan indicator animation */
@@ -52,35 +101,37 @@
   opacity: 0.7;
 }
 
+/* Base typography */
 html {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 body {
-  background-color: var(--vsc-bg);
-  color: var(--vsc-text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono), 'JetBrains Mono', 'Fira Code', monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: 0.01em;
 }
 
-/* Refined scrollbar - thinner and rounder */
+/* Terminal-style scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--bg-primary);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #424242;
-  border-radius: 3px;
+  background: var(--border-default);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 100, 100, 0.7);
+  background: var(--border-accent);
 }
 
 ::-webkit-scrollbar-corner {
@@ -92,108 +143,160 @@ body {
   background: var(--vsc-selection);
 }
 
-/* File tree styles - softer */
+/* Terminal-style labels */
+.terminal-label {
+  @apply text-xs font-medium uppercase tracking-widest text-text-secondary;
+}
+
+/* File tree styles */
 .file-tree-item {
-  @apply flex items-center gap-1.5 py-0.5 cursor-pointer text-vsc-sm;
+  @apply flex items-center gap-1.5 py-1 cursor-pointer text-sm font-mono;
   padding-left: 12px;
   padding-right: 12px;
-  margin: 0 4px;
+  margin: 2px 4px;
   border-radius: var(--radius-sm);
   transition: var(--transition-default);
+  color: var(--text-secondary);
 }
 
 .file-tree-item:hover {
   background: var(--bg-hover-soft);
+  color: var(--text-primary);
 }
 
 .file-tree-item.selected {
   background: var(--vsc-selection);
-  border-left: 2px solid var(--vsc-accent);
-  padding-left: 10px;
+  border-left: 3px solid var(--accent);
+  padding-left: 9px;
+  color: var(--text-primary);
 }
 
-/* Severity badges - VSCode style */
+/* Severity badges - bold, glowing */
 .severity-badge {
-  @apply inline-flex items-center px-1.5 py-0.5 rounded text-vsc-xs font-medium;
+  @apply inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide;
 }
 
 .severity-badge.critical {
-  @apply bg-sev-critical/20 text-sev-critical;
+  background: var(--sev-critical);
+  color: #0a0c10;
+  box-shadow: 0 0 12px rgba(255, 95, 95, 0.4);
 }
 
 .severity-badge.high {
-  @apply bg-sev-high/20 text-sev-high;
+  background: var(--sev-high);
+  color: #0a0c10;
+  box-shadow: 0 0 12px rgba(240, 180, 41, 0.4);
 }
 
 .severity-badge.medium {
-  @apply bg-sev-medium/20 text-sev-medium;
+  background: var(--sev-medium);
+  color: #0a0c10;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
 }
 
 .severity-badge.low {
-  @apply bg-sev-low/20 text-sev-low;
+  background: rgba(96, 165, 250, 0.2);
+  color: var(--sev-low);
+  border: 1px solid var(--sev-low);
 }
 
 .severity-badge.info {
-  @apply bg-sev-info/20 text-sev-info;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--sev-info);
+  border: 1px solid var(--sev-info);
+}
+
+/* Critical/High pulse on hover */
+.severity-badge.critical:hover,
+.severity-badge.high:hover {
+  animation: glow 1.5s ease-in-out infinite;
+}
+
+@keyframes glow {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.1); }
+}
+
+/* Validation status badges */
+.validation-status {
+  @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium;
+}
+
+.validation-status.confirmed {
+  color: var(--status-confirmed);
+}
+
+.validation-status.needs-review {
+  color: var(--status-needs-review);
+}
+
+.validation-status.rejected {
+  color: var(--status-rejected);
+}
+
+.validation-status.unprocessed {
+  color: var(--status-unprocessed);
+  border: 1px solid var(--border-default);
 }
 
 /* Agent status badges */
 .agent-status {
-  @apply inline-flex items-center px-1.5 py-0.5 rounded text-vsc-xs font-medium;
+  @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
 }
 
 .agent-status.running {
-  @apply bg-vsc-success/20 text-vsc-success;
+  @apply bg-status-confirmed/20 text-status-confirmed;
 }
 
 .agent-status.pending {
-  @apply bg-vsc-warning/20 text-vsc-warning;
+  @apply bg-status-needs-review/20 text-status-needs-review;
 }
 
 .agent-status.paused {
-  @apply bg-vsc-text-link/20 text-vsc-text-link;
+  @apply bg-accent/20 text-accent;
 }
 
 .agent-status.completed {
-  @apply bg-vsc-text-muted/20 text-vsc-text-muted;
+  @apply bg-text-muted/20 text-text-secondary;
 }
 
 .agent-status.failed {
-  @apply bg-vsc-error/20 text-vsc-error;
+  @apply bg-status-rejected/20 text-status-rejected;
 }
 
 .agent-status.cancelled {
-  @apply bg-vsc-border/40 text-vsc-text-muted;
+  @apply bg-border-default/40 text-text-muted;
 }
 
-/* VSCode-style buttons */
+/* Buttons */
 .btn {
-  @apply inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded text-vsc-sm font-normal transition-colors;
+  @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-all;
   @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  font-family: inherit;
 }
 
 .btn-primary {
-  @apply bg-vsc-accent hover:bg-vsc-accent-hover text-white;
+  @apply bg-accent hover:bg-accent-hover text-bg-primary;
 }
 
 .btn-secondary {
-  @apply bg-vsc-input hover:bg-vsc-border text-vsc-text;
+  @apply bg-bg-tertiary hover:bg-bg-elevated text-text-primary border border-border-default;
 }
 
 .btn-ghost {
-  @apply bg-transparent hover:bg-vsc-hover text-vsc-text-muted hover:text-vsc-text;
+  @apply bg-transparent hover:bg-bg-tertiary text-text-secondary hover:text-text-primary;
 }
 
 .btn-danger {
-  @apply bg-vsc-error hover:bg-vsc-error/80 text-white;
+  @apply bg-sev-critical hover:bg-sev-critical/80 text-bg-primary;
 }
 
 .btn-sm {
-  @apply px-2 py-0.5 text-vsc-xs;
+  @apply px-2 py-1 text-xs;
 }
 
 .btn-icon {
-  @apply p-1.5 text-vsc-text-muted hover:text-vsc-text;
+  @apply p-1.5 text-text-muted hover:text-text-primary;
   width: 28px;
   height: 28px;
   display: flex;
@@ -205,53 +308,79 @@ body {
 }
 
 .btn-icon:hover {
-  background: #3c3c3c;
+  background: var(--bg-tertiary);
 }
 
 .btn-icon:active {
   transform: scale(0.97);
 }
 
-/* Soft card container */
+/* Soft card container with left border */
 .soft-card {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   padding: 12px;
   transition: var(--transition-default);
+  border-left: 4px solid transparent;
 }
 
 .soft-card:hover {
-  background: #323232;
+  background: var(--bg-tertiary);
 }
 
-/* VSCode-style inputs */
+.soft-card.severity-critical {
+  border-left-color: var(--sev-critical);
+}
+
+.soft-card.severity-high {
+  border-left-color: var(--sev-high);
+}
+
+.soft-card.severity-medium {
+  border-left-color: var(--sev-medium);
+}
+
+.soft-card.severity-low {
+  border-left-color: var(--sev-low);
+}
+
+.soft-card.severity-info {
+  border-left-color: var(--sev-info);
+}
+
+/* Inputs */
 .input {
-  @apply w-full px-2 py-1 bg-vsc-input border border-vsc-border-subtle rounded text-vsc-sm text-vsc-text;
-  @apply focus:outline-none focus:border-vsc-accent placeholder:text-vsc-text-muted;
+  @apply w-full px-3 py-2 bg-bg-tertiary border border-border-default rounded text-sm text-text-primary font-mono;
+  @apply focus:outline-none focus:border-accent placeholder:text-text-muted;
 }
 
 .input:focus {
-  box-shadow: 0 0 0 1px var(--vsc-accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .select {
-  @apply w-full px-2 py-1 bg-vsc-input border border-vsc-border-subtle rounded text-vsc-sm text-vsc-text;
-  @apply focus:outline-none focus:border-vsc-accent;
+  @apply w-full px-3 py-2 bg-bg-tertiary border border-border-default rounded text-sm text-text-primary font-mono;
+  @apply focus:outline-none focus:border-accent;
 }
 
 .select:focus {
-  box-shadow: 0 0 0 1px var(--vsc-accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* Panel styles */
 .panel {
-  @apply bg-vsc-sidebar;
+  @apply bg-bg-secondary;
 }
 
 .panel-header {
-  @apply flex items-center justify-between px-3 py-1.5 border-b border-vsc-border-subtle;
-  @apply text-vsc-xs font-semibold uppercase tracking-wider text-vsc-text-muted;
+  @apply flex items-center justify-between px-3 py-2 border-b border-border-subtle;
+  @apply text-xs font-semibold uppercase tracking-widest text-text-muted;
+}
+
+.panel-header::before {
+  content: '>';
+  @apply mr-2 text-accent;
 }
 
 .panel-content {
@@ -260,65 +389,71 @@ body {
 
 /* Code snippet */
 .code-snippet {
-  @apply font-mono text-vsc-sm bg-vsc-bg p-2 rounded border border-vsc-border-subtle overflow-x-auto;
-  line-height: 1.4;
+  @apply font-mono text-sm bg-bg-primary p-3 rounded border border-border-subtle overflow-x-auto;
+  line-height: 1.5;
 }
 
 /* Activity bar icon button */
 .activity-icon {
-  @apply flex items-center justify-center w-12 h-12 text-vsc-text-muted hover:text-vsc-text cursor-pointer;
-  @apply relative;
+  @apply flex items-center justify-center w-12 h-12 text-text-muted hover:text-text-primary cursor-pointer;
+  @apply relative transition-all;
+}
+
+.activity-icon:hover {
+  text-shadow: 0 0 8px rgba(96, 165, 250, 0.3);
 }
 
 .activity-icon.active {
-  @apply text-vsc-text;
+  @apply text-text-primary;
 }
 
 .activity-icon.active::before {
   content: '';
-  @apply absolute left-0 top-0 bottom-0 w-0.5 bg-vsc-accent;
+  @apply absolute left-0 top-0 bottom-0 w-0.5 bg-accent;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
 }
 
 /* Tab bar styles */
 .tab {
-  @apply flex items-center gap-1.5 px-3 py-1.5 text-vsc-sm text-vsc-text-muted cursor-pointer;
+  @apply flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-muted cursor-pointer font-mono;
   @apply border-t-2 border-transparent;
-  background: var(--vsc-sidebar);
+  background: var(--bg-secondary);
 }
 
 .tab:hover {
-  @apply text-vsc-text;
+  @apply text-text-primary;
 }
 
 .tab.active {
-  @apply text-vsc-text bg-vsc-bg;
-  border-top-color: var(--vsc-accent);
+  @apply text-text-primary bg-bg-primary;
+  border-top-color: var(--accent);
 }
 
 /* Breadcrumb */
 .breadcrumb {
-  @apply flex items-center gap-1 px-3 py-1 text-vsc-sm text-vsc-text-muted bg-vsc-bg;
+  @apply flex items-center gap-1 px-3 py-1.5 text-sm text-text-muted bg-bg-primary font-mono;
 }
 
 .breadcrumb-item {
-  @apply hover:text-vsc-text cursor-pointer;
+  @apply hover:text-text-primary cursor-pointer;
 }
 
 .breadcrumb-separator {
-  @apply text-vsc-border mx-0.5;
+  @apply text-border-default mx-0.5;
 }
 
 /* Modal overlay */
 .modal-overlay {
-  @apply fixed inset-0 bg-black/60 flex items-center justify-center z-50;
+  @apply fixed inset-0 bg-black/70 flex items-center justify-center z-50;
+  backdrop-filter: blur(2px);
 }
 
 .modal-content {
-  @apply bg-vsc-sidebar border border-vsc-border rounded-lg shadow-vsc-widget max-w-2xl w-full mx-4;
+  @apply bg-bg-secondary border border-border-default rounded-lg shadow-elevated max-w-2xl w-full mx-4;
 }
 
 .modal-header {
-  @apply flex items-center justify-between px-4 py-3 border-b border-vsc-border-subtle;
+  @apply flex items-center justify-between px-4 py-3 border-b border-border-subtle;
 }
 
 .modal-body {
@@ -326,25 +461,25 @@ body {
 }
 
 .modal-footer {
-  @apply flex justify-end gap-2 px-4 py-3 border-t border-vsc-border-subtle;
+  @apply flex justify-end gap-2 px-4 py-3 border-t border-border-subtle;
 }
 
-/* Progress bar - softer */
+/* Progress bar */
 .progress-bar {
-  @apply h-1.5 bg-vsc-border-subtle overflow-hidden;
+  @apply h-1.5 bg-border-default overflow-hidden;
   border-radius: var(--radius-sm);
 }
 
 .progress-bar-fill {
-  @apply h-full bg-vsc-accent;
+  @apply h-full bg-accent;
   border-radius: var(--radius-sm);
   transition: width 300ms ease-out;
 }
 
-/* VSCode-style list */
+/* List item */
 .list-item {
-  @apply flex items-center gap-2 px-2 py-1 text-vsc-sm cursor-pointer;
-  @apply hover:bg-vsc-hover rounded;
+  @apply flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer font-mono;
+  @apply hover:bg-bg-tertiary rounded;
 }
 
 .list-item.selected {
@@ -353,36 +488,36 @@ body {
 
 /* Tooltip */
 .tooltip {
-  @apply absolute z-50 px-2 py-1 text-vsc-xs bg-vsc-sidebar border border-vsc-border rounded shadow-vsc-dropdown;
-  @apply text-vsc-text whitespace-nowrap;
+  @apply absolute z-50 px-2 py-1 text-xs bg-bg-elevated border border-border-default rounded shadow-dropdown;
+  @apply text-text-primary whitespace-nowrap font-mono;
 }
 
 /* Notification toast */
 .toast {
-  @apply fixed bottom-4 right-4 px-4 py-2 rounded shadow-vsc-dropdown;
-  @apply flex items-center gap-2 text-vsc-sm;
+  @apply fixed bottom-4 right-4 px-4 py-2 rounded shadow-dropdown;
+  @apply flex items-center gap-2 text-sm font-mono;
 }
 
 .toast-error {
-  @apply bg-vsc-error text-white;
+  @apply bg-sev-critical text-bg-primary;
 }
 
 .toast-success {
-  @apply bg-vsc-success text-vsc-bg;
+  @apply bg-status-confirmed text-bg-primary;
 }
 
 .toast-warning {
-  @apply bg-vsc-warning text-vsc-bg;
+  @apply bg-sev-high text-bg-primary;
 }
 
 /* Divider */
 .divider {
-  @apply border-t border-vsc-border-subtle my-2;
+  @apply border-t border-border-subtle my-2;
 }
 
 /* Empty state */
 .empty-state {
-  @apply flex flex-col items-center justify-center py-8 text-vsc-text-muted;
+  @apply flex flex-col items-center justify-center py-8 text-text-muted;
 }
 
 .empty-state-icon {
@@ -390,5 +525,22 @@ body {
 }
 
 .empty-state-text {
-  @apply text-vsc-sm text-center;
+  @apply text-sm text-center font-mono;
+}
+
+/* CRT glow effects */
+.glow-critical {
+  text-shadow: 0 0 10px rgba(255, 95, 95, 0.4);
+}
+
+.glow-high {
+  text-shadow: 0 0 10px rgba(240, 180, 41, 0.4);
+}
+
+.glow-success {
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.3);
+}
+
+.glow-accent {
+  text-shadow: 0 0 10px rgba(96, 165, 250, 0.3);
 }

@@ -74,23 +74,64 @@ interface FindingCardProps {
   onNavigateToFile: () => void;
 }
 
+// Helper function to get validation status
+function getValidationStatus(finding: Finding): {
+  label: string;
+  className: string;
+  icon: string;
+} {
+  if (finding.validation_result?.is_valid === true) {
+    return { label: 'CONFIRMED', className: 'confirmed', icon: '●' };
+  }
+  if (finding.validation_result?.is_valid === false) {
+    return { label: 'REJECTED', className: 'rejected', icon: '●' };
+  }
+  if (finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition)) {
+    return { label: 'NEEDS REVIEW', className: 'needs-review', icon: '●' };
+  }
+  return { label: 'UNPROCESSED', className: 'unprocessed', icon: '○' };
+}
+
 function FindingCard({ finding, onClick, onNavigateToFile }: FindingCardProps) {
+  const validationStatus = getValidationStatus(finding);
+
   return (
-    <div className="soft-card" style={{ padding: 0, overflow: 'hidden' }}>
+    <div
+      className={clsx('soft-card', finding.severity && `severity-${finding.severity}`)}
+      style={{ padding: 0, overflow: 'hidden' }}
+    >
       {/* Header */}
       <div
-        className="flex items-start gap-2 p-3 cursor-pointer hover:bg-vsc-hover"
+        className="flex items-start gap-2 p-3 cursor-pointer hover:bg-bg-tertiary"
         onClick={onClick}
         style={{ transition: 'var(--transition-default)' }}
       >
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            {/* Disposition badge (always shown if present) */}
+          {/* Title first (primary text, font-medium) */}
+          <div className="text-sm font-medium text-text-primary mb-1.5 truncate">
+            {finding.title}
+          </div>
+
+          {/* Badges row: severity badge + validation status + disposition */}
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+            {/* Severity badge using new design system classes */}
+            {finding.severity && (
+              <span className={clsx('severity-badge', finding.severity)}>
+                {finding.severity.toUpperCase()}
+              </span>
+            )}
+
+            {/* Validation status indicator */}
+            <span className={clsx('validation-status', validationStatus.className)}>
+              <span>{validationStatus.icon}</span>
+              <span>{validationStatus.label}</span>
+            </span>
+
+            {/* Disposition badge */}
             {finding.disposition && (
               <span
-                className="text-vsc-xs px-2 py-0.5 font-medium text-white"
+                className="text-xs px-2 py-0.5 font-medium text-white rounded"
                 style={{
-                  borderRadius: 'var(--radius-sm)',
                   background: DISPOSITION_COLORS[finding.disposition],
                 }}
                 title={`Triage disposition: ${DISPOSITION_LABELS[finding.disposition]}`}
@@ -98,80 +139,33 @@ function FindingCard({ finding, onClick, onNavigateToFile }: FindingCardProps) {
                 {DISPOSITION_LABELS[finding.disposition]}
               </span>
             )}
-            {/* Severity badge (only for reportable findings) */}
-            {finding.severity && finding.disposition && REPORTABLE_DISPOSITIONS.has(finding.disposition) && (
-              <span
-                className="text-vsc-xs px-2 py-0.5 font-medium"
-                style={{
-                  borderRadius: 'var(--radius-sm)',
-                  background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
-                    : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
-                    : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
-                    : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
-                    : 'rgba(117, 190, 255, 0.25)',
-                  color: finding.severity === 'critical' ? 'var(--sev-critical)'
-                    : finding.severity === 'high' ? 'var(--sev-high)'
-                    : finding.severity === 'medium' ? 'var(--sev-medium)'
-                    : finding.severity === 'low' ? 'var(--sev-low)'
-                    : 'var(--sev-info)',
-                }}
-              >
-                {finding.severity.toUpperCase()}
-              </span>
-            )}
-            {/* Legacy: Show severity if no disposition (backward compatibility) */}
-            {finding.severity && !finding.disposition && (
-              <span
-                className="text-vsc-xs px-2 py-0.5 font-medium"
-                style={{
-                  borderRadius: 'var(--radius-sm)',
-                  background: finding.severity === 'critical' ? 'rgba(241, 76, 76, 0.25)'
-                    : finding.severity === 'high' ? 'rgba(204, 167, 0, 0.25)'
-                    : finding.severity === 'medium' ? 'rgba(233, 167, 0, 0.25)'
-                    : finding.severity === 'low' ? 'rgba(55, 148, 255, 0.25)'
-                    : 'rgba(117, 190, 255, 0.25)',
-                  color: finding.severity === 'critical' ? 'var(--sev-critical)'
-                    : finding.severity === 'high' ? 'var(--sev-high)'
-                    : finding.severity === 'medium' ? 'var(--sev-medium)'
-                    : finding.severity === 'low' ? 'var(--sev-low)'
-                    : 'var(--sev-info)',
-                }}
-              >
-                {finding.severity.toUpperCase()}
-              </span>
-            )}
+
             {/* Legacy classification badge */}
-            {finding.classification && (
+            {finding.classification && !finding.disposition && (
               <span
-                className="text-vsc-xs px-2 py-0.5 font-medium text-white"
+                className="text-xs px-2 py-0.5 font-medium text-white rounded"
                 style={{
-                  borderRadius: 'var(--radius-sm)',
                   background: CLASSIFICATION_COLORS[finding.classification],
                 }}
               >
                 {CLASSIFICATION_LABELS[finding.classification]}
               </span>
             )}
-            {/* Non-reportable notice */}
-            {finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition) && (
-              <span
-                className="text-vsc-xs px-2 py-0.5 font-medium text-vsc-text-muted"
-                style={{
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(107, 114, 128, 0.2)',
-                }}
-                title="This finding was filtered by triage. Click 'Show Filtered' to see why."
-              >
-                Filtered by triage
-              </span>
-            )}
-            <span className="text-vsc-sm truncate text-vsc-text">{finding.title}</span>
           </div>
-          <div className="flex items-center gap-2 text-vsc-xs text-vsc-text-muted">
+
+          {/* Location (file:line) */}
+          <div className="flex items-center gap-2 text-xs text-text-muted mb-1">
             <FileCode className="w-3 h-3" />
             <span className="truncate">{finding.file_path}</span>
-            <span className="text-vsc-text-link">L{finding.line_start}</span>
+            <span className="text-accent">L{finding.line_start}</span>
           </div>
+
+          {/* Description (truncated, if exists) */}
+          {finding.description && (
+            <p className="text-xs text-text-secondary line-clamp-2 mt-1">
+              {finding.description}
+            </p>
+          )}
         </div>
 
         <button

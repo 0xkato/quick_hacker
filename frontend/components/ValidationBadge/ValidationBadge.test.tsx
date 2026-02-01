@@ -24,7 +24,7 @@ describe('ValidationBadge', () => {
     };
 
     render(<ValidationBadge validationResult={validResult} />);
-    expect(screen.getByText(/LLM Validated/i)).toBeInTheDocument();
+    expect(screen.getByText(/CONFIRMED/i)).toBeInTheDocument();
   });
 
   it('should render invalid badge when is_valid is false', () => {
@@ -38,7 +38,7 @@ describe('ValidationBadge', () => {
     };
 
     render(<ValidationBadge validationResult={invalidResult} />);
-    expect(screen.getByText(/LLM Rejected/i)).toBeInTheDocument();
+    expect(screen.getByText(/REJECTED/i)).toBeInTheDocument();
   });
 
   it('should display confidence when present', () => {
@@ -52,7 +52,7 @@ describe('ValidationBadge', () => {
     };
 
     render(<ValidationBadge validationResult={result} />);
-    expect(screen.getByText('75% confidence')).toBeInTheDocument();
+    expect(screen.getByText('75%')).toBeInTheDocument();
   });
 
   it('should not display confidence when null', () => {
@@ -66,7 +66,7 @@ describe('ValidationBadge', () => {
     };
 
     render(<ValidationBadge validationResult={result} />);
-    expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
   });
 
   it('should display reasoning list', () => {
@@ -95,8 +95,8 @@ describe('ValidationBadge', () => {
       timestamp: '2024-01-01T00:00:00Z',
     };
 
-    render(<ValidationBadge validationResult={result} />);
-    expect(screen.queryByText('Reasoning:')).not.toBeInTheDocument();
+    const { container } = render(<ValidationBadge validationResult={result} />);
+    expect(container.querySelector('.validation-reasoning')).not.toBeInTheDocument();
   });
 
   it('should apply valid styling classes when is_valid is true', () => {
@@ -110,7 +110,7 @@ describe('ValidationBadge', () => {
     };
 
     const { container } = render(<ValidationBadge validationResult={result} />);
-    const badge = container.querySelector('.validation-badge');
+    const badge = container.querySelector('.validation-badge-container');
     expect(badge).toHaveClass('valid');
   });
 
@@ -125,7 +125,7 @@ describe('ValidationBadge', () => {
     };
 
     const { container } = render(<ValidationBadge validationResult={result} />);
-    const badge = container.querySelector('.validation-badge');
+    const badge = container.querySelector('.validation-badge-container');
     expect(badge).toHaveClass('invalid');
   });
 });

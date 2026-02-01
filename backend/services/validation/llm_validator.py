@@ -27,6 +27,7 @@ class LLMFindingValidator:
         anthropic_api_key: str,
         repo_root: str,
         model: str = "claude-sonnet-3-5-20241022",
+        enabled_verifiers: list[str] = None,
     ):
         """
         Initialize LLM validator.
@@ -50,6 +51,7 @@ class LLMFindingValidator:
         self.client = Anthropic(api_key=anthropic_api_key)
         self.repo_root = Path(repo_root)
         self.model = model
+        self.enabled_verifiers = enabled_verifiers or []
 
         # Initialize tool stubs
         self.tools = {
@@ -57,6 +59,10 @@ class LLMFindingValidator:
             "grep_code": self._tool_grep_code,
             "glob_files": self._tool_glob_files,
         }
+
+        # Add GDB tool if enabled
+        if "gdb" in self.enabled_verifiers:
+            self.tools["gdb_debug"] = self._tool_gdb_debug
 
     def _tool_read_file(self, file_path: str) -> str:
         """Read file from repo."""
@@ -167,6 +173,60 @@ class LLMFindingValidator:
         except Exception as e:
             return f"Glob error: {str(e)}"
 
+    def _tool_gdb_debug(
+        self,
+        binary_path: str,
+        commands: list[str],
+        input_file: Optional[str] = None,
+    ) -> str:
+        """Execute GDB commands on a binary for memory corruption analysis."""
+        try:
+            # Build full path and validate
+            full_binary = (self.repo_root / binary_path).resolve()
+            repo_root_resolved = self.repo_root.resolve()
+
+            # SECURITY: Verify path is within repo_root
+            try:
+                full_binary.relative_to(repo_root_resolved)
+            except ValueError:
+                return f"Error: binary_path must be within repository"
+
+            if not full_binary.exists():
+                return f"Error: Binary not found: {binary_path}"
+
+            # Build GDB script from commands
+            gdb_script = "\n".join(commands)
+
+            # Handle input file if provided
+            if input_file:
+                full_input = (self.repo_root / input_file).resolve()
+                try:
+                    full_input.relative_to(repo_root_resolved)
+                except ValueError:
+                    return "Error: input_file must be within repository"
+                gdb_script = f"run < {full_input}\n" + gdb_script
+
+            cmd = ["gdb", "-batch", "-x", "-", str(full_binary)]
+
+            result = subprocess.run(
+                cmd,
+                input=gdb_script,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=str(self.repo_root),
+            )
+
+            output = result.stdout + result.stderr
+            return output[:10000]  # Limit output size
+
+        except subprocess.TimeoutExpired:
+            return "Error: GDB timeout - execution exceeded 30s limit"
+        except FileNotFoundError:
+            return "Error: GDB not found - install GDB to use this tool"
+        except Exception as e:
+            return f"Error: GDB execution failed: {str(e)}"
+
     def _get_tool_definitions(self) -> list[dict]:
         """
         Get tool definitions in Anthropic API format.
@@ -174,7 +234,7 @@ class LLMFindingValidator:
         Returns:
             List of tool definition dictionaries with name, description, and input_schema
         """
-        return [
+        tools = [
             {
                 "name": "read_file",
                 "description": "Read source file contents",
@@ -222,6 +282,35 @@ class LLMFindingValidator:
                 }
             }
         ]
+
+        # Add GDB tool definition if enabled
+        if "gdb" in self.enabled_verifiers:
+            tools.append({
+                "name": "gdb_debug",
+                "description": "Run GDB to analyze crash or memory corruption. "
+                              "Use to verify memory corruption findings.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "binary_path": {
+                            "type": "string",
+                            "description": "Path to binary to debug (relative to repo)"
+                        },
+                        "input_file": {
+                            "type": "string",
+                            "description": "Optional path to crash input/PoC file"
+                        },
+                        "commands": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "GDB commands to execute (e.g., ['run', 'bt', 'info registers'])"
+                        }
+                    },
+                    "required": ["binary_path", "commands"]
+                }
+            })
+
+        return tools
 
     def _build_validation_prompt(
         self,

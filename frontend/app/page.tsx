@@ -705,6 +705,7 @@ export default function Home() {
 	                  <div className="flex-1 overflow-hidden">
 	                    <FindingsList
 	                      key={findingsMgmt.selectedFindingsAgentId || 'all'}
+	                      agentId={findingsMgmt.selectedFindingsAgentId}
 	                      findings={
 	                        findingsMgmt.selectedFindingsAgentId
 	                          ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
@@ -712,6 +713,13 @@ export default function Home() {
 	                      }
 	                      onFindingClick={handleFindingClick}
 	                      onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
+	                      onFindingsUpdated={(triaged) => {
+	                        // Replace findings for this agent with triaged results
+	                        findingsMgmt.setFindings((prev) => {
+	                          const otherFindings = prev.filter(f => f.agent_id !== findingsMgmt.selectedFindingsAgentId);
+	                          return [...otherFindings, ...triaged];
+	                        });
+	                      }}
 	                    />
 	                  </div>
 	                </div>

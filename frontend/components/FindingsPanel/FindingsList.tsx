@@ -11,7 +11,10 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Filter,
+  Loader2,
 } from 'lucide-react';
+import { api } from '@/lib/api';
 import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
@@ -56,8 +59,10 @@ const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['valid_security_issue', 'b
 
 interface FindingsListProps {
   findings: Finding[];
+  agentId?: string | null;
   onFindingClick?: (finding: Finding) => void;
   onNavigateToFile?: (finding: Finding) => void;
+  onFindingsUpdated?: (findings: Finding[]) => void;
 }
 
 const SEVERITY_ICONS: Record<Severity, React.ReactNode> = {
@@ -183,9 +188,33 @@ function FindingCard({ finding, onClick, onNavigateToFile }: FindingCardProps) {
   );
 }
 
-export function FindingsList({ findings, onFindingClick, onNavigateToFile }: FindingsListProps) {
+export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFile, onFindingsUpdated }: FindingsListProps) {
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
   const [showReportView, setShowReportView] = useState(false);
+  const [isTriaging, setIsTriaging] = useState(false);
+  const [triageMessage, setTriageMessage] = useState<string | null>(null);
+
+  const handleQuickTriage = async () => {
+    if (!agentId) return;
+
+    setIsTriaging(true);
+    setTriageMessage(null);
+
+    try {
+      const result = await api.agents.quickTriage(agentId);
+      setTriageMessage(`Triaged ${result.triaged_count} findings, filtered ${result.filtered_count} as non-security`);
+
+      // Update findings in parent
+      if (onFindingsUpdated) {
+        onFindingsUpdated(result.findings);
+      }
+    } catch (error) {
+      console.error('Triage failed:', error);
+      setTriageMessage('Triage failed. Please try again.');
+    } finally {
+      setIsTriaging(false);
+    }
+  };
 
   const isTriageFiltered = useCallback(
     (finding: Finding) => Boolean(finding.disposition && !REPORTABLE_DISPOSITIONS.has(finding.disposition)),
@@ -241,6 +270,28 @@ export function FindingsList({ findings, onFindingClick, onNavigateToFile }: Fin
           </span>
           {/* Right side controls */}
           <div className="flex items-center gap-2">
+            {/* Triage Button */}
+            {agentId && findings.length > 0 && (
+              <button
+                onClick={handleQuickTriage}
+                disabled={isTriaging}
+                className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover disabled:opacity-50"
+                style={{
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--vsc-border)',
+                  color: isTriaging ? 'var(--vsc-accent)' : 'var(--vsc-text-muted)',
+                }}
+                title="Run quick triage to filter non-security findings"
+              >
+                {isTriaging ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Filter className="w-3 h-3" />
+                )}
+                <span>{isTriaging ? 'Triaging...' : 'Triage'}</span>
+              </button>
+            )}
+
             {/* Report View Button */}
             <button
               onClick={() => setShowReportView(true)}
@@ -314,6 +365,23 @@ export function FindingsList({ findings, onFindingClick, onNavigateToFile }: Fin
             </button>
           ))}
         </div>
+
+        {/* Triage result message */}
+        {triageMessage && (
+          <div
+            className="mt-2 px-2 py-1 text-vsc-xs rounded"
+            style={{
+              background: triageMessage.includes('failed')
+                ? 'rgba(220, 38, 38, 0.1)'
+                : 'rgba(34, 197, 94, 0.1)',
+              color: triageMessage.includes('failed')
+                ? 'var(--sev-high)'
+                : 'var(--vsc-success, #22c55e)',
+            }}
+          >
+            {triageMessage}
+          </div>
+        )}
       </div>
 
       {/* List View */}

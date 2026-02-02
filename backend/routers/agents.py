@@ -670,6 +670,177 @@ async def retriage_findings(
     )
 
 
+class QuickTriageRequest(BaseModel):
+    """Request for quick rule-based triage."""
+    finding_ids: Optional[list[str]] = None  # If None, triage all findings
+
+
+class QuickTriageResponse(BaseModel):
+    """Response from quick triage."""
+    triaged_count: int
+    filtered_count: int  # Number filtered out as non-security
+    findings: list[Finding]
+
+
+@router.post("/{agent_id}/quick-triage", response_model=QuickTriageResponse)
+async def quick_triage_findings(
+    agent_id: str,
+    request: QuickTriageRequest = QuickTriageRequest(),
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """
+    Quick rule-based triage of findings.
+
+    This endpoint applies simple heuristics to filter out obvious non-security findings:
+    - Test code (seeders, fixtures, test files)
+    - Example/demo code
+    - Hardening suggestions without actual vulnerability
+    - Documentation-only issues
+
+    No LLM required - pure rule-based filtering.
+    """
+    from models.schemas import Disposition
+
+    # Get agent
+    agent = await orchestrator.get_agent(agent_id)
+    if not agent:
+        snapshot = persistence_service.load_agent_state(agent_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get findings
+    findings = await orchestrator.get_findings(agent_id=agent_id)
+    if not findings:
+        snapshot = persistence_service.load_agent_state(agent_id)
+        if snapshot and snapshot.findings:
+            findings = [Finding(**f) for f in snapshot.findings]
+        else:
+            return QuickTriageResponse(triaged_count=0, filtered_count=0, findings=[])
+
+    # Filter to specific IDs if requested
+    if request.finding_ids:
+        finding_id_set = set(request.finding_ids)
+        findings = [f for f in findings if f.id in finding_id_set]
+
+    # Apply rule-based triage
+    triaged_findings = []
+    filtered_count = 0
+
+    for finding in findings:
+        should_filter, reason = _rule_based_triage(finding)
+
+        if should_filter:
+            # Mark as filtered (HARDENING disposition)
+            finding.disposition = Disposition.HARDENING
+            finding.reasoning = [reason]
+            filtered_count += 1
+        else:
+            # Mark as valid security issue
+            if not finding.disposition:
+                finding.disposition = Disposition.VALID_SECURITY_ISSUE
+
+        triaged_findings.append(finding)
+
+    # Update findings in orchestrator
+    orchestrator._findings[agent_id] = triaged_findings
+
+    return QuickTriageResponse(
+        triaged_count=len(triaged_findings),
+        filtered_count=filtered_count,
+        findings=triaged_findings,
+    )
+
+
+def _rule_based_triage(finding: Finding) -> tuple[bool, str]:
+    """
+    Apply rule-based heuristics to determine if a finding is likely non-security.
+
+    Returns:
+        (should_filter, reason) - True if finding should be filtered out
+    """
+    file_path = finding.file_path.lower() if finding.file_path else ""
+    title = finding.title.lower() if finding.title else ""
+    description = finding.description.lower() if finding.description else ""
+
+    # Test code patterns
+    test_patterns = [
+        '/tests/', '/test/', '/__tests__/', '/spec/', '/specs/',
+        '_test.py', '_test.go', '_test.js', '_test.ts',
+        '.test.py', '.test.js', '.test.ts', '.test.tsx',
+        '/testing/', '/testdata/', '/test_data/',
+        '/mock/', '/mocks/', '/__mocks__/',
+    ]
+    for pattern in test_patterns:
+        if pattern in file_path:
+            return True, f"Test code: file matches pattern '{pattern}'"
+
+    # Seeder/fixture patterns (common false positives)
+    seed_patterns = [
+        '/seeders/', '/seeds/', '/seeder/',
+        '/factories/', '/factory/',
+        '/fixtures/', '/fixture/',
+        'seeder.php', 'seeder.py', 'seeder.js',
+        'factory.php', 'factory.py', 'factory.js',
+        'databaseseeder', 'database_seeder',
+    ]
+    for pattern in seed_patterns:
+        if pattern in file_path:
+            return True, f"Seeder/fixture code: file matches pattern '{pattern}'"
+
+    # Example/demo patterns
+    example_patterns = [
+        '/examples/', '/example/', '/demo/', '/demos/',
+        '/sample/', '/samples/', '/playground/',
+        '/tutorial/', '/tutorials/',
+    ]
+    for pattern in example_patterns:
+        if pattern in file_path:
+            return True, f"Example/demo code: file matches pattern '{pattern}'"
+
+    # Vendor/third-party patterns
+    vendor_patterns = [
+        '/vendor/', '/node_modules/', '/bower_components/',
+        '/third_party/', '/third-party/', '/external/',
+        '/lib/vendor/', '/libs/vendor/',
+    ]
+    for pattern in vendor_patterns:
+        if pattern in file_path:
+            return True, f"Vendor/third-party code: file matches pattern '{pattern}'"
+
+    # Documentation patterns
+    doc_patterns = [
+        '/docs/', '/doc/', '/documentation/',
+        '.md', '.rst', '.txt',
+    ]
+    # Only filter docs if it's purely documentation (not code in docs)
+    if any(pattern in file_path for pattern in doc_patterns):
+        if file_path.endswith(('.md', '.rst', '.txt')):
+            return True, f"Documentation file: {file_path}"
+
+    # Environment/config example files
+    env_example_patterns = [
+        '.env.example', '.env.sample', '.env.template',
+        'config.example', 'config.sample', 'settings.example',
+    ]
+    for pattern in env_example_patterns:
+        if pattern in file_path:
+            return True, f"Example config file: file matches pattern '{pattern}'"
+
+    # Check for hardcoded credentials in obvious test contexts
+    if 'hardcoded' in title or 'hardcoded' in description:
+        # Check if it's in a test/example context
+        test_context_keywords = [
+            'test', 'example', 'sample', 'demo', 'fixture',
+            'seeder', 'factory', 'mock', 'stub', 'fake',
+        ]
+        combined = f"{file_path} {title} {description}"
+        if any(keyword in combined for keyword in test_context_keywords):
+            return True, "Hardcoded credentials in test/example context"
+
+    # Not filtered - likely a real security issue
+    return False, ""
+
+
 @router.get("/{agent_id}/triaged-findings/batch/{batch_id}")
 async def get_triaged_findings_batch(
     agent_id: str,

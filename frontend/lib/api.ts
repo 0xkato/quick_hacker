@@ -304,6 +304,17 @@ export const agents = {
     return request<Finding[]>(`/api/agents/findings/all${query}`);
   },
 
+  async quickTriage(agentId: string, findingIds?: string[]): Promise<{
+    triaged_count: number;
+    filtered_count: number;
+    findings: Finding[];
+  }> {
+    return request(`/api/agents/${agentId}/quick-triage`, {
+      method: 'POST',
+      body: JSON.stringify({ finding_ids: findingIds }),
+    });
+  },
+
   async loadAgentState(agentId: string): Promise<{
     status: string;
     agent_id: string;

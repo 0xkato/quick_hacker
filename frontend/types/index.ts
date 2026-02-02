@@ -291,18 +291,6 @@ export interface AgentStats {
   max_concurrent: number;
 }
 
-// === UI State ===
-
-export interface AppState {
-  currentRepo: RepoInfo | null;
-  currentFile: FileContent | null;
-  agents: Agent[];
-  findings: Finding[];
-  selectedAgentId: string | null;
-  isLoading: boolean;
-  error: string | null;
-}
-
 // === Settings ===
 
 export interface APISettings {

@@ -11,6 +11,9 @@ from typing import Optional
 import hashlib
 import json
 
+# Import shared enums from turn_plan to avoid duplication
+from models.turn_plan import FocusGap, HypothesisActivity
+
 
 class SpanType(str, Enum):
     """Type of investigation span"""
@@ -34,31 +37,11 @@ class SpanOutcome(str, Enum):
     INCONCLUSIVE = "inconclusive"
 
 
-class FocusGap(str, Enum):
-    """Evidence gap being investigated"""
-    REACHABLE = "reachable"
-    DATAFLOW_EVIDENCED = "dataflow_evidenced"
-    SOURCE_CONTROLLED_INPUT = "source_controlled_input"
-    SINK_PRESENT = "sink_present"
-    BOUNDARY_CROSSED = "boundary_crossed"
-    NOT_ONLY_MISCONFIG = "not_only_misconfig"
-    SECURITY_CONTROL_BYPASSED = "security_control_bypassed"
-    OTHER = "other"
-
-
 class HypothesisState(str, Enum):
     """State of hypothesis investigation"""
     OPEN = "open"
     COMPLETED = "completed"
     DISCARDED = "discarded"
-
-
-class HypothesisActivity(str, Enum):
-    """Activity indicator for hypothesis in current turn"""
-    NEW = "new"  # First time creating this hypothesis
-    CONTINUING = "continuing"  # Actively working on it
-    REVISITING = "revisiting"  # Returning after gap >5 turns
-    QUEUED = "queued"  # Declared but not active this turn
 
 
 class ArtifactType(str, Enum):

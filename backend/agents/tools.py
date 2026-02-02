@@ -1163,7 +1163,7 @@ class ToolExecutor:
         """Triage a finding using LLM-based production relevance filter."""
         try:
             # Import here to avoid circular dependencies
-            from services.production_relevance_filter import ProductionRelevanceFilter
+            from services.finding_filters import ProductionRelevanceFilter
             from protocol_config.protocol_config import ProtocolConfig
             from models.schemas import Finding, Severity as SeverityEnum
 

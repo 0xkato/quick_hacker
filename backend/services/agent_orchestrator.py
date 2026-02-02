@@ -100,7 +100,8 @@ AGENT_CLASSES = {
 }
 
 # Scan tiers that use the Overseer (LLM-powered orchestrator) by default
-OVERSEER_SCAN_TIERS = {"deep", "exhaustive"}
+# These are long-running audits where wave-based orchestration provides better coverage
+OVERSEER_SCAN_TIERS = {"pro", "ultra", "evil"}
 
 
 class AgentOrchestrator:
@@ -279,15 +280,18 @@ class AgentOrchestrator:
         cache = self._shared_cache
 
         # Determine agent class
-        # Use Overseer for deep/exhaustive tiers or when explicitly requested
+        # Use Overseer for pro/ultra/evil tiers or when explicitly requested
         use_overseer = getattr(request, 'use_overseer', False)
         scan_tier = request.scan_tier or "quick"
 
+        print(f"[Orchestrator] use_overseer={use_overseer}, scan_tier={scan_tier}, tiers_for_overseer={OVERSEER_SCAN_TIERS}")
+
         if use_overseer or scan_tier in OVERSEER_SCAN_TIERS:
             agent_class = Overseer
-            print(f"[Orchestrator] Using Overseer for scan_tier={scan_tier}")
+            print(f"[Orchestrator] Using Overseer for scan_tier={scan_tier}, use_overseer={use_overseer}")
         else:
             agent_class = AGENT_CLASSES.get(request.agent_type)
+            print(f"[Orchestrator] Using {agent_class.__name__} for scan_tier={scan_tier}")
             if not agent_class:
                 raise ValueError(f"Unknown agent type: {request.agent_type}")
 

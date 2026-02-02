@@ -53,6 +53,9 @@ class LLMInteraction(BaseModel):
     # Request/response pair linking
     request_id: Optional[str] = None  # For responses, links to the request
 
+    # Sub-agent that made this interaction (Overseer mode)
+    subagent: Optional[str] = None
+
 
 class ToolDetail(BaseModel):
     """

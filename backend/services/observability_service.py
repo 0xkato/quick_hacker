@@ -183,6 +183,7 @@ class ObservabilityService:
         duration_ms: Optional[int] = None,
         model: Optional[str] = None,
         provider: Optional[str] = None,
+        subagent: Optional[str] = None,
     ) -> None:
         """Log an LLM response."""
         response_id = str(uuid.uuid4())[:12]
@@ -235,6 +236,7 @@ class ObservabilityService:
             model=model,
             provider=provider,
             request_id=request_id,
+            subagent=subagent,
         )
 
         self._interactions[agent_id].append(interaction)

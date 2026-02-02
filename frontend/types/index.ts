@@ -378,6 +378,7 @@ export interface LLMInteraction {
   model?: string;
   provider?: string;
   request_id?: string;
+  subagent?: string;  // Sub-agent that made this interaction (Overseer mode)
 }
 
 export interface CodeContext {

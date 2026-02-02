@@ -41,6 +41,9 @@ function InteractionEntry({
           <span className={`${styles.badge} ${isRequest ? styles.badgeRequest : styles.badgeResponse}`}>
             {isRequest ? 'REQ' : 'RES'}
           </span>
+          {interaction.subagent && (
+            <span className={styles.subagentBadge}>{interaction.subagent}</span>
+          )}
           <span className={styles.timestamp}>{formatTimestamp(interaction.timestamp)}</span>
           {interaction.duration_ms && (
             <span className={styles.duration}>{interaction.duration_ms}ms</span>
@@ -179,8 +182,10 @@ export default function LLMInteractionPanel({
   const [autoScroll, setAutoScroll] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Get unique subagents from tool details
-  const subagents = [...new Set(toolDetails.map(t => t.subagent).filter(Boolean))] as string[];
+  // Get unique subagents from tool details and LLM interactions
+  const toolSubagents = toolDetails.map(t => t.subagent).filter(Boolean);
+  const interactionSubagents = interactions.map(i => i.subagent).filter(Boolean);
+  const subagents = [...new Set([...toolSubagents, ...interactionSubagents])] as string[];
   const hasSubagents = subagents.length > 0;
 
   // Combine and sort entries by timestamp
@@ -197,9 +202,12 @@ export default function LLMInteractionPanel({
     if (filter === 'llm' && entry.type !== 'interaction') return false;
     if (filter === 'tools' && entry.type !== 'tool') return false;
 
-    // Subagent filter (only applies to tools)
-    if (subagentFilter && entry.type === 'tool') {
-      if (entry.data.subagent !== subagentFilter) return false;
+    // Subagent filter (applies to both tools and LLM interactions)
+    if (subagentFilter) {
+      const entrySubagent = entry.type === 'tool'
+        ? entry.data.subagent
+        : entry.data.subagent;
+      if (entrySubagent !== subagentFilter) return false;
     }
 
     return true;

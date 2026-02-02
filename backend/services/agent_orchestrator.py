@@ -535,16 +535,19 @@ class AgentOrchestrator:
 
         # Tool to sub-agent mapping for Overseer mode
         TOOL_TO_SUBAGENT = {
-            # Reconnaissance phase
+            # Reconnaissance phase (RepoProfiler)
             "list_directory": "RepoProfiler",
-            "read_file": None,  # Used by all phases
             "get_repo_tree": "RepoProfiler",
-            # Sink hunting phase
+            "track_file_analysis": "RepoProfiler",
+            "get_file_info": "RepoProfiler",
+            # Sink hunting phase (SinkHunter)
             "grep_semantic": "SinkHunter",
             "search_code": "SinkHunter",
             "upsert_sink_signal": "SinkHunter",
             "scan_repo_for_secrets": "SinkHunter",
-            # Dataflow tracing phase
+            "dependency_audit": "SinkHunter",
+            # Dataflow tracing phase (DataflowTracer)
+            "read_file": "DataflowTracer",  # Reading files for dataflow analysis
             "trace_dataflow": "DataflowTracer",
             "analyze_ast": "DataflowTracer",
             "track_call_chain": "DataflowTracer",
@@ -558,7 +561,11 @@ class AgentOrchestrator:
             """Infer sub-agent from tool being called."""
             if not _use_overseer:
                 return "Scanner"
-            mapped = TOOL_TO_SUBAGENT.get(tool_name)
+            # Normalize MCP tool names (strip mcp__quickhack__ prefix)
+            normalized = tool_name
+            if tool_name.startswith("mcp__quickhack__"):
+                normalized = tool_name[len("mcp__quickhack__"):]
+            mapped = TOOL_TO_SUBAGENT.get(normalized)
             if mapped:
                 current_subagent[0] = mapped
                 return mapped
@@ -673,6 +680,7 @@ class AgentOrchestrator:
                         tool_calls=current_tool_calls if current_tool_calls else None,
                         model="claude-sdk",
                         provider="claude_sdk",
+                        subagent=current_subagent[0] if _use_overseer else None,
                     )
                     current_tool_calls = []  # Reset for next response
                 return

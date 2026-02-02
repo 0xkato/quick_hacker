@@ -10,7 +10,7 @@ Tests verify:
 """
 
 import pytest
-from services.strict_classifier import StrictClassifier
+from services.classification import StrictClassifier
 from models.schemas import (
     Finding,
     Evidence,

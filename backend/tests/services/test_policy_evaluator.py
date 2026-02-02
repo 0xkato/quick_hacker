@@ -6,7 +6,7 @@ from models.schemas import (
     ProofChecklist, InputChannel
 )
 from services.policy_evaluator import PolicyEvaluator
-from services.strict_classifier import ClassificationResult
+from services.classification import ClassificationResult
 
 
 class TestPolicyEvaluatorInit:

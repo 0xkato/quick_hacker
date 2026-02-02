@@ -229,23 +229,6 @@ class EvidenceGates(BaseModel):
     dos: DosGate = Field(default_factory=DosGate)
 
 
-class DeduplicationConfig(BaseModel):
-    """
-    Deduplication strategy configuration.
-
-    DEPRECATED: This configuration is no longer used by the deduplication algorithm.
-    The deduplicate_findings() function now uses a fixed overlap-based matching
-    strategy and does not accept a config parameter.
-
-    This model is retained for backward compatibility with TriagePolicy only.
-    """
-    enabled: bool = True
-    strategy: Literal["exact", "fuzzy", "symbol"] = "exact"
-    exact_match_fields: list[str] = Field(
-        default_factory=lambda: ["file_path", "line_start", "vulnerability_type", "title"]
-    )
-
-
 class TriagePolicy(BaseModel):
     """
     VRP triage policy configuration.
@@ -270,9 +253,6 @@ class TriagePolicy(BaseModel):
 
     # Evidence gates per vulnerability type
     evidence_gates: EvidenceGates = Field(default_factory=EvidenceGates)
-
-    # Deduplication
-    deduplication: DeduplicationConfig = Field(default_factory=DeduplicationConfig)
 
     # Disposition overrides
     report_hardening: bool = False  # Default: don't report HARDENING findings

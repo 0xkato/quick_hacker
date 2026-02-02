@@ -1,6 +1,6 @@
 """Tests for TriagePolicy models."""
 import pytest
-from models.schemas import PathClassification, PolicyDecision, PathClassificationConfig, CommandInjectionGate, IntegerOverflowGate, EvidenceGates, MemoryCorruptionGate, DosGate, DeduplicationConfig, TriagePolicy, PolicyEvaluationResult, Disposition
+from models.schemas import PathClassification, PolicyDecision, PathClassificationConfig, CommandInjectionGate, IntegerOverflowGate, EvidenceGates, MemoryCorruptionGate, DosGate, TriagePolicy, PolicyEvaluationResult, Disposition
 
 
 class TestPathClassification:
@@ -183,35 +183,6 @@ class TestEvidenceGates:
         assert gates.integer_overflow.require_attacker_controlled_operands is True
 
 
-class TestDeduplicationConfig:
-    def test_deduplication_config_defaults(self):
-        """Test DeduplicationConfig has sensible defaults."""
-        config = DeduplicationConfig()
-
-        assert config.enabled is True
-        assert config.strategy == "exact"
-        assert "file_path" in config.exact_match_fields
-        assert "line_start" in config.exact_match_fields
-        assert "vulnerability_type" in config.exact_match_fields
-        assert "title" in config.exact_match_fields
-
-    def test_deduplication_config_can_be_disabled(self):
-        """Test DeduplicationConfig can be disabled."""
-        config = DeduplicationConfig(enabled=False)
-        assert config.enabled is False
-
-    def test_deduplication_config_custom_strategy(self):
-        """Test DeduplicationConfig accepts valid strategy values."""
-        config_exact = DeduplicationConfig(strategy="exact")
-        assert config_exact.strategy == "exact"
-
-        config_fuzzy = DeduplicationConfig(strategy="fuzzy")
-        assert config_fuzzy.strategy == "fuzzy"
-
-        config_symbol = DeduplicationConfig(strategy="symbol")
-        assert config_symbol.strategy == "symbol"
-
-
 class TestTriagePolicy:
     def test_triage_policy_minimal_creation(self):
         """Test TriagePolicy can be created with just a name."""
@@ -220,7 +191,6 @@ class TestTriagePolicy:
         assert policy.name == "test-policy"
         assert isinstance(policy.path_classification, PathClassificationConfig)
         assert isinstance(policy.evidence_gates, EvidenceGates)
-        assert isinstance(policy.deduplication, DeduplicationConfig)
 
     def test_triage_policy_filter_defaults(self):
         """Test TriagePolicy has strict filter defaults."""

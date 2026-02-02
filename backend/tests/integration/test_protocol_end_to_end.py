@@ -29,7 +29,7 @@ from models.schemas import (
 )
 from services.finding_triage_service import FindingTriageService
 from services.protocol_policies import get_osvrp_strict_policy, get_internal_policy
-from services.strict_classifier import ClassificationResult
+from services.classification import ClassificationResult
 
 
 @pytest.fixture

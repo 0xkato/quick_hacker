@@ -398,13 +398,314 @@ class SQLInjectionQuest(QuestPlaybook):
 
     async def execute(self) -> QuestResult:
         """Execute SQL injection evidence quest."""
-        # Simplified for MVP - just return no evidence
+        evidence_found = {}
+        new_checklist_items = {}
+
+        # Task 1: Verify SQL sink (raw query execution)
+        if "sink" in self.missing_items or "reachability" in self.missing_items:
+            sql_context = await self._verify_sql_sink()
+            if sql_context:
+                evidence_found["sql_context"] = sql_context
+                new_checklist_items["sink_present"] = ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason=f"Quest found: {sql_context}",
+                    tool_calls=["read_file", "grep"]
+                )
+
+        # Task 2: Check for parameterization (or lack thereof)
+        if "parameterization" in self.missing_items or "dataflow" in self.missing_items:
+            param_status = await self._check_parameterization()
+            if param_status:
+                evidence_found["parameterization_status"] = param_status
+                # Lack of parameterization is evidence of vulnerability
+                if "string concatenation" in param_status.lower() or "f-string" in param_status.lower():
+                    new_checklist_items["no_parameterization"] = ChecklistItem(
+                        value=True,
+                        status=ChecklistStatus.PROVEN,
+                        reason=f"Quest found unsafe query construction: {param_status}",
+                        tool_calls=["read_file"]
+                    )
+
+        # Task 3: Trace dataflow from user input to query
+        if "dataflow" in self.missing_items:
+            dataflow = await self._trace_dataflow()
+            if dataflow:
+                evidence_found["dataflow_snippet"] = dataflow
+                new_checklist_items["dataflow_evidenced"] = ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason="Quest traced user input to SQL query",
+                    tool_calls=["read_file"]
+                )
+
+        # Task 4: Find entry point (HTTP route, API endpoint)
+        if "reachability" in self.missing_items:
+            entry_point = await self._find_entry_point()
+            if entry_point:
+                evidence_found["route_registration"] = entry_point
+                new_checklist_items["reachable"] = ChecklistItem(
+                    value=True,
+                    status=ChecklistStatus.PROVEN,
+                    reason=f"Quest found entry point: {entry_point}",
+                    tool_calls=["grep"]
+                )
+
+        # Task 5: Check ORM usage and safety
+        if "orm_safety" in self.missing_items or "sink" in self.missing_items:
+            orm_status = await self._check_orm_usage()
+            if orm_status:
+                evidence_found["orm_status"] = orm_status
+
+        # Task 6: Check input validation
+        if "input_validation" in self.missing_items:
+            validation_status = await self._check_input_validation()
+            if validation_status:
+                evidence_found["input_validation"] = validation_status
+                if "no validation" in validation_status.lower():
+                    new_checklist_items["no_input_validation"] = ChecklistItem(
+                        value=True,
+                        status=ChecklistStatus.PROVEN,
+                        reason=f"Quest found: {validation_status}",
+                        tool_calls=["read_file"]
+                    )
+
+        success = len(evidence_found) > 0
+
         return QuestResult(
-            success=False,
-            evidence_found={},
-            new_checklist_items={},
-            error_message="SQL injection quest not yet implemented"
+            success=success,
+            evidence_found=evidence_found,
+            new_checklist_items=new_checklist_items,
+            error_message=None if success else "No additional evidence found"
         )
 
     def _build_quest_prompt(self) -> str:
-        return "SQL injection quest prompt (TODO)"
+        """Build quest prompt for SQL injection evidence gathering."""
+        return f"""
+# Evidence Quest: SQL Injection Validation
+
+## Finding
+- File: {self.finding.file_path}
+- Line: {self.finding.line_start}
+- Type: {self.finding.vulnerability_type}
+
+## Current Evidence
+{self.evidence.snippet}
+
+## Missing Evidence
+{', '.join(self.missing_items)}
+
+## Task
+Gather missing evidence for this SQL injection finding. Focus on:
+
+1. **SQL Sink Verification**
+   - Identify the SQL execution method (cursor.execute, engine.execute, raw SQL, etc.)
+   - Check database driver being used (psycopg2, mysql-connector, sqlite3, pymssql, etc.)
+
+2. **Parameterization Analysis**
+   - Check if query uses parameterized queries (?, %s, :name placeholders)
+   - Look for string concatenation or f-strings building SQL queries
+   - Identify format string usage (% operator, .format())
+
+3. **ORM Usage Check**
+   - Identify if ORM is used (SQLAlchemy, Django ORM, Peewee, etc.)
+   - Check for raw SQL usage within ORM (text(), raw(), extra())
+   - Verify if ORM queries use safe filter methods
+
+4. **Dataflow Tracing**
+   - Trace user input source (request.args, request.form, request.json, etc.)
+   - Follow data through any transformations
+   - Confirm input reaches SQL query without sanitization
+
+5. **Input Validation**
+   - Check for input validation or sanitization before SQL usage
+   - Look for type casting, whitelist validation, or escaping
+   - Identify any SQL-specific escaping functions
+
+6. **Entry Point Discovery**
+   - Find route registration (@app.route, @router, urls.py patterns)
+   - Identify HTTP methods allowed (GET, POST, PUT, etc.)
+   - Check authentication/authorization requirements
+
+## Evidence Patterns to Look For
+
+### Vulnerable Patterns (SQL Injection likely):
+- `cursor.execute(f"SELECT * FROM users WHERE id = {{user_id}}")`
+- `cursor.execute("SELECT * FROM users WHERE id = " + user_id)`
+- `cursor.execute("SELECT * FROM users WHERE id = %s" % user_id)`
+- `query = "SELECT * FROM users WHERE name = '" + name + "'"`
+- `Model.objects.raw("SELECT * FROM ... WHERE id = %s" % id)`
+- `db.execute(text(f"SELECT ... WHERE {{param}}"))`
+
+### Safe Patterns (Not vulnerable):
+- `cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))`
+- `cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))`
+- `Model.objects.filter(id=user_id)`
+- `session.query(Model).filter(Model.id == user_id)`
+- `db.execute(text("SELECT ... WHERE id = :id"), {{"id": user_id}})`
+
+Return JSON with discovered evidence including:
+- sql_sink: Description of SQL execution method found
+- parameterization_status: Whether query uses safe parameterization
+- orm_status: ORM usage details if applicable
+- dataflow_snippet: Code showing input flow to SQL
+- input_validation: Any validation found
+- route_registration: Entry point details
+"""
+
+    async def _verify_sql_sink(self) -> Optional[str]:
+        """Verify if this is actual SQL execution (simplified)."""
+        snippet_lower = (self.evidence.snippet or "").lower()
+
+        # Check for common SQL execution patterns
+        sql_patterns = [
+            ("cursor.execute", "cursor.execute() SQL execution"),
+            ("execute(", "SQL execute() call"),
+            (".raw(", "Django raw SQL query"),
+            ("text(", "SQLAlchemy text() raw SQL"),
+            ("executemany", "SQL executemany() batch execution"),
+            ("engine.execute", "SQLAlchemy engine.execute()"),
+            ("connection.execute", "Database connection execute()"),
+            ("db.execute", "Database execute() call"),
+            ("executescript", "SQLite executescript()"),
+        ]
+
+        for pattern, description in sql_patterns:
+            if pattern in snippet_lower:
+                return description
+
+        return None
+
+    async def _check_parameterization(self) -> Optional[str]:
+        """Check if SQL query uses parameterized queries or string concatenation."""
+        snippet = self.evidence.snippet or ""
+        snippet_lower = snippet.lower()
+
+        # Check for unsafe patterns (string concatenation, f-strings, format)
+        unsafe_indicators = [
+            ('f"' in snippet or "f'" in snippet, "f-string query construction"),
+            ("+ " in snippet and ("select" in snippet_lower or "insert" in snippet_lower or "update" in snippet_lower or "delete" in snippet_lower), "string concatenation in SQL"),
+            (".format(" in snippet_lower, ".format() string interpolation"),
+            ('%" ' in snippet or "%'" in snippet or "% (" in snippet, "% string formatting operator"),
+        ]
+
+        for condition, description in unsafe_indicators:
+            if condition:
+                return description
+
+        # Check for safe patterns
+        safe_indicators = [
+            (", (" in snippet and ("?" in snippet or "%s" in snippet or ":=" in snippet), "parameterized query with tuple"),
+            ("= ?" in snippet or "= %s" in snippet, "parameterized placeholder"),
+            (":name" in snippet_lower or "= :" in snippet, "named parameter placeholder"),
+        ]
+
+        for condition, description in safe_indicators:
+            if condition:
+                return f"Safe: {description}"
+
+        return None
+
+    async def _trace_dataflow(self) -> Optional[str]:
+        """Trace dataflow from user input to SQL query (simplified)."""
+        snippet_lower = (self.evidence.snippet or "").lower()
+
+        # Check for user input sources
+        input_sources = [
+            "request.args",
+            "request.form",
+            "request.json",
+            "request.data",
+            "request.get",
+            "request.post",
+            "params[",
+            "query_params",
+            "body[",
+            "input(",
+        ]
+
+        for source in input_sources:
+            if source in snippet_lower:
+                return f"User input from {source} flows to SQL query"
+
+        return None
+
+    async def _find_entry_point(self) -> Optional[str]:
+        """Find how this function is invoked (simplified)."""
+        snippet_lower = (self.evidence.snippet or "").lower()
+
+        route_patterns = [
+            ("@app.route", "Flask @app.route decorator"),
+            ("@router", "FastAPI/Flask router decorator"),
+            ("@api_view", "Django REST framework decorator"),
+            ("def get(", "HTTP GET handler method"),
+            ("def post(", "HTTP POST handler method"),
+            ("path(", "Django URL path pattern"),
+            ("url(", "Django URL pattern"),
+        ]
+
+        for pattern, description in route_patterns:
+            if pattern in snippet_lower:
+                return description
+
+        return None
+
+    async def _check_orm_usage(self) -> Optional[str]:
+        """Check for ORM usage and potential raw SQL escape hatches."""
+        snippet_lower = (self.evidence.snippet or "").lower()
+
+        # Check for ORM raw SQL escape hatches (potentially unsafe)
+        raw_patterns = [
+            (".raw(", "Django ORM raw() method - bypasses query parameterization"),
+            (".extra(", "Django ORM extra() - raw SQL injection possible"),
+            ("text(", "SQLAlchemy text() - raw SQL execution"),
+            ("execute(", "Raw SQL execute within ORM context"),
+        ]
+
+        for pattern, description in raw_patterns:
+            if pattern in snippet_lower:
+                return f"Unsafe ORM usage: {description}"
+
+        # Check for safe ORM patterns
+        safe_patterns = [
+            (".filter(", "Safe ORM filter method"),
+            (".filter_by(", "Safe ORM filter_by method"),
+            (".get(", "Safe ORM get method"),
+            (".objects.get", "Django ORM safe get"),
+            (".objects.filter", "Django ORM safe filter"),
+            ("query(", "SQLAlchemy query builder"),
+        ]
+
+        for pattern, description in safe_patterns:
+            if pattern in snippet_lower:
+                return f"Safe ORM usage: {description}"
+
+        return None
+
+    async def _check_input_validation(self) -> Optional[str]:
+        """Check for input validation before SQL usage (simplified)."""
+        snippet_lower = (self.evidence.snippet or "").lower()
+
+        # Check for validation patterns
+        validation_patterns = [
+            ("isinstance(", "Type checking with isinstance()"),
+            ("int(", "Integer type casting"),
+            ("float(", "Float type casting"),
+            (".isdigit()", "Digit validation"),
+            (".isalnum()", "Alphanumeric validation"),
+            ("validate", "Validation function call"),
+            ("sanitize", "Sanitization function call"),
+            ("escape", "Escape function call"),
+            ("re.match", "Regex validation"),
+            ("re.search", "Regex validation"),
+        ]
+
+        for pattern, description in validation_patterns:
+            if pattern in snippet_lower:
+                return f"Validation found: {description}"
+
+        # If no validation found and there's user input flowing to SQL
+        if any(source in snippet_lower for source in ["request.", "params", "input"]):
+            return "No validation found before SQL execution"
+
+        return None

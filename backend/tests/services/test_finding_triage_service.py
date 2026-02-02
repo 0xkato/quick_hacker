@@ -108,7 +108,7 @@ class TestNeverDropFindings:
         from dataclasses import replace
 
         from models.schemas import ChecklistItem, ChecklistStatus, FindingClassification, ProofChecklist
-        from services.strict_classifier import ClassificationResult
+        from services.classification import ClassificationResult
 
         finding = Finding(
             id="test-001",

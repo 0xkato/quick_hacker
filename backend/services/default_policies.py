@@ -7,7 +7,6 @@ from models.schemas import (
     IntegerOverflowGate,
     MemoryCorruptionGate,
     DosGate,
-    DeduplicationConfig
 )
 
 
@@ -62,13 +61,6 @@ VRP_GOOGLE_OSS_STRICT = TriagePolicy(
         dos=DosGate(
             require_service_boundary=True  # Network service, not local script
         )
-    ),
-
-    # Deduplication: exact matching on key fields
-    deduplication=DeduplicationConfig(
-        enabled=True,
-        strategy="exact",
-        exact_match_fields=["file_path", "line_start", "vulnerability_type", "title"]
     ),
 
     # Output filtering: only report VALID and BUG dispositions

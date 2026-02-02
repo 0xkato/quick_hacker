@@ -14,7 +14,7 @@ from models.schemas import (
     Finding,
     ChecklistStatus,
     Disposition)
-from services.strict_classifier import StrictClassifier
+from services.classification import StrictClassifier
 from models.schemas import Evidence, InputChannel
 from services.evidence import SSRFAnalysis  # For dict creation reference
 

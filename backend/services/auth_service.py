@@ -2,7 +2,6 @@
 import base64
 import hashlib
 import logging
-import os
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
@@ -31,14 +30,9 @@ class AuthService:
         self.access_token_expire = timedelta(minutes=settings.jwt_access_token_expire_minutes)
         self.refresh_token_expire = timedelta(days=settings.jwt_refresh_token_expire_days)
 
-        # Legacy XOR key (for backward compatibility with existing encrypted keys)
-        self._legacy_encryption_key = hashlib.sha256(
-            settings.jwt_secret_key.encode()
-        ).digest()
-
-        # Fernet key: URL-safe base64-encoded 32-byte key
-        # Derived from SHA256 of secret (same source, proper format for Fernet)
-        fernet_key = base64.urlsafe_b64encode(self._legacy_encryption_key)
+        # Fernet key: URL-safe base64-encoded 32-byte key derived from SHA256 of secret
+        encryption_key = hashlib.sha256(settings.jwt_secret_key.encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(encryption_key)
         self._fernet = Fernet(fernet_key)
 
     def _truncate_password(self, password: str) -> str:
@@ -97,35 +91,14 @@ class AuthService:
         return encrypted.decode()
 
     def decrypt_api_key(self, encrypted_key: str) -> str:
-        """Decrypt a stored API key.
-
-        Tries Fernet first, falls back to legacy XOR for backward compatibility
-        with keys encrypted before the migration.
-        """
+        """Decrypt a stored API key using Fernet."""
         if not encrypted_key:
             return ""
 
-        # Try Fernet first (new format)
         try:
             decrypted = self._fernet.decrypt(encrypted_key.encode())
             return decrypted.decode()
-        except InvalidToken:
-            pass  # Not a Fernet token, try legacy
-
-        # Fall back to legacy XOR decryption for backward compatibility
-        try:
-            decrypted = bytes([
-                b ^ self._legacy_encryption_key[i % len(self._legacy_encryption_key)]
-                for i, b in enumerate(bytes.fromhex(encrypted_key))
-            ])
-            result = decrypted.decode()
-            # Log that we're using legacy encryption (should trigger migration)
-            logger.warning(
-                "Decrypted API key using legacy XOR encryption. "
-                "Consider re-saving to upgrade to Fernet encryption."
-            )
-            return result
-        except (ValueError, UnicodeDecodeError) as e:
+        except InvalidToken as e:
             raise ValueError(f"Failed to decrypt API key: {e}")
 
     async def create_user(

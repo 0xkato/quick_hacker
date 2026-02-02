@@ -1,17 +1,18 @@
-"""Tests for pre-triage filtering."""
+"""Tests for path-based filtering using PathFilter."""
 import pytest
-from models.schemas import Finding, TriagePolicy, PathClassification, Severity
-from services.pre_triage_filter import pre_filter_findings
+from models.schemas import Finding, TriagePolicy, PathClassification, PathClassificationConfig, Severity
+from services.finding_filters import PathFilter
 from datetime import datetime
 
 
-class TestPreFilterFindings:
+class TestPathFilter:
     def test_filters_third_party_findings(self):
         """Test third_party findings are filtered when policy enabled."""
         policy = TriagePolicy(
             name="test_policy",
             filter_third_party=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -42,7 +43,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 1
         assert filtered[0].file_path == "src/main.py"
@@ -54,6 +56,7 @@ class TestPreFilterFindings:
             name="test_policy",
             filter_tests=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -84,7 +87,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 1
         assert filtered[0].file_path == "src/main.py"
@@ -97,6 +101,7 @@ class TestPreFilterFindings:
             filter_third_party=True,
             filter_tests=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -127,7 +132,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 2
         assert all(f.path_classification == PathClassification.runtime for f in filtered)
@@ -139,6 +145,7 @@ class TestPreFilterFindings:
             filter_third_party=True,
             filter_tests=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -156,7 +163,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 1
         assert filtered[0].path_classification == PathClassification.tooling
@@ -168,6 +176,7 @@ class TestPreFilterFindings:
             filter_third_party=False,
             filter_tests=False
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -198,7 +207,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 2
         assert filtered[0].path_classification == PathClassification.runtime
@@ -210,6 +220,7 @@ class TestPreFilterFindings:
             name="test_policy",
             filter_ci=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -240,7 +251,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 1
         assert filtered[0].file_path == "src/main.py"
@@ -251,6 +263,7 @@ class TestPreFilterFindings:
             name="test_policy",
             filter_docs=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -281,7 +294,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 1
         assert filtered[0].file_path == "src/main.py"
@@ -292,6 +306,7 @@ class TestPreFilterFindings:
             name="test_policy",
             filter_migrations=True
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -322,7 +337,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 1
         assert filtered[0].file_path == "src/main.py"
@@ -334,6 +350,7 @@ class TestPreFilterFindings:
             filter_third_party=False,
             filter_tests=False
         )
+        config = PathClassificationConfig()
 
         findings = [
             Finding(
@@ -364,7 +381,8 @@ class TestPreFilterFindings:
             )
         ]
 
-        filtered = pre_filter_findings(findings, policy)
+        path_filter = PathFilter(config, policy)
+        filtered = path_filter.apply(findings)
 
         assert len(filtered) == 2
         assert filtered[0].path_classification == PathClassification.third_party

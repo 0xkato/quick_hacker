@@ -8,8 +8,8 @@ import pytest
 
 from models.schemas import ChecklistItem, ChecklistStatus, Disposition, Finding, ProofChecklist, InputChannel
 from services.finding_triage_service import FindingTriageService
-from services.strict_classifier import ClassificationResult
-from services.threat_model_gating import derive_allowed_input_channels
+from services.classification import ClassificationResult
+from services.finding_filters.filters.threat_model_filter import derive_allowed_input_channels
 
 
 # === Unit Tests for derive_allowed_input_channels ===

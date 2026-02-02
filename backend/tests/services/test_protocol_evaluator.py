@@ -15,7 +15,7 @@ from models.schemas import (
     SubmissionDecision,
     Severity,
 )
-from services.strict_classifier import ClassificationResult
+from services.classification import ClassificationResult
 from services.protocol_evaluator import ProtocolEvaluator
 
 

@@ -363,20 +363,16 @@ class AgentOrchestrator:
                     use_claude_sdk = getattr(agent.request, 'use_claude_sdk', False)
                     use_sdk = use_claude_sdk
 
-            # Overseer has its own LLM loop with sub-agents, skip SDK mode for it
-            is_overseer = isinstance(agent, Overseer)
-            if is_overseer and use_sdk:
-                print("[Orchestrator] Overseer detected - skipping SDK mode, using native orchestration")
-                use_sdk = False
+            # Check if Overseer mode was requested
+            use_overseer = getattr(agent.request, 'use_overseer', False)
 
             if use_codex:
                 findings = await self._run_codex_cli_agent(agent)
             elif use_sdk:
-                findings = await self._run_sdk_agent(agent)
-            elif is_overseer:
-                # Overseer runs its own analyze loop
-                print("[Orchestrator] Running Overseer with parallel sub-agents...")
-                findings = await agent.analyze()
+                # SDK mode - Overseer runs through SDK with enhanced prompt
+                if use_overseer:
+                    print("[Orchestrator] Running Overseer-enhanced SDK audit (systematic deep analysis)...")
+                findings = await self._run_sdk_agent(agent, use_overseer=use_overseer)
             else:
                 findings = await agent.run()
             print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")
@@ -440,7 +436,7 @@ class AgentOrchestrator:
             # Cleanup observability data to prevent memory leaks
             observability_service.clear_agent(agent.id)
 
-    async def _run_sdk_agent(self, agent: BaseAgent) -> list[Finding]:
+    async def _run_sdk_agent(self, agent: BaseAgent, use_overseer: bool = False) -> list[Finding]:
         """Run an agent using the Claude SDK provider.
 
         Creates ToolCore with limits factory, ClaudeSDKProvider, and
@@ -448,11 +444,15 @@ class AgentOrchestrator:
 
         Args:
             agent: The agent to run with SDK provider
+            use_overseer: If True, use Overseer-enhanced systematic analysis prompt
 
         Returns:
             List of Finding objects from the audit
         """
-        print(f"[Orchestrator] Running SDK agent {agent.id}")
+        if use_overseer:
+            print(f"[Orchestrator] Running SDK agent {agent.id} with OVERSEER mode (systematic deep analysis)")
+        else:
+            print(f"[Orchestrator] Running SDK agent {agent.id}")
 
         # Update agent status to RUNNING
         agent.status = AgentStatus.RUNNING
@@ -528,10 +528,12 @@ class AgentOrchestrator:
         # Track findings as they're reported (for real-time broadcast)
         sdk_findings: list[Finding] = []
         finding_counter = [0]  # Use list to allow mutation in nested function
+        # Capture overseer mode for policy selection
+        _use_overseer = use_overseer
 
         def on_sdk_event(event: dict) -> None:
             """Broadcast SDK events as WebSocket messages with flow + observability integration."""
-            nonlocal current_tool_calls, current_request_id, current_tool_node_id, sdk_findings, session_policy_template
+            nonlocal current_tool_calls, current_request_id, current_tool_node_id, sdk_findings, session_policy_template, _use_overseer
 
             event_type_str = event.get("type", "sdk_event")
             if event_type_str == "finding":
@@ -576,11 +578,13 @@ class AgentOrchestrator:
                 turn = event.get("turn", 0)
                 phase = event.get("phase", "scanner")
 
-                requested_policy_template = (
-                    "agents/claude_sdk_orchestrator_analyzer_policy.md"
-                    if phase == "analyzer"
-                    else "agents/claude_sdk_orchestrator_scanner_policy.md"
-                )
+                # Select policy based on overseer mode and phase
+                if _use_overseer:
+                    requested_policy_template = "agents/claude_sdk_orchestrator_overseer_policy.md"
+                elif phase == "analyzer":
+                    requested_policy_template = "agents/claude_sdk_orchestrator_analyzer_policy.md"
+                else:
+                    requested_policy_template = "agents/claude_sdk_orchestrator_scanner_policy.md"
 
                 # Claude SDK system prompt is fixed at session start; track the policy template used
                 # for that initial session so observability reflects what the model actually sees.

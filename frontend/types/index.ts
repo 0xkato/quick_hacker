@@ -162,6 +162,7 @@ export interface AgentCreateRequest {
   focus_areas?: string[];
   use_claude_sdk?: boolean;  // Use Claude Agent SDK for native tool loop (Anthropic only)
   use_claude_code_auth?: boolean;  // Use Claude Code subscription auth (true) or API key (false)
+  use_overseer?: boolean;  // Enable parallel sub-agents for deeper coverage
 }
 
 export interface Agent {

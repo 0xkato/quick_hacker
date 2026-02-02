@@ -118,6 +118,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
   const [customPrompt, setCustomPrompt] = useState('');
   const [useClaudeSDK, setUseClaudeSDK] = useState(true);  // Default to SDK for Anthropic
   const [useClaudeCodeAuth, setUseClaudeCodeAuth] = useState(false);  // Default to API key mode (will be updated based on settings)
+  const [useOverseer, setUseOverseer] = useState(false);  // Enable parallel sub-agents
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
@@ -197,6 +198,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
         custom_prompt: customPrompt || undefined,
         use_claude_sdk: provider === 'anthropic' ? useClaudeSDK : undefined,
         use_claude_code_auth: provider === 'anthropic' && useClaudeSDK ? useClaudeCodeAuth : undefined,
+        use_overseer: useOverseer,
       };
 
       const agent = await agentsApi.create(request);
@@ -273,6 +275,35 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Sub-Agents Toggle */}
+          <div className="flex items-center justify-between p-3 rounded border border-vsc-border-subtle bg-vsc-input">
+            <div className="flex-1">
+              <label className="text-vsc-sm font-medium text-vsc-text">
+                Enable Sub-Agents
+              </label>
+              <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
+                Use parallel agents (RepoProfiler, SinkHunter, Auditor) for deeper coverage
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useOverseer}
+              onClick={() => setUseOverseer(!useOverseer)}
+              className={clsx(
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                useOverseer ? 'bg-vsc-accent' : 'bg-vsc-border'
+              )}
+            >
+              <span
+                className={clsx(
+                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                  useOverseer ? 'translate-x-6' : 'translate-x-1'
+                )}
+              />
+            </button>
           </div>
 
           {/* Provider */}

@@ -381,6 +381,10 @@ class AgentCreateRequest(BaseModel):
         False,
         description="Use Claude Code subscription auth (True) or API key (False). Defaults to API key mode."
     )
+    use_overseer: bool = Field(
+        False,
+        description="Enable parallel sub-agents (Overseer) for deeper coverage. When enabled, the audit uses specialized sub-agents (RepoProfiler, SinkHunter, Auditor, etc.) running in parallel waves."
+    )
 
 
 class Agent(BaseModel):

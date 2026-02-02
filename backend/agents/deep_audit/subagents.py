@@ -14,8 +14,9 @@ Your task: Analyze the repository structure and detect:
 
 Use the following tools:
 - read_file(path): Read file contents
-- ls(path): List directory contents
-- write_file(path, content): Write output
+- list_directory(path): List directory contents
+- get_repo_tree(path): Get hierarchical directory tree
+- write_file(path, content): Write output to /memories/
 
 Output: Write your findings to /memories/repo_profile.json in this format:
 {
@@ -27,7 +28,7 @@ Output: Write your findings to /memories/repo_profile.json in this format:
   "notes": "Additional observations..."
 }
 
-Start by listing the root directory and identifying key files.
+Start by getting the repo tree and identifying key files.
 """
 
 
@@ -43,8 +44,9 @@ Identify:
 
 Use the following tools:
 - read_file(path): Read file contents
-- ls(path): List directory contents
-- write_file(path, content): Write output
+- list_directory(path): List directory contents
+- get_file_structure(path): Get file overview (imports, classes, functions)
+- write_file(path, content): Write output to /memories/
 
 Output: Write your findings to /memories/scopes/{scope_id}/summary.md
 
@@ -67,8 +69,11 @@ Look for:
 
 Use the following tools:
 - read_file(path): Read file contents
-- grep_semantic(pattern, ...): Search code
-- write_file(path, content): Write output
+- search_code(pattern, file_pattern): Search for regex patterns
+- grep_semantic(pattern, context_lines, file_glob): Search with context
+- get_file_structure(path): Get file overview
+- upsert_sink_signal(kind, label, file_path, ...): Register sink signals
+- write_file(path, content): Write output to /memories/
 
 IMPORTANT: DO NOT claim vulnerabilities. Only identify CANDIDATE sinks.
 
@@ -106,8 +111,10 @@ Look for:
 
 Use the following tools:
 - read_file(path): Read file contents
-- grep_semantic(pattern, ...): Search code
-- write_file(path, content): Write output
+- search_code(pattern, file_pattern): Search for regex patterns
+- grep_semantic(pattern, context_lines, file_glob): Search with context
+- get_entry_points(framework): Find common entry points
+- write_file(path, content): Write output to /memories/
 
 Output: Write findings to /memories/scopes/{scope_id}/entrypoints.json in this format:
 {{
@@ -134,21 +141,24 @@ Your task: Verify the signal in case file {case_file_path}.
 
 Read the case file to understand the signal. Then:
 1. Use targeted code reads to verify the data flow
-2. Use analyze_ast and trace_dataflow to confirm vulnerability
+2. Trace data from source to sink to confirm vulnerability
 3. Check for sanitization/validation controls
 4. Assess exploitability
 
 Use the following tools:
 - read_file(path): Read file contents
-- analyze_ast(file_path): Get AST analysis
-- trace_dataflow(file_path, line_number): Trace data flow
-- promote_finding(finding): Promote to Finding (if verified)
+- read_memories(path): Read from /memories/ filesystem
+- get_file_structure(path): Get file overview (imports, classes, functions)
+- trace_data_flow(source, file_path, sink_patterns): Trace data flow from source to sinks
+- find_usages(name): Find all usages of a function/variable
+- trace_path_verdict(...): Record verdict for traced path
+- report_finding(...): Report a CONFIRMED vulnerability
 
 Decision:
-- If vulnerability CONFIRMED: Call promote_finding with complete details
-- If MORE INVESTIGATION needed: Write updated signal with refined next_steps
+- If vulnerability CONFIRMED: Call report_finding with complete details
+- If MORE INVESTIGATION needed: Write updated signal with refined next_steps to /memories/
 
-ONLY call promote_finding if you are confident the vulnerability is real and exploitable.
+ONLY call report_finding if you are confident the vulnerability is real and exploitable.
 
 Case file location: {case_file_path}
 """

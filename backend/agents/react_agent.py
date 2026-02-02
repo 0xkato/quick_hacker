@@ -141,8 +141,10 @@ class ReActSecurityAgent:
         repo_path: str,
         on_message: Optional[Callable[[WSMessage], None]] = None,
         cache: Optional["ToolCache"] = None,
+        allowed_tools: Optional[list[str]] = None,
     ):
         self.id = str(uuid.uuid4())[:8]
+        self._allowed_tools = allowed_tools  # Tool filtering for sub-agents
         self.request = request  # Store for SDK mode fallback in to_schema()/get_state_snapshot()
         self.repo_id = request.repo_id
         self.repo_path = repo_path
@@ -1478,7 +1480,18 @@ class ReActSecurityAgent:
         return response
 
     def _format_tools_for_provider(self) -> list[dict]:
-        """Format tools for the provider's API."""
+        """Format tools for the provider's API.
+
+        If allowed_tools was specified, only include those tools.
+        """
+        # Filter tools if allowed_tools specified
+        tools_to_use = AGENT_TOOLS
+        if self._allowed_tools:
+            tools_to_use = [
+                tool for tool in AGENT_TOOLS
+                if tool["name"] in self._allowed_tools
+            ]
+
         # OpenAI format
         return [
             {
@@ -1489,7 +1502,7 @@ class ReActSecurityAgent:
                     "parameters": tool["parameters"]
                 }
             }
-            for tool in AGENT_TOOLS
+            for tool in tools_to_use
         ]
 
     def _hash_tool_call(self, tool_name: str, arguments: dict) -> str:

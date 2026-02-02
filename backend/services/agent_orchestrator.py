@@ -40,7 +40,7 @@ from models.schemas import (
     ProviderConfig,
 )
 from agents.base_agent import BaseAgent
-from agents.deep_audit import DeepAuditSupervisor
+from agents.deep_audit import DeepAuditSupervisor, Overseer
 from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 from providers.codex_cli_provider import CodexCLIProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
@@ -90,11 +90,16 @@ def _codex_text_signals_done(text: str) -> bool:
     )
 
 
-# Agent type to class mapping (simplified to deep_audit only)
+# Agent type to class mapping
+# DeepAuditSupervisor: LangGraph-based supervisor (default)
+# Overseer: LLM-powered orchestrator for hypothesis-driven audits
 AGENT_CLASSES = {
     AgentType.DEEP_AUDIT: DeepAuditSupervisor,  # Deep audit with diagramming support
     AgentType.CUSTOM: DeepAuditSupervisor,      # Custom investigation (uses same infrastructure)
 }
+
+# Scan tiers that use the Overseer (LLM-powered orchestrator) by default
+OVERSEER_SCAN_TIERS = {"deep", "exhaustive"}
 
 
 class AgentOrchestrator:
@@ -272,10 +277,18 @@ class AgentOrchestrator:
         # Use shared cache (all agents share the same cache instance)
         cache = self._shared_cache
 
-        # Create agent instance
-        agent_class = AGENT_CLASSES.get(request.agent_type)
-        if not agent_class:
-            raise ValueError(f"Unknown agent type: {request.agent_type}")
+        # Determine agent class
+        # Use Overseer for deep/exhaustive tiers or when explicitly requested
+        use_overseer = getattr(request, 'use_overseer', False)
+        scan_tier = request.scan_tier or "quick"
+
+        if use_overseer or scan_tier in OVERSEER_SCAN_TIERS:
+            agent_class = Overseer
+            print(f"[Orchestrator] Using Overseer for scan_tier={scan_tier}")
+        else:
+            agent_class = AGENT_CLASSES.get(request.agent_type)
+            if not agent_class:
+                raise ValueError(f"Unknown agent type: {request.agent_type}")
 
         # Pass cache to agent constructor if it accepts it
         agent_kwargs = {

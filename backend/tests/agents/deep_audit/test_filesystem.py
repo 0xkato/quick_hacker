@@ -23,7 +23,7 @@ def test_filesystem_resolves_repo_path_as_readonly(tmp_path):
     fs_module.DATA_BASE_PATH = tmp_path / "projects"
 
     try:
-        fs = ProjectFilesystem(project_id)
+        fs = ProjectFilesystem(project_id, repo_path=str(repo_root))
         physical_path, is_writable = fs.resolve_path("/repo/src/main.py")
 
         assert physical_path == test_file
@@ -55,9 +55,9 @@ def test_filesystem_resolves_memories_path_as_writable(tmp_path):
         fs_module.DATA_BASE_PATH = original_base
 
 
-def test_filesystem_rejects_invalid_paths():
+def test_filesystem_rejects_invalid_paths(tmp_path):
     """Test that paths not starting with /repo/ or /memories/ are rejected."""
-    fs = ProjectFilesystem("test_proj")
+    fs = ProjectFilesystem("test_proj", repo_path=str(tmp_path))
 
     with pytest.raises(ValueError, match="Path must start with /repo/ or /memories/"):
         fs.resolve_path("/invalid/path.txt")
@@ -69,9 +69,9 @@ def test_filesystem_rejects_invalid_paths():
         fs.resolve_path("/etc/passwd")
 
 
-def test_filesystem_prevents_path_traversal():
+def test_filesystem_prevents_path_traversal(tmp_path):
     """Test that path traversal attempts are rejected."""
-    fs = ProjectFilesystem("test_proj")
+    fs = ProjectFilesystem("test_proj", repo_path=str(tmp_path))
 
     with pytest.raises(ValueError, match="Path traversal detected"):
         fs.resolve_path("/repo/../../../etc/passwd")

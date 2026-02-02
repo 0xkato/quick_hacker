@@ -495,6 +495,51 @@ AGENT_TOOLS = [
                 }
             }
         }
+    },
+    {
+        "name": "write_file",
+        "description": "Write content to a file in the /memories/ directory. Use this to save analysis results, signals, findings, or any other output. Path must start with /memories/.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path starting with /memories/ (e.g., '/memories/scopes/backend/signals.json')"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content to write to the file"
+                }
+            },
+            "required": ["path", "content"]
+        }
+    },
+    {
+        "name": "read_memories",
+        "description": "Read a file from the /memories/ directory. Use this to read outputs from other agents, campaign state, or any artifact in the memories filesystem.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path starting with /memories/ (e.g., '/memories/repo_profile.json')"
+                }
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "list_memories",
+        "description": "List files and directories in a /memories/ path. Use this to discover what artifacts exist.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Directory path starting with /memories/ (default: '/memories/')"
+                }
+            }
+        }
     }
 ]
 
@@ -1388,6 +1433,110 @@ class ToolExecutor:
             return ToolResult(False, None, str(e))
         except Exception as e:
             return ToolResult(False, None, str(e))
+
+    @property
+    def _memories_fs(self):
+        """Lazily create a MemoriesFilesystem for /memories/ operations."""
+        if not hasattr(self, '_memories_fs_instance'):
+            if not self.project_id:
+                return None
+            from agents.deep_audit.filesystem import MemoriesFilesystem
+            self._memories_fs_instance = MemoriesFilesystem(
+                project_id=self.project_id,
+                repo_path=str(self.repo_path),
+            )
+        return self._memories_fs_instance
+
+    async def _tool_write_file(self, path: str, content: str) -> ToolResult:
+        """Write content to a file in the /memories/ directory."""
+        if not path.startswith("/memories/"):
+            return ToolResult(
+                False, None,
+                "Path must start with /memories/. Use this tool only for writing to the memories filesystem."
+            )
+
+        if not self._memories_fs:
+            return ToolResult(
+                False, None,
+                "No project_id set - cannot access memories filesystem."
+            )
+
+        try:
+            written_path = self._memories_fs.write_file(path, content)
+            return ToolResult(True, {
+                "path": written_path,
+                "bytes_written": len(content.encode('utf-8')),
+                "message": f"Successfully wrote to {written_path}"
+            })
+        except PermissionError as e:
+            return ToolResult(False, None, str(e))
+        except ValueError as e:
+            return ToolResult(False, None, str(e))
+        except Exception as e:
+            return ToolResult(False, None, f"Failed to write file: {e}")
+
+    async def _tool_read_memories(self, path: str) -> ToolResult:
+        """Read a file from the /memories/ directory."""
+        if not path.startswith("/memories/"):
+            return ToolResult(
+                False, None,
+                "Path must start with /memories/. Use read_file for repository files."
+            )
+
+        if not self._memories_fs:
+            return ToolResult(
+                False, None,
+                "No project_id set - cannot access memories filesystem."
+            )
+
+        try:
+            content = self._memories_fs.read_file(path)
+            return ToolResult(True, {
+                "path": path,
+                "content": content,
+                "size": len(content.encode('utf-8'))
+            })
+        except FileNotFoundError:
+            return ToolResult(False, None, f"File not found: {path}")
+        except ValueError as e:
+            return ToolResult(False, None, str(e))
+        except Exception as e:
+            return ToolResult(False, None, f"Failed to read file: {e}")
+
+    async def _tool_list_memories(self, path: str = "/memories/") -> ToolResult:
+        """List files and directories in a /memories/ path."""
+        if not path.startswith("/memories/"):
+            path = "/memories/" + path.lstrip("/")
+
+        if not self._memories_fs:
+            return ToolResult(
+                False, None,
+                "No project_id set - cannot access memories filesystem."
+            )
+
+        try:
+            entries = self._memories_fs.ls(path)
+            # Determine which are directories vs files
+            items = []
+            for entry in entries:
+                entry_path = f"{path.rstrip('/')}/{entry}"
+                is_dir = self._memories_fs.is_dir(entry_path)
+                items.append({
+                    "name": entry,
+                    "type": "directory" if is_dir else "file",
+                    "path": entry_path
+                })
+            return ToolResult(True, {
+                "path": path,
+                "count": len(items),
+                "items": items
+            })
+        except FileNotFoundError:
+            return ToolResult(False, None, f"Directory not found: {path}")
+        except ValueError as e:
+            return ToolResult(False, None, str(e))
+        except Exception as e:
+            return ToolResult(False, None, f"Failed to list directory: {e}")
 
 
 def handle_trace_path_verdict(

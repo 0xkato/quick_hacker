@@ -1,5 +1,15 @@
-"""Quick audit agent for fast security scanning."""
+"""
+Quick audit agent for fast security scanning.
 
+DEPRECATED: This agent type is no longer used. The agent system has been
+simplified to only use DeepAuditSupervisor (deep_audit agent type) which
+provides proper diagramming support and better investigation capabilities.
+
+This file is retained for backward compatibility with existing tests but
+should not be used for new code. Use DeepAuditSupervisor instead.
+"""
+
+import warnings
 import asyncio
 import re
 from pathlib import Path
@@ -9,10 +19,22 @@ from models.schemas import AgentType, Severity, FindingCreate, FindingClassifica
 from services import file_service
 from .base_agent import BaseAgent
 
+# Emit deprecation warning when imported
+warnings.warn(
+    "QuickAuditAgent is deprecated. Use DeepAuditSupervisor (deep_audit) instead. "
+    "The agent system has been simplified to only use deep_audit agent type.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 
 class QuickAuditAgent(BaseAgent):
     """
-    Fast security scanning agent.
+    DEPRECATED: Fast security scanning agent.
+
+    This agent type is no longer actively used. The agent system has been
+    simplified to only use DeepAuditSupervisor which provides better
+    investigation capabilities and diagramming support.
 
     - Pattern-based detection for common issues
     - Scans for hardcoded secrets and credentials
@@ -20,7 +42,7 @@ class QuickAuditAgent(BaseAgent):
     - Quick results, lower confidence
     """
 
-    agent_type = AgentType.QUICK_AUDIT
+    agent_type = AgentType.DEEP_AUDIT  # Map to deep_audit since QUICK_AUDIT is removed
 
     # Patterns for common security issues
     SECRET_PATTERNS = [

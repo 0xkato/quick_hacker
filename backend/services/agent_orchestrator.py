@@ -40,8 +40,6 @@ from models.schemas import (
     ProviderConfig,
 )
 from agents.base_agent import BaseAgent
-from agents.quick_audit_agent import QuickAuditAgent
-from agents.react import ReActSecurityAgent
 from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 from providers.codex_cli_provider import CodexCLIProvider
@@ -92,13 +90,10 @@ def _codex_text_signals_done(text: str) -> bool:
     )
 
 
-# Agent type to class mapping
+# Agent type to class mapping (simplified to deep_audit only)
 AGENT_CLASSES = {
-    AgentType.QUICK_AUDIT: QuickAuditAgent,          # Pattern matching
-    AgentType.CUSTOM: ReActSecurityAgent,            # ReAct for custom investigation
-    AgentType.STRICT_ANALYSIS: DeepAuditSupervisor,  # Deep Agents architecture
-    AgentType.ULTRA_STRICT: DeepAuditSupervisor,     # Deep Agents architecture
-    AgentType.DEEP_AUDIT: DeepAuditSupervisor,       # Deep Agents architecture
+    AgentType.DEEP_AUDIT: DeepAuditSupervisor,  # Deep audit with diagramming support
+    AgentType.CUSTOM: DeepAuditSupervisor,      # Custom investigation (uses same infrastructure)
 }
 
 
@@ -377,6 +372,10 @@ class AgentOrchestrator:
         except asyncio.CancelledError:
             print(f"[Orchestrator] Agent {agent.id} cancelled")
             agent.status = AgentStatus.CANCELLED
+            # Broadcast cancellation status so UI updates
+            self._broadcast_message(
+                WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "cancelled"})
+            )
             # Save state on cancellation
             if hasattr(agent, 'get_state_snapshot'):
                 try:
@@ -390,6 +389,10 @@ class AgentOrchestrator:
             traceback.print_exc()
             agent.status = AgentStatus.FAILED
             agent.error_message = str(e)
+            # Broadcast failure status so UI updates
+            self._broadcast_message(
+                WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "failed", "error": str(e)})
+            )
             # Save state on failure for debugging/resume
             if hasattr(agent, 'get_state_snapshot'):
                 try:
@@ -1201,6 +1204,10 @@ class AgentOrchestrator:
                 raise RuntimeError(result.get("error_message") or "Claude SDK audit failed")
 
             agent.status = AgentStatus.COMPLETED
+            # Broadcast completion status so UI updates
+            self._broadcast_message(
+                WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "completed"})
+            )
 
             return findings
 
@@ -1675,12 +1682,9 @@ class AgentOrchestrator:
 
             profile_text = ""
             try:
-                if agent.agent_type == AgentType.DEEP_AUDIT:
+                # All agents now use deep_audit profile (simplified agent system)
+                if agent.agent_type in (AgentType.DEEP_AUDIT, AgentType.CUSTOM):
                     profile_text = load_prompt("agents/profile_deep_audit_mode.md")
-                elif agent.agent_type == AgentType.ULTRA_STRICT:
-                    profile_text = load_prompt("agents/profile_ultra_strict_mode.md")
-                elif agent.agent_type == AgentType.STRICT_ANALYSIS:
-                    profile_text = load_prompt("agents/profile_strict_mode.md")
             except Exception:
                 profile_text = ""
             tool_list = "\n".join(
@@ -1999,6 +2003,10 @@ class AgentOrchestrator:
 
             agent.completed_at = datetime.utcnow()
             agent.status = AgentStatus.COMPLETED
+            # Broadcast completion status so UI updates
+            self._broadcast_message(
+                WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "completed"})
+            )
 
             # Best-effort report generation.
             try:
@@ -2030,6 +2038,10 @@ class AgentOrchestrator:
             except Exception:
                 pass
             agent.status = AgentStatus.CANCELLED
+            # Broadcast cancellation status so UI updates
+            self._broadcast_message(
+                WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "cancelled"})
+            )
             raise
 
     def _build_initial_audit_prompt(self, agent: BaseAgent) -> str:

@@ -28,7 +28,7 @@ def test_react_agent_detects_category_from_focus_areas():
     """Test ReAct agent detects category from focus_areas."""
     request = AgentCreateRequest(
         repo_id="test-repo",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
             model="claude-sonnet-4-20250514",
@@ -50,7 +50,7 @@ def test_react_agent_builds_prompt_with_checklist():
     """Test ReAct agent builds system prompt with validity checklist when category is detected."""
     request = AgentCreateRequest(
         repo_id="test-repo",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
             model="claude-sonnet-4-20250514",
@@ -81,7 +81,7 @@ def test_react_agent_falls_back_without_focus_areas():
     """Test ReAct agent uses default prompt when no focus areas provided."""
     request = AgentCreateRequest(
         repo_id="test-repo",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
             model="claude-sonnet-4-20250514",
@@ -112,7 +112,7 @@ def test_react_agent_detects_command_injection_not_sql():
     """Test that 'command injection' focus detects COMMAND_INJECTION, not SQL_INJECTION."""
     request = AgentCreateRequest(
         repo_id="test-repo",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
             model="claude-sonnet-4-20250514",
@@ -134,7 +134,7 @@ def test_react_agent_detects_code_injection_not_sql():
     """Test that 'code injection' focus detects CODE_INJECTION, not SQL_INJECTION."""
     request = AgentCreateRequest(
         repo_id="test-repo",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
             model="claude-sonnet-4-20250514",

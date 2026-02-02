@@ -15,7 +15,7 @@ from models.schemas import (
 
 class TestableAgent(BaseAgent):
     """Concrete implementation for testing."""
-    agent_type = AgentType.QUICK_AUDIT
+    agent_type = AgentType.DEEP_AUDIT
 
     async def analyze(self):
         """Simulate analysis with pausable loop."""
@@ -41,7 +41,7 @@ def agent_request():
     """Create a basic agent request."""
     return AgentCreateRequest(
         repo_id="test-repo",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
             model="claude-3-haiku-20240307",

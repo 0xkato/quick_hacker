@@ -28,11 +28,9 @@ class AgentStatus(str, Enum):
 
 
 class AgentType(str, Enum):
-    QUICK_AUDIT = "quick_audit"
-    CUSTOM = "custom"
-    STRICT_ANALYSIS = "strict_analysis"  # Zero false positive tolerance
-    ULTRA_STRICT = "ultra_strict"  # Double verification, maximum precision
-    DEEP_AUDIT = "deep_audit"  # Long-running, coverage-oriented deep audit (ReAct)
+    """Simplified agent types - only deep_audit is actively used."""
+    DEEP_AUDIT = "deep_audit"  # Long-running, coverage-oriented deep audit with diagramming support
+    CUSTOM = "custom"  # Custom prompt-based investigation (uses same deep audit infrastructure)
 
 
 class ProviderType(str, Enum):

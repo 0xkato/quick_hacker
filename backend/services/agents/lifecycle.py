@@ -18,8 +18,6 @@ from models.schemas import (
     Finding,
 )
 from agents.base_agent import BaseAgent
-from agents.quick_audit_agent import QuickAuditAgent
-from agents.react import ReActSecurityAgent
 from agents.deep_audit import DeepAuditSupervisor
 from providers.claude_sdk_provider import SDK_AVAILABLE
 from services.tool_cache import ToolCache
@@ -29,13 +27,10 @@ from services.scan_tier_service import resolve_scan_budget
 from services.persistence_service import persistence_service
 
 
-# Agent type to class mapping
+# Agent type to class mapping (simplified to deep_audit only)
 AGENT_CLASSES = {
-    AgentType.QUICK_AUDIT: QuickAuditAgent,          # Pattern matching
-    AgentType.CUSTOM: ReActSecurityAgent,            # ReAct for custom investigation
-    AgentType.STRICT_ANALYSIS: DeepAuditSupervisor,  # Deep Agents architecture
-    AgentType.ULTRA_STRICT: DeepAuditSupervisor,     # Deep Agents architecture
-    AgentType.DEEP_AUDIT: DeepAuditSupervisor,       # Deep Agents architecture
+    AgentType.DEEP_AUDIT: DeepAuditSupervisor,  # Deep audit with diagramming support
+    AgentType.CUSTOM: DeepAuditSupervisor,      # Custom investigation (uses same infrastructure)
 }
 
 
@@ -199,9 +194,7 @@ class AgentLifecycleManager:
             "on_message": on_message or self._broadcast_callback,
         }
 
-        # ReActSecurityAgent accepts cache parameter
-        if agent_class == ReActSecurityAgent:
-            agent_kwargs["cache"] = cache
+        # DeepAuditSupervisor handles caching internally
 
         agent = agent_class(**agent_kwargs)
 

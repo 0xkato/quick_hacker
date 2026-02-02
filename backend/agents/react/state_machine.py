@@ -37,43 +37,11 @@ class AgentProfileManager:
             limits.audit_complete_confirmations_required = 2
             return limits
 
-        if agent_type == AgentType.STRICT_ANALYSIS:
-            # Same engine, stricter finding acceptance
-            limits.max_iterations = 150
-            limits.min_finding_confidence = 0.9
-            limits.require_strict_finding_fields = True
-            limits.auto_queue_limit = 3
-            return limits
+        # NOTE: STRICT_ANALYSIS, ULTRA_STRICT, TARGETED_SCAN, and QUICK_SCAN
+        # agent types have been removed. All agents now use deep_audit which
+        # provides proper diagramming support and better investigation capabilities.
 
-        if agent_type == AgentType.ULTRA_STRICT:
-            # Strict + second-pass verifier gate
-            limits.max_iterations = 200
-            limits.max_tool_calls_per_iteration = 6
-            limits.min_finding_confidence = 0.95
-            limits.require_strict_finding_fields = True
-            limits.require_ultra_verification = True
-            limits.auto_queue_limit = 3
-            return limits
-
-        if agent_type == AgentType.TARGETED_SCAN:
-            # Focused on specific areas
-            limits.max_iterations = 100
-            limits.max_tool_calls_per_iteration = 5
-            limits.triage_render_limit = 15
-            limits.triage_prompt_limit = 8
-            limits.auto_queue_limit = 2
-            return limits
-
-        if agent_type == AgentType.QUICK_SCAN:
-            # Fast, broad sweep
-            limits.max_iterations = 50
-            limits.max_tool_calls_per_iteration = 4
-            limits.triage_render_limit = 10
-            limits.triage_prompt_limit = 5
-            limits.auto_queue_limit = 1
-            return limits
-
-        # Default: keep current limits
+        # Default: keep current limits (effectively deep_audit behavior)
         return limits
 
 
@@ -129,13 +97,8 @@ class PromptBuilder:
     @staticmethod
     def profile_prompt_appendix(agent_type: AgentType) -> str:
         """Get profile-specific prompt appendix."""
-        if agent_type in [AgentType.STRICT_ANALYSIS, AgentType.ULTRA_STRICT]:
-            return (
-                "\n\nIMPORTANT STRICTNESS REQUIREMENT:\n"
-                "Only report findings you can PROVE with high confidence. "
-                "If you're unsure or can't validate the vulnerability, do NOT report it. "
-                "It's better to miss a finding than report a false positive."
-            )
+        # All agents now use deep_audit - no special appendix needed
+        # The deep_audit profile is loaded from profile_deep_audit_mode.md
         return ""
 
     @staticmethod

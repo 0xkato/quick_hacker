@@ -16,7 +16,7 @@ async def test_create_agent_allows_codex_cli_without_api_key(tmp_path):
 
     request = AgentCreateRequest(
         repo_id="proj123",
-        agent_type=AgentType.QUICK_AUDIT,
+        agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(provider=ProviderType.CODEX_CLI, model="gpt-5.2-codex", api_key=None),
         scan_tier="quick",
     )

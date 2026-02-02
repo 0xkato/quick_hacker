@@ -266,7 +266,7 @@ class ReActSecurityAgent:
         # Finding acceptance gates (may be overridden by agent profile)
         self._min_finding_confidence = 0.8
         self._require_strict_finding_fields = False
-        self._require_ultra_verification = False
+        self._require_ultra_verification = False  # NOTE: ULTRA_STRICT removed; this is always False now
 
         # "Press harder" completion confirmation (may be overridden by agent profile)
         self._audit_complete_confirmations_required = 1
@@ -306,22 +306,8 @@ class ReActSecurityAgent:
             self._audit_complete_confirmations_required = 2
             return
 
-        if self.agent_type == AgentType.STRICT_ANALYSIS:
-            # Same engine, stricter finding acceptance.
-            self.max_iterations = 150
-            self._min_finding_confidence = 0.9
-            self._require_strict_finding_fields = True
-            self._auto_queue_limit = 3
-            return
-
-        if self.agent_type == AgentType.ULTRA_STRICT:
-            # Strict + second-pass verifier gate.
-            self.max_iterations = 200
-            self._min_finding_confidence = 0.95
-            self._require_strict_finding_fields = True
-            self._require_ultra_verification = True
-            self._auto_queue_limit = 4
-            return
+        # NOTE: STRICT_ANALYSIS and ULTRA_STRICT agent types have been removed.
+        # All agents now use deep_audit which provides proper diagramming support.
 
     def _apply_time_budget(self) -> None:
         """Apply a time budget from request.scan_tier/time_budget_seconds.
@@ -409,14 +395,9 @@ class ReActSecurityAgent:
 
     def _profile_prompt_appendix(self) -> str:
         """Extra, profile-specific instructions appended to the system prompt."""
-        if self.agent_type == AgentType.DEEP_AUDIT:
+        # All agents use deep_audit profile (simplified agent system)
+        if self.agent_type in (AgentType.DEEP_AUDIT, AgentType.CUSTOM):
             return load_prompt("agents/profile_deep_audit_mode.md")
-
-        if self.agent_type == AgentType.STRICT_ANALYSIS:
-            return load_prompt("agents/profile_strict_mode.md")
-
-        if self.agent_type == AgentType.ULTRA_STRICT:
-            return load_prompt("agents/profile_ultra_strict_mode.md")
 
         return ""
 

@@ -9,14 +9,13 @@ import {
   Plus,
   Bug,
   Zap,
-  Wrench,
   X,
   Layers,
   Settings,
   FileText,
 } from 'lucide-react';
 import clsx from 'clsx';
-import type { Agent, AgentType, ScanTier, ProviderType, AgentCreateRequest, AgentProgress } from '@/types';
+import type { Agent, ScanTier, ProviderType, AgentCreateRequest, AgentProgress } from '@/types';
 import { agents as agentsApi, settings as settingsApi, type AppSettings } from '@/lib/api';
 import { CacheMetricsCard } from '@/components/CacheMetrics/CacheMetricsCard';
 
@@ -54,12 +53,6 @@ const SCAN_TIERS: { value: ScanTier; label: string; icon: React.ReactNode; descr
     label: 'Pro (90m)',
     icon: <Layers className="w-4 h-4" />,
     description: 'Ninety-minute scan',
-  },
-  {
-    value: 'custom',
-    label: 'Custom',
-    icon: <Wrench className="w-4 h-4" />,
-    description: 'Custom prompt only (no time enforcement)',
   },
   {
     value: 'ultra',
@@ -191,17 +184,17 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
     setError(null);
 
     try {
-      const agentType: AgentType = scanTier === 'custom' ? 'custom' : 'deep_audit';
+      // Always use deep_audit agent type (simplified agent system)
       const request: AgentCreateRequest = {
         repo_id: repoId,
-        agent_type: agentType,
+        agent_type: 'deep_audit',
         provider_config: {
           provider,
           model,
           api_key: apiKey || undefined,
         },
         scan_tier: scanTier,
-        custom_prompt: scanTier === 'custom' ? (customPrompt || undefined) : undefined,
+        custom_prompt: customPrompt || undefined,
         use_claude_sdk: provider === 'anthropic' ? useClaudeSDK : undefined,
         use_claude_code_auth: provider === 'anthropic' && useClaudeSDK ? useClaudeCodeAuth : undefined,
       };
@@ -421,21 +414,19 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
             </div>
           )}
 
-          {/* Custom Prompt */}
-          {scanTier === 'custom' && (
-            <div>
-              <label className="block text-vsc-xs text-vsc-text-muted mb-2 uppercase tracking-wider">
-                Custom Instructions
-              </label>
-              <textarea
-                value={customPrompt}
-                onChange={(e) => setCustomPrompt(e.target.value)}
-                placeholder="Focus on authentication bypasses and logic flaws..."
-                rows={3}
-                className="input resize-none"
-              />
-            </div>
-          )}
+          {/* Custom Prompt (optional for all scan tiers) */}
+          <div>
+            <label className="block text-vsc-xs text-vsc-text-muted mb-2 uppercase tracking-wider">
+              Custom Instructions <span className="normal-case">(optional)</span>
+            </label>
+            <textarea
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+              placeholder="Focus on authentication bypasses and logic flaws..."
+              rows={3}
+              className="input resize-none"
+            />
+          </div>
 
           {error && (
             <div className="text-vsc-error text-vsc-sm bg-vsc-error/10 p-2 rounded border border-vsc-error/30">

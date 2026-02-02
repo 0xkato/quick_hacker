@@ -14,7 +14,7 @@ def test_session_snapshot_agent_schema():
     """Test SessionSnapshotAgent validates correctly."""
     agent = SessionSnapshotAgent(
         id="abc123",
-        agent_type="quick_audit",
+        agent_type="deep_audit",
         status="paused",
         target_files=["src/main.py"],
         processed_files=["src/utils.py"],

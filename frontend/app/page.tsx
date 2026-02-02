@@ -417,7 +417,7 @@ export default function Home() {
   const selectedAgent = agentMgmt.selectedAgentId ? agentMgmt.agents.find((a) => a.id === agentMgmt.selectedAgentId) : null;
   const canQueueInvestigations = Boolean(
     selectedAgent &&
-      ['deep_scan', 'deep_audit', 'custom', 'strict_analysis', 'ultra_strict'].includes(selectedAgent.agent_type)
+      ['deep_audit', 'custom'].includes(selectedAgent.agent_type)
   );
 
   // Show loading while checking project status

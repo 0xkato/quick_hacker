@@ -39,7 +39,7 @@ def sample_snapshot():
         agents=[
             SessionSnapshotAgent(
                 id="agent1",
-                agent_type="quick_audit",
+                agent_type="deep_audit",
                 status="paused",
                 target_files=["a.py", "b.py"],
                 processed_files=["a.py"],

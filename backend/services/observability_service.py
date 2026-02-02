@@ -264,6 +264,7 @@ class ObservabilityService:
         code_context: Optional[dict] = None,
         llm_reasoning: Optional[str] = None,
         confidence_score: Optional[float] = None,
+        subagent: Optional[str] = None,
     ) -> str:
         """Log a tool execution."""
         detail_id = str(uuid.uuid4())[:12]
@@ -283,6 +284,7 @@ class ObservabilityService:
             duration_ms=duration_ms,
             llm_reasoning=llm_reasoning,
             confidence_score=confidence_score,
+            subagent=subagent,
         )
 
         self._tool_details[agent_id].append(tool_detail)

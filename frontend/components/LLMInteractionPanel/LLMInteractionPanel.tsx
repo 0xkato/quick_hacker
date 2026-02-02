@@ -114,6 +114,9 @@ function ToolDetailEntry({
       <div className={styles.entryHeader} onClick={onToggle}>
         <div className={styles.entryMeta}>
           <span className={`${styles.badge} ${styles.badgeTool}`}>TOOL</span>
+          {detail.subagent && (
+            <span className={styles.subagentBadge}>{detail.subagent}</span>
+          )}
           <span className={styles.toolNameBadge}>{detail.tool_name}</span>
           <span className={styles.timestamp}>{formatTimestamp(detail.timestamp)}</span>
           <span className={styles.duration}>{detail.duration_ms}ms</span>
@@ -172,8 +175,13 @@ export default function LLMInteractionPanel({
 }: LLMInteractionPanelProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<'all' | 'llm' | 'tools'>('all');
+  const [subagentFilter, setSubagentFilter] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Get unique subagents from tool details
+  const subagents = [...new Set(toolDetails.map(t => t.subagent).filter(Boolean))] as string[];
+  const hasSubagents = subagents.length > 0;
 
   // Combine and sort entries by timestamp
   const allEntries: EntryType[] = [
@@ -185,9 +193,15 @@ export default function LLMInteractionPanel({
 
   // Filter entries
   const filteredEntries = allEntries.filter(entry => {
-    if (filter === 'all') return true;
-    if (filter === 'llm') return entry.type === 'interaction';
-    if (filter === 'tools') return entry.type === 'tool';
+    // Type filter
+    if (filter === 'llm' && entry.type !== 'interaction') return false;
+    if (filter === 'tools' && entry.type !== 'tool') return false;
+
+    // Subagent filter (only applies to tools)
+    if (subagentFilter && entry.type === 'tool') {
+      if (entry.data.subagent !== subagentFilter) return false;
+    }
+
     return true;
   });
 
@@ -270,6 +284,25 @@ export default function LLMInteractionPanel({
             Tools
           </button>
         </div>
+        {hasSubagents && (
+          <div className={styles.filterGroup}>
+            <button
+              className={`${styles.filterBtn} ${subagentFilter === null ? styles.active : ''}`}
+              onClick={() => setSubagentFilter(null)}
+            >
+              All Agents
+            </button>
+            {subagents.map(sa => (
+              <button
+                key={sa}
+                className={`${styles.filterBtn} ${subagentFilter === sa ? styles.active : ''}`}
+                onClick={() => setSubagentFilter(sa)}
+              >
+                {sa}
+              </button>
+            ))}
+          </div>
+        )}
         <label className={styles.autoScrollLabel}>
           <input
             type="checkbox"

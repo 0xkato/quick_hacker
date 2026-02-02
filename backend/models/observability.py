@@ -90,6 +90,9 @@ class ToolDetail(BaseModel):
     # Confidence score if parseable from LLM response
     confidence_score: Optional[float] = None
 
+    # Sub-agent that made this tool call (Overseer mode)
+    subagent: Optional[str] = None
+
 
 class AgentStateSnapshot(BaseModel):
     """

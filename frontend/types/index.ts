@@ -404,6 +404,7 @@ export interface ToolDetail {
   duration_ms: number;
   llm_reasoning?: string;
   confidence_score?: number;
+  subagent?: string;  // Sub-agent that made this call (Overseer mode)
 }
 
 export interface AgentStateSnapshot {

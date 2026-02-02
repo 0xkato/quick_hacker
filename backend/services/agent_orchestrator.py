@@ -776,6 +776,7 @@ class AgentOrchestrator:
                     success=not is_error,
                     duration_ms=0,  # SDK doesn't provide timing
                     error_message=str(result) if is_error else None,
+                    subagent=subagent if _use_overseer else None,
                 )
 
                 # === Update Flow Node Status ===

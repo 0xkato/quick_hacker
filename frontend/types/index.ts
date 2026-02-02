@@ -64,7 +64,7 @@ export interface FileNode {
   name: string;
   path: string;
   is_dir: boolean;
-  children?: FileNode[];
+  children?: FileNode[] | null;
   size?: number;
   extension?: string;
 }
@@ -161,6 +161,7 @@ export interface AgentCreateRequest {
   target_files?: string[];
   focus_areas?: string[];
   use_claude_sdk?: boolean;  // Use Claude Agent SDK for native tool loop (Anthropic only)
+  use_claude_code_auth?: boolean;  // Use Claude Code subscription auth (true) or API key (false)
 }
 
 export interface Agent {

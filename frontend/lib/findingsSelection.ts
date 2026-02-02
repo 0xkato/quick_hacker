@@ -21,6 +21,13 @@ export function autoSelectFindingsAgentId({
   if (agents.length === 0) return null;
 
   const agentIds = new Set(agents.map((a) => a.id));
+
+  // Respect manual selection, including "all agents" (null).
+  if (userSelectedFindingsAgentId) {
+    if (!selectedFindingsAgentId) return null;
+    return agentIds.has(selectedFindingsAgentId) ? selectedFindingsAgentId : null;
+  }
+
   const currentSelection = selectedFindingsAgentId && agentIds.has(selectedFindingsAgentId)
     ? selectedFindingsAgentId
     : null;
@@ -48,9 +55,6 @@ export function autoSelectFindingsAgentId({
 
   // No current selection: use best.
   if (!currentSelection) return bestAgentId;
-
-  // Respect manual user selection.
-  if (userSelectedFindingsAgentId) return currentSelection;
 
   // Auto-upgrade selection if another agent has more findings.
   const currentCount = findingsByAgent.get(currentSelection) || 0;

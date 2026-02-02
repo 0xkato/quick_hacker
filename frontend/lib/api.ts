@@ -47,9 +47,13 @@ export async function initializeAuth(): Promise<void> {
   return;
 }
 
+// Default timeout for API requests (10 seconds)
+const DEFAULT_TIMEOUT = 10000;
+
 async function fetchWithAuth(
   url: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeout: number = DEFAULT_TIMEOUT
 ): Promise<Response> {
   const token = getAccessToken?.();
   const headers: HeadersInit = {
@@ -60,21 +64,29 @@ async function fetchWithAuth(
     (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
   }
 
-  let response = await fetch(url, { ...options, headers });
+  // Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  // If unauthorized, try to refresh token and retry
-  if (response.status === 401 && refreshTokenFn) {
-    const refreshed = await refreshTokenFn();
-    if (refreshed) {
-      const newToken = getAccessToken?.();
-      if (newToken) {
-        (headers as Record<string, string>)['Authorization'] = `Bearer ${newToken}`;
-        response = await fetch(url, { ...options, headers });
+  try {
+    let response = await fetch(url, { ...options, headers, signal: controller.signal });
+
+    // If unauthorized, try to refresh token and retry
+    if (response.status === 401 && refreshTokenFn) {
+      const refreshed = await refreshTokenFn();
+      if (refreshed) {
+        const newToken = getAccessToken?.();
+        if (newToken) {
+          (headers as Record<string, string>)['Authorization'] = `Bearer ${newToken}`;
+          response = await fetch(url, { ...options, headers, signal: controller.signal });
+        }
       }
     }
-  }
 
-  return response;
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export interface ObservabilityStats {
@@ -105,7 +117,8 @@ export class APIError extends Error {
 
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeout: number = DEFAULT_TIMEOUT
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
 
@@ -114,10 +127,18 @@ async function request<T>(
     ...options.headers as Record<string, string>,
   };
 
-  const response = await fetchWithAuth(url, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetchWithAuth(url, {
+      ...options,
+      headers,
+    }, timeout);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new APIError(0, 'Request timed out - backend may be unavailable');
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
@@ -165,8 +186,18 @@ export const git = {
 // === Files API ===
 
 export const files = {
-  async getTree(repoId: string, maxDepth = 10): Promise<FileNode> {
-    return request<FileNode>(`/api/files/${repoId}/tree?max_depth=${maxDepth}`);
+  async getTree(
+    repoId: string,
+    maxDepth = 1,
+    path: string = '',
+    options?: { maxChildren?: number; maxNodes?: number }
+  ): Promise<FileNode> {
+    const params = new URLSearchParams();
+    params.set('max_depth', String(maxDepth));
+    if (path) params.set('path', path);
+    if (options?.maxChildren !== undefined) params.set('max_children', String(options.maxChildren));
+    if (options?.maxNodes !== undefined) params.set('max_nodes', String(options.maxNodes));
+    return request<FileNode>(`/api/files/${repoId}/tree?${params.toString()}`);
   },
 
   async getContent(repoId: string, path: string): Promise<FileContent> {
@@ -702,6 +733,41 @@ export interface ThreatModelProfileResponse {
   profile_hash: string;
 }
 
+// === Validation Profile Types ===
+
+export type ValidationProfilePreset = 'large_c_codebase' | 'webapp' | 'strict' | 'blank';
+
+export interface AttackerRoleDefinition {
+  can_control: string[];
+  cannot_control: string[];
+  inherits?: string | null;
+  trust_boundary?: string | null;
+  exceptions?: Record<string, string>;
+}
+
+export interface TrustBoundaryDefinition {
+  untrusted_side: string[];
+  trusted_side: string[];
+  description?: string | null;
+}
+
+export interface CategoryEvidenceGate {
+  required: string[];
+  reject_if?: string[];
+  verifiers?: string[];
+}
+
+export interface ValidationProfile {
+  excluded_paths?: string[];
+  attacker_roles?: Record<string, AttackerRoleDefinition>;
+  trust_boundaries?: Record<string, TrustBoundaryDefinition>;
+  evidence_gates?: Record<string, CategoryEvidenceGate>;
+  enabled_verifiers?: string[];
+  default_verdict?: string;
+  require_shipped_reachability?: boolean;
+}
+
+
 export type ThreatModelProfileUpdateRequest =
   | { action: 'mark_reviewed'; expected_profile_hash: string }
   | { action: 'reset_to_preset'; preset: ThreatModelPreset; expected_profile_hash: string }
@@ -780,6 +846,36 @@ export const projects = {
       body: JSON.stringify(payload),
     });
   },
+
+  async getValidationProfile(projectId: string): Promise<ValidationProfile> {
+    return request<ValidationProfile>(`/api/projects/${projectId}/validation-profile`);
+  },
+
+  async updateValidationProfile(
+    projectId: string,
+    profile: ValidationProfile
+  ): Promise<ValidationProfile> {
+    return request<ValidationProfile>(`/api/projects/${projectId}/validation-profile`, {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    });
+  },
+
+  async applyValidationProfilePreset(
+    projectId: string,
+    presetName: ValidationProfilePreset
+  ): Promise<ValidationProfile> {
+    return request<ValidationProfile>(`/api/projects/${projectId}/validation-profile/apply-preset`, {
+      method: 'POST',
+      body: JSON.stringify({ preset_name: presetName }),
+    });
+  },
+
+  async autoConfigureValidationProfile(projectId: string): Promise<ValidationProfile> {
+    return request<ValidationProfile>(`/api/projects/${projectId}/validation-profile/auto-configure`, {
+      method: 'POST',
+    }, 180000);
+  },
 };
 
 // === Health ===
@@ -830,7 +926,7 @@ export const authApiKeys = {
 export const session = {
   async getSnapshotInfo(): Promise<SnapshotInfo | null> {
     try {
-      return await request<SnapshotInfo>('/api/session/snapshot');
+      return await request<SnapshotInfo | null>('/api/session/snapshot');
     } catch (err) {
       if (err instanceof APIError && err.status === 404) {
         return null;

@@ -383,11 +383,13 @@ class FindingTriageService:
         threat_model_profile: Optional[dict] = None,
         protocol_policy: Optional[ProtocolPolicy] = None,
         db_conn = None,
+        validation_profile: Optional[ValidationProfile] = None,
     ) -> TriageResult:
         """
         Triage findings with protocol evaluation and quest support.
 
-        This includes ProtocolEvaluator and evidence quest integration.
+        This includes ProtocolEvaluator, evidence quest integration, and
+        optional ValidationProfile-based filtering and strict validation.
         """
         if not findings:
             return TriageResult(
@@ -440,7 +442,68 @@ class FindingTriageService:
                 break
 
             try:
-                # Step 0: Production relevance filter (LLM-based)
+                # Step 0a: Check path exclusions from validation profile
+                if validation_profile and should_skip_by_path(finding.file_path, validation_profile):
+                    from models.schemas import ProofChecklist
+                    from services.classification.classifier import ClassificationResult
+
+                    excluded_checklist = ProofChecklist(
+                        source_controlled_input=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.DISPROVEN,
+                            reason="File excluded by validation profile"
+                        ),
+                        sink_present=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.UNKNOWN,
+                            reason="Not analyzed - excluded by profile"
+                        ),
+                        dataflow_evidenced=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.UNKNOWN,
+                            reason="Not analyzed - excluded by profile"
+                        ),
+                        reachable=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.UNKNOWN,
+                            reason="Not analyzed - excluded by profile"
+                        ),
+                        boundary_crossed=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.DISPROVEN,
+                            reason="File excluded by validation profile"
+                        ),
+                        not_only_misconfig=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.UNKNOWN,
+                            reason="Not analyzed - excluded by profile"
+                        ),
+                        security_control_bypassed=ChecklistItem(
+                            value=False,
+                            status=ChecklistStatus.UNKNOWN,
+                            reason="Not analyzed - excluded by profile"
+                        )
+                    )
+
+                    classification = ClassificationResult(
+                        disposition=Disposition.HARDENING,
+                        classification_confidence=100,
+                        exploit_confidence=None,
+                        proof_checklist=excluded_checklist,
+                        reasoning=[
+                            f"File excluded by validation profile: {finding.file_path}",
+                            f"Excluded paths: {validation_profile.excluded_paths}",
+                        ],
+                        category=finding.vulnerability_type
+                    )
+
+                    triaged_finding = self._attach_triage_metadata(
+                        finding, classification, batch_id, policy_version
+                    )
+                    triaged.append(triaged_finding)
+                    continue
+
+                # Step 0b: Production relevance filter (LLM-based)
                 if self.production_filter and protocol_policy:
                     is_relevant, filter_reason = await asyncio.to_thread(
                         self.production_filter.is_production_relevant,
@@ -516,6 +579,105 @@ class FindingTriageService:
                     classifier.classify,
                     finding, evidence, threat_model_profile
                 )
+
+                # Step 2.5: LLM validation (if enabled via protocol_policy)
+                if protocol_policy and protocol_policy.enable_llm_validation:
+                    # Get or create validator
+                    config_key = (
+                        protocol_policy.validation_model or "claude-sonnet-4-20250514",
+                        protocol_policy.validation_criticism_level
+                    )
+
+                    # Include enabled_verifiers from validation profile in cache key
+                    enabled_verifiers = []
+                    if validation_profile and validation_profile.enabled_verifiers:
+                        enabled_verifiers = validation_profile.enabled_verifiers
+
+                    validator_key = (config_key[0], config_key[1], tuple(enabled_verifiers))
+
+                    if validator_key not in self.llm_validators:
+                        api_key = ProtocolConfig.ANTHROPIC_API_KEY
+                        if api_key:
+                            self.llm_validators[validator_key] = LLMFindingValidator(
+                                anthropic_api_key=api_key,
+                                model=config_key[0],
+                                repo_root=repo_root,
+                                enabled_verifiers=enabled_verifiers,
+                            )
+
+                    validator = self.llm_validators.get(validator_key)
+
+                    if validator:
+                        validation_result = await validator.validate(
+                            finding=finding,
+                            evidence=evidence,
+                            classification=classification,
+                            threat_model_profile=protocol_policy.default_threat_model_preset,
+                            criticism_level=config_key[1],
+                            timeout_seconds=protocol_policy.validation_timeout_seconds,
+                            validation_profile=validation_profile,
+                        )
+
+                        # Store on finding for later reference
+                        finding.validation_result = validation_result
+
+                        # If INVALID, mark as filtered and continue to next finding
+                        if not validation_result.is_valid:
+                            from services.classification.classifier import ClassificationResult as CR
+                            from models.schemas import ProofChecklist
+
+                            invalid_checklist = ProofChecklist(
+                                source_controlled_input=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.DISPROVEN,
+                                    reason=f"LLM validation: {validation_result.reasoning[0] if validation_result.reasoning else 'INVALID'}"
+                                ),
+                                sink_present=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.UNKNOWN,
+                                    reason="LLM validation failed"
+                                ),
+                                dataflow_evidenced=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.UNKNOWN,
+                                    reason="LLM validation failed"
+                                ),
+                                reachable=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.UNKNOWN,
+                                    reason="LLM validation failed"
+                                ),
+                                boundary_crossed=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.DISPROVEN,
+                                    reason=f"LLM validation: {validation_result.reasoning[0] if validation_result.reasoning else 'INVALID'}"
+                                ),
+                                not_only_misconfig=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.UNKNOWN,
+                                    reason="LLM validation failed"
+                                ),
+                                security_control_bypassed=ChecklistItem(
+                                    value=False,
+                                    status=ChecklistStatus.UNKNOWN,
+                                    reason="LLM validation failed"
+                                )
+                            )
+
+                            classification = CR(
+                                disposition=Disposition.HARDENING,
+                                classification_confidence=validation_result.confidence or 0,
+                                exploit_confidence=None,
+                                proof_checklist=invalid_checklist,
+                                reasoning=validation_result.reasoning or ["LLM validation: INVALID"],
+                                category=finding.vulnerability_type
+                            )
+
+                            triaged_finding = self._attach_triage_metadata(
+                                finding, classification, batch_id, policy_version
+                            )
+                            triaged.append(triaged_finding)
+                            continue
 
                 # Step 3: Protocol evaluation
                 if protocol_policy:

@@ -1,5 +1,6 @@
 """File operations service for quick_hack."""
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Optional
@@ -143,29 +144,83 @@ def should_include_in_tree(name: str, is_dir: bool) -> bool:
     return name not in EXCLUDED_FILES and not name.startswith(".")
 
 
-async def get_file_tree(repo_path: str, max_depth: int = 10) -> FileNode:
-    """Build file tree for a repository."""
-    root = Path(repo_path)
+async def get_file_tree(
+    repo_path: str,
+    max_depth: int = 10,
+    *,
+    start_path: str = "",
+    max_children: int = 1000,
+    max_nodes: int = 20_000,
+) -> FileNode:
+    """Build a (possibly shallow) file tree for a repository.
 
-    def build_tree(path: Path, depth: int = 0) -> Optional[FileNode]:
+    Notes:
+      - This is used by the file explorer UI and must stay responsive even for huge repos.
+      - For performance, we avoid stat() calls for every file (size is omitted by default)
+        and we stop traversing at max_depth (children will be None for deeper dirs).
+    """
+    repo_root = Path(repo_path).resolve()
+    start_dir = (repo_root / start_path).resolve()
+
+    # Security check - prevent path traversal (and avoid scanning outside repo root)
+    try:
+        start_dir.relative_to(repo_root)
+    except ValueError as e:
+        raise ValueError("Invalid start_path - path traversal detected") from e
+
+    if not start_dir.exists():
+        raise FileNotFoundError(f"Path not found: {start_path}")
+
+    if not start_dir.is_dir():
+        raise ValueError(f"Not a directory: {start_path}")
+
+    node_count = 0
+
+    def build_tree(
+        path: Path,
+        depth: int = 0,
+        *,
+        name: str | None = None,
+        is_dir: bool | None = None,
+        is_symlink: bool | None = None,
+    ) -> Optional[FileNode]:
+        nonlocal node_count
+
         if depth > max_depth:
             return None
 
-        # Do not traverse or expose symlinks (prevents escape + huge walks)
-        if path.is_symlink():
+        if node_count >= max_nodes:
             return None
 
-        name = path.name or path.as_posix()
-        is_dir = path.is_dir()
+        # Do not traverse or expose symlinks (prevents escape + huge walks)
+        if is_symlink is None:
+            try:
+                is_symlink = path.is_symlink()
+            except OSError:
+                return None
+        if is_symlink:
+            return None
+
+        if name is None:
+            name = path.name or path.as_posix()
+
+        if is_dir is None:
+            try:
+                is_dir = path.is_dir()
+            except OSError:
+                return None
 
         if not should_include_in_tree(name, is_dir):
             return None
 
+        node_count += 1
+
         # Calculate relative path from repo root
         try:
-            rel_path = path.relative_to(root).as_posix()
+            rel_path = path.relative_to(repo_root).as_posix()
         except ValueError:
-            rel_path = name
+            # Should never happen because we never traverse outside repo_root.
+            return None
 
         node = FileNode(
             name=name,
@@ -174,25 +229,55 @@ async def get_file_tree(repo_path: str, max_depth: int = 10) -> FileNode:
         )
 
         if is_dir:
+            # Stop traversing deeper. Leaving children unset tells the UI that this folder
+            # can be lazily expanded with a follow-up request.
+            if depth >= max_depth:
+                return node
+
             children = []
             try:
-                entries = sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
-                for entry in entries:
-                    child = build_tree(entry, depth + 1)
-                    if child:
-                        children.append(child)
-            except PermissionError:
+                with os.scandir(path) as it:
+                    # Gather entries first so we can sort (dirs first, then name).
+                    entries: list[tuple[os.DirEntry, bool]] = []
+                    for entry in it:
+                        try:
+                            entry_is_dir = entry.is_dir(follow_symlinks=False)
+                        except OSError:
+                            continue
+
+                        if not should_include_in_tree(entry.name, entry_is_dir):
+                            continue
+
+                        entries.append((entry, entry_is_dir))
+                        if len(entries) >= max_children:
+                            break
+
+                    entries.sort(key=lambda pair: (not pair[1], pair[0].name.lower()))
+
+                    for entry, entry_is_dir in entries:
+                        if node_count >= max_nodes:
+                            break
+                        child = build_tree(
+                            Path(entry.path),
+                            depth + 1,
+                            name=entry.name,
+                            is_dir=entry_is_dir,
+                            is_symlink=entry.is_symlink(),
+                        )
+                        if child:
+                            children.append(child)
+            except (PermissionError, FileNotFoundError, NotADirectoryError):
                 pass
 
             node.children = children
         else:
-            # Add file metadata
-            node.size = path.stat().st_size if path.exists() else 0
             node.extension = path.suffix.lower() if path.suffix else None
 
         return node
 
-    return build_tree(root)
+    # Building the full tree can be expensive for large repos and will block the event loop if run inline.
+    # Run it in a worker thread to keep the API responsive.
+    return await asyncio.to_thread(build_tree, start_dir)
 
 
 async def read_file(repo_path: str, file_path: str) -> FileContent:

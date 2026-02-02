@@ -416,6 +416,10 @@ class AgentCreateRequest(BaseModel):
         False,
         description="Use Claude Agent SDK for native tool loop (Anthropic only)"
     )
+    use_claude_code_auth: bool = Field(
+        False,
+        description="Use Claude Code subscription auth (True) or API key (False). Defaults to API key mode."
+    )
 
 
 class Agent(BaseModel):

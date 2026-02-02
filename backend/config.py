@@ -1,5 +1,6 @@
 """Configuration settings for quick_hack backend."""
 
+import json
 from pathlib import Path
 from typing import Optional
 from pydantic import Field
@@ -12,6 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
     )
 
@@ -104,7 +106,35 @@ class Settings(BaseSettings):
     sandbox_network_disabled: bool = True
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        description=(
+            "Allowed CORS origins. Supports comma-separated values or a JSON array (e.g. "
+            "['http://localhost:3000'])."
+        ),
+    )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Return parsed CORS origins as a list.
+
+        Pydantic-settings expects JSON for list fields, which is brittle with dotenv files.
+        This keeps config robust by accepting either comma-separated strings or JSON.
+        """
+        raw = (self.cors_origins or "").strip()
+        if not raw:
+            return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                # Fall back to comma-separated parsing below
+                pass
+
+        return [part.strip() for part in raw.split(",") if part.strip()]
 
     # Auth bootstrap (development convenience)
     # By default, the token minting endpoints (/api/auth/*) are localhost-only.

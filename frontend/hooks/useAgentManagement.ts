@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Agent, AgentProgress, Finding, InvestigationFlow, InvestigationReport } from '@/types';
 import { agents as agentsApi } from '@/lib/api';
 
@@ -33,19 +33,34 @@ export function useAgentManagement({
   const [agentFlow, setAgentFlow] = useState<InvestigationFlow | null>(null);
   const [isLoadingFlow, setIsLoadingFlow] = useState(false);
 
-  // Persist selected agent across refreshes
-  useEffect(() => {
-    const stored = localStorage.getItem('quickhack.selectedAgentId');
-    if (stored) setSelectedAgentId(stored);
-  }, []);
+  // Persist selected agent across refreshes (scoped per project so it doesn't leak across projects).
+  const skipPersistRef = useRef(false);
 
   useEffect(() => {
-    if (selectedAgentId) {
-      localStorage.setItem('quickhack.selectedAgentId', selectedAgentId);
-    } else {
-      localStorage.removeItem('quickhack.selectedAgentId');
+    if (!projectId) {
+      setSelectedAgentId(null);
+      return;
     }
-  }, [selectedAgentId]);
+
+    // Prevent persisting a stale agent selection on the first render after project switches.
+    skipPersistRef.current = true;
+
+    const stored = localStorage.getItem(`quickhack.selectedAgentId:${projectId}`);
+    setSelectedAgentId(stored || null);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false;
+      return;
+    }
+
+    const key = `quickhack.selectedAgentId:${projectId}`;
+    if (selectedAgentId) localStorage.setItem(key, selectedAgentId);
+    else localStorage.removeItem(key);
+  }, [projectId, selectedAgentId]);
 
   // Load flow when agent is selected
   useEffect(() => {
@@ -58,16 +73,27 @@ export function useAgentManagement({
     const maxErrors = 3;
     let intervalId: NodeJS.Timeout | null = null;
 
+    let isFirstLoad = true;
+
     const loadFlow = async () => {
       try {
-        setIsLoadingFlow(true);
+        // Only show loading indicator on first load to avoid UI flicker during polling
+        if (isFirstLoad) {
+          setIsLoadingFlow(true);
+        }
         const flow = await agentsApi.getFlow(selectedAgentId);
         setAgentFlow(flow);
-        setIsLoadingFlow(false);
+        if (isFirstLoad) {
+          setIsLoadingFlow(false);
+          isFirstLoad = false;
+        }
         errorCount = 0;
       } catch (err) {
         console.error('Failed to load flow:', err);
-        setIsLoadingFlow(false);
+        if (isFirstLoad) {
+          setIsLoadingFlow(false);
+          isFirstLoad = false;
+        }
         errorCount++;
         if (errorCount >= maxErrors && intervalId) {
           console.log('Stopping flow polling due to repeated errors');
@@ -89,11 +115,11 @@ export function useAgentManagement({
       return;
     }
 
-    // Only poll if the selected agent is running
+    // Only poll if the selected agent is running (5 second interval to reduce load)
     const isRunning = selectedAgent?.status === 'running' || selectedAgent?.status === 'pending';
 
     if (isRunning) {
-      intervalId = setInterval(loadFlow, 2000);
+      intervalId = setInterval(loadFlow, 5000);
     }
 
     return () => {

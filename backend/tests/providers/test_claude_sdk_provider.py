@@ -119,6 +119,7 @@ class TestClaudeSDKProviderLifecycle:
             tool_core=mock_tool_core,
             config={
                 "model": "claude-sonnet-4-20250514",
+                "use_claude_code_auth": False,  # API key mode
                 "api_key": oauth_token,
             },
         )
@@ -141,15 +142,12 @@ class TestClaudeSDKProviderLifecycle:
             assert "ANTHROPIC_API_KEY" not in env
 
     @pytest.mark.asyncio
-    async def test_start_session_passes_through_anthropic_auth_token_env_var(self, mock_tool_core, tmp_path, monkeypatch):
-        """If ANTHROPIC_AUTH_TOKEN is set in the process env, pass it to Claude Code subprocess."""
+    async def test_start_session_uses_claude_code_auth_when_flag_true(self, mock_tool_core, tmp_path):
+        """When use_claude_code_auth=True, use Claude Code auth via setting_sources."""
         from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 
         if not SDK_AVAILABLE:
             pytest.skip("Claude SDK not installed")
-
-        oauth_token = "sk-ant-oat01-env-token"
-        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", oauth_token)
 
         repo = tmp_path / "repo"
 
@@ -159,6 +157,8 @@ class TestClaudeSDKProviderLifecycle:
             tool_core=mock_tool_core,
             config={
                 "model": "claude-sonnet-4-20250514",
+                "use_claude_code_auth": True,  # Explicit Claude Code auth
+                "api_key": "sk-ant-api01-ignored",  # API key is ignored in this mode
             },
         )
 
@@ -175,8 +175,91 @@ class TestClaudeSDKProviderLifecycle:
             await provider.start_session(audit_policy="read_only")
 
             options_kwargs = MockOptions.call_args.kwargs
+            # Claude Code auth mode: setting_sources should be ["user"] to load user's auth
+            assert options_kwargs.get("setting_sources") == ["user"]
+            # No env vars should be passed (we're using Claude Code's auth, not env vars)
             env = options_kwargs.get("env", {})
-            assert env.get("ANTHROPIC_AUTH_TOKEN") == oauth_token
+            assert "ANTHROPIC_AUTH_TOKEN" not in env
+            assert "ANTHROPIC_API_KEY" not in env
+
+    @pytest.mark.asyncio
+    async def test_start_session_uses_api_key_mode_when_flag_false(self, mock_tool_core, tmp_path):
+        """When use_claude_code_auth=False, use API key mode (env vars, no setting_sources)."""
+        from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
+
+        if not SDK_AVAILABLE:
+            pytest.skip("Claude SDK not installed")
+
+        repo = tmp_path / "repo"
+        api_key = "sk-ant-api01-test-key"
+
+        provider = ClaudeSDKProvider(
+            repo_path=str(repo),
+            project_id="test-project",
+            tool_core=mock_tool_core,
+            config={
+                "model": "claude-sonnet-4-20250514",
+                "use_claude_code_auth": False,  # Explicit API key mode
+                "api_key": api_key,
+            },
+        )
+
+        with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
+             patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
+            mock_options = MagicMock()
+            mock_options.model = "claude-sonnet-4-20250514"
+            MockOptions.return_value = mock_options
+
+            mock_client = AsyncMock()
+            mock_client.connect = AsyncMock()
+            MockClient.return_value = mock_client
+
+            await provider.start_session(audit_policy="read_only")
+
+            options_kwargs = MockOptions.call_args.kwargs
+            # API key mode: setting_sources should be None (SDK defaults to empty)
+            assert options_kwargs.get("setting_sources") is None
+            # API key should be in env
+            env = options_kwargs.get("env", {})
+            assert env.get("ANTHROPIC_API_KEY") == api_key
+
+    @pytest.mark.asyncio
+    async def test_start_session_defaults_to_api_key_mode_when_flag_missing(self, mock_tool_core, tmp_path):
+        """When use_claude_code_auth is omitted, default to API key mode (safer with MCP tools)."""
+        from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
+
+        if not SDK_AVAILABLE:
+            pytest.skip("Claude SDK not installed")
+
+        repo = tmp_path / "repo"
+        api_key = "sk-ant-api01-test-key"
+
+        provider = ClaudeSDKProvider(
+            repo_path=str(repo),
+            project_id="test-project",
+            tool_core=mock_tool_core,
+            config={
+                "model": "claude-sonnet-4-20250514",
+                "api_key": api_key,
+            },
+        )
+
+        with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
+             patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
+            mock_options = MagicMock()
+            mock_options.model = "claude-sonnet-4-20250514"
+            MockOptions.return_value = mock_options
+
+            mock_client = AsyncMock()
+            mock_client.connect = AsyncMock()
+            MockClient.return_value = mock_client
+
+            await provider.start_session(audit_policy="read_only")
+
+            options_kwargs = MockOptions.call_args.kwargs
+            assert options_kwargs.get("setting_sources") is None
+            env = options_kwargs.get("env", {})
+            assert env.get("ANTHROPIC_API_KEY") == api_key
 
     @pytest.mark.asyncio
     async def test_start_session_with_resume_session_id(self, mock_tool_core, tmp_path):

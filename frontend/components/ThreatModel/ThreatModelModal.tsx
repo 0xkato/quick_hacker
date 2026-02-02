@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle, Save, Shield, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronRight, Save, Shield, X } from 'lucide-react';
 import {
   APIError,
   projects,
@@ -11,6 +11,8 @@ import {
   type ThreatModelPreset,
   type ThreatModelProfile,
   type ThreatModelProfileResponse,
+  type ValidationProfile,
+  type ValidationProfilePreset,
 } from '@/lib/api';
 
 interface ThreatModelModalProps {
@@ -64,6 +66,19 @@ const ASSETS: Array<{ value: Asset; label: string; description: string }> = [
   { value: 'integrity_of_build', label: 'Build integrity', description: 'Prevent build/CI compromise.' },
   { value: 'integrity_of_release_artifacts', label: 'Release artifact integrity', description: 'Prevent tampering with shipped artifacts.' },
   { value: 'developer_machine_integrity', label: 'Developer machine integrity', description: 'Protect developer workstation environment.' },
+];
+
+// === Validation Profile Options ===
+
+const VALIDATION_PRESETS: Array<{ value: ValidationProfilePreset; label: string; description: string }> = [
+  { value: 'large_c_codebase', label: 'Large C/C++ Codebase', description: 'Chromium-style: strict evidence, remote attackers only, skip test/third_party.' },
+  { value: 'webapp', label: 'Web Application', description: 'Web-focused: network and web content attackers.' },
+  { value: 'strict', label: 'Strict', description: 'Maximum strictness: full evidence chain required.' },
+  { value: 'blank', label: 'Blank', description: 'No filtering: all findings pass through.' },
+];
+
+const VERIFIER_OPTIONS: Array<{ value: string; label: string; description: string }> = [
+  { value: 'gdb', label: 'GDB', description: 'Use GDB for memory corruption verification.' },
 ];
 
 function toggleItem<T extends string>(items: T[], value: T): T[] {
@@ -147,6 +162,17 @@ export function ThreatModelModal({
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState<string | null>(null);
 
+  // Validation Profile state
+  const [validationExpanded, setValidationExpanded] = useState(false);
+  const [validationProfile, setValidationProfile] = useState<ValidationProfile | null>(null);
+  const [excludedPathsText, setExcludedPathsText] = useState('');
+  const [enabledVerifiers, setEnabledVerifiers] = useState<string[]>([]);
+  const [validationJsonText, setValidationJsonText] = useState('');
+  const [validationJsonError, setValidationJsonError] = useState<string | null>(null);
+  const [showValidationJson, setShowValidationJson] = useState(false);
+  const [selectedValidationPreset, setSelectedValidationPreset] = useState<ValidationProfilePreset | null>(null);
+  const [isValidationSaving, setIsValidationSaving] = useState(false);
+
   const isDirty = useMemo(() => {
     if (!effective || !draft) return false;
     const base = effective.threat_model_profile;
@@ -185,10 +211,129 @@ export function ThreatModelModal({
     }
   };
 
+  const loadValidationProfile = async () => {
+    try {
+      const data = await projects.getValidationProfile(projectId);
+      setValidationProfile(data);
+      if (data) {
+        setExcludedPathsText((data.excluded_paths || []).join('\n'));
+        setEnabledVerifiers(data.enabled_verifiers || []);
+        setValidationJsonText(JSON.stringify(data, null, 2));
+      } else {
+        setExcludedPathsText('');
+        setEnabledVerifiers([]);
+        setValidationJsonText('{}');
+      }
+    } catch (err) {
+      console.error('Failed to load validation profile:', err);
+      // Not critical - validation profile is optional
+    }
+  };
+
+  const handleSaveValidationProfile = async () => {
+    setIsValidationSaving(true);
+    setErrorMessage(null);
+    try {
+      let profileToSave: ValidationProfile;
+
+      if (showValidationJson) {
+        // Parse from JSON
+        try {
+          profileToSave = JSON.parse(validationJsonText);
+        } catch {
+          setValidationJsonError('Invalid JSON');
+          setIsValidationSaving(false);
+          return;
+        }
+      } else {
+        // Build from UI fields
+        const paths = excludedPathsText
+          .split('\n')
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
+
+        profileToSave = {
+          ...validationProfile,
+          excluded_paths: paths,
+          enabled_verifiers: enabledVerifiers,
+        };
+      }
+
+      const result = await projects.updateValidationProfile(projectId, profileToSave);
+      setValidationProfile(result);
+      setSelectedValidationPreset(null); // Custom profile now
+      if (result) {
+        setExcludedPathsText((result.excluded_paths || []).join('\n'));
+        setEnabledVerifiers(result.enabled_verifiers || []);
+        setValidationJsonText(JSON.stringify(result, null, 2));
+        showValidationSuccess('Validation profile saved!');
+      }
+    } catch (err) {
+      console.error('Failed to save validation profile:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to save validation profile');
+    } finally {
+      setIsValidationSaving(false);
+    }
+  };
+
+  const handleApplyValidationPreset = async (preset: ValidationProfilePreset) => {
+    setIsValidationSaving(true);
+    setErrorMessage(null);
+    try {
+      const result = await projects.applyValidationProfilePreset(projectId, preset);
+      setValidationProfile(result);
+      setSelectedValidationPreset(preset);
+      if (result) {
+        setExcludedPathsText((result.excluded_paths || []).join('\n'));
+        setEnabledVerifiers(result.enabled_verifiers || []);
+        setValidationJsonText(JSON.stringify(result, null, 2));
+        setValidationSuccessMessage(`Applied "${preset}" preset and saved!`);
+        setTimeout(() => setValidationSuccessMessage(null), 4000);
+      }
+    } catch (err) {
+      console.error('Failed to apply validation preset:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to apply validation preset');
+    } finally {
+      setIsValidationSaving(false);
+    }
+  };
+
+  const [isAutoConfiguring, setIsAutoConfiguring] = useState(false);
+  const [validationSuccessMessage, setValidationSuccessMessage] = useState<string | null>(null);
+
+  const showValidationSuccess = (message: string) => {
+    setValidationSuccessMessage(message);
+    setTimeout(() => setValidationSuccessMessage(null), 4000);
+  };
+
+  const handleAutoConfigureValidation = async () => {
+    setIsAutoConfiguring(true);
+    setErrorMessage(null);
+    setValidationSuccessMessage(null);
+    try {
+      const result = await projects.autoConfigureValidationProfile(projectId);
+      setValidationProfile(result);
+      setSelectedValidationPreset(null); // Custom profile
+      if (result) {
+        setExcludedPathsText((result.excluded_paths || []).join('\n'));
+        setEnabledVerifiers(result.enabled_verifiers || []);
+        setValidationJsonText(JSON.stringify(result, null, 2));
+        const pathCount = result.excluded_paths?.length || 0;
+        showValidationSuccess(`Auto-configured and saved! ${pathCount} paths excluded.`);
+      }
+    } catch (err) {
+      console.error('Failed to auto-configure validation profile:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to auto-configure. Make sure the project has a valid path.');
+    } finally {
+      setIsAutoConfiguring(false);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     setActiveTab('visual');
-    void loadProfile();
+    // Load both profiles in parallel for faster modal open
+    void Promise.all([loadProfile(), loadValidationProfile()]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, projectId]);
 
@@ -541,6 +686,212 @@ export function ThreatModelModal({
                   </div>
                 </div>
               )}
+
+              {/* Validation Profile Section */}
+              <div className="mt-4 border border-vsc-border-subtle rounded">
+                <button
+                  onClick={() => setValidationExpanded(!validationExpanded)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-vsc-xs text-vsc-text hover:bg-vsc-input/50"
+                >
+                  <div className="flex items-center gap-2">
+                    {validationExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    <span className="font-medium">LLM Validation Profile</span>
+                    {selectedValidationPreset && (
+                      <span className="px-2 py-0.5 rounded bg-vsc-accent/20 text-vsc-accent text-vsc-xs">
+                        {VALIDATION_PRESETS.find((p) => p.value === selectedValidationPreset)?.label || selectedValidationPreset}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-vsc-text-muted">Configure strict validation for findings</span>
+                </button>
+
+                {validationExpanded && (
+                  <div className="px-3 py-3 border-t border-vsc-border-subtle">
+                    {/* Auto-configure and Preset selector */}
+                    <div className="mb-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <div className="text-vsc-xs text-vsc-text-muted mb-2">Apply preset</div>
+                          <div className="flex flex-wrap gap-2">
+                            {VALIDATION_PRESETS.map((preset) => (
+                              <button
+                                key={preset.value}
+                                onClick={() => handleApplyValidationPreset(preset.value)}
+                                disabled={isValidationSaving || isAutoConfiguring}
+                                className={`px-3 py-1 rounded border text-vsc-xs disabled:opacity-50 ${
+                                  selectedValidationPreset === preset.value
+                                    ? 'bg-vsc-accent/20 border-vsc-accent text-vsc-text'
+                                    : 'bg-transparent border-vsc-border-subtle text-vsc-text-muted hover:text-vsc-text hover:border-vsc-border'
+                                }`}
+                                title={preset.description}
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <div className="text-vsc-xs text-vsc-text-muted mb-2">Or let AI analyze your codebase</div>
+                          <button
+                            onClick={handleAutoConfigureValidation}
+                            disabled={isValidationSaving || isAutoConfiguring}
+                            className="px-4 py-2 rounded border text-vsc-xs bg-green-700/40 border-green-600 text-green-200 hover:bg-green-700/60 disabled:opacity-50 flex items-center gap-2 ml-auto"
+                            title="Analyze codebase structure and auto-configure excluded paths"
+                          >
+                            {isAutoConfiguring ? (
+                              <>
+                                <span className="animate-spin">⟳</span>
+                                Analyzing...
+                              </>
+                            ) : (
+                              <>
+                                <span>✨</span>
+                                Auto-configure
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isAutoConfiguring && (
+                        <div className="mb-3 px-3 py-2 rounded bg-green-900/20 border border-green-800 text-vsc-xs text-green-200">
+                          Analyzing codebase structure to suggest optimal settings... This may take a few seconds.
+                        </div>
+                      )}
+
+                      {validationSuccessMessage && (
+                        <div className="mb-3 px-3 py-2 rounded bg-green-900/40 border border-green-600 text-vsc-xs text-green-200 flex items-center gap-2">
+                          <span>✓</span>
+                          {validationSuccessMessage}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Toggle between simple and JSON mode */}
+                    <div className="flex gap-2 mb-3">
+                      <button
+                        onClick={() => setShowValidationJson(false)}
+                        className={`px-3 py-1 rounded border text-vsc-xs ${
+                          !showValidationJson
+                            ? 'bg-vsc-input border-vsc-border text-vsc-text'
+                            : 'bg-transparent border-vsc-border-subtle text-vsc-text-muted hover:text-vsc-text'
+                        }`}
+                      >
+                        Simple
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowValidationJson(true);
+                          setValidationJsonText(JSON.stringify(validationProfile || {}, null, 2));
+                        }}
+                        className={`px-3 py-1 rounded border text-vsc-xs ${
+                          showValidationJson
+                            ? 'bg-vsc-input border-vsc-border text-vsc-text'
+                            : 'bg-transparent border-vsc-border-subtle text-vsc-text-muted hover:text-vsc-text'
+                        }`}
+                      >
+                        Advanced JSON
+                      </button>
+                    </div>
+
+                    {showValidationJson ? (
+                      <div>
+                        <textarea
+                          value={validationJsonText}
+                          onChange={(e) => {
+                            setValidationJsonText(e.target.value);
+                            setValidationJsonError(null);
+                          }}
+                          className="w-full h-48 font-mono text-vsc-xs bg-vsc-input border border-vsc-border rounded p-2"
+                          spellCheck={false}
+                        />
+                        {validationJsonError && (
+                          <div className="mt-2 text-vsc-xs text-red-200 bg-red-900/30 border border-red-800 rounded px-3 py-2">
+                            {validationJsonError}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Left column: Excluded paths */}
+                        <div>
+                          <div className="text-vsc-xs text-vsc-text-muted mb-2">
+                            Excluded paths <span className="text-vsc-text-muted">(one per line)</span>
+                          </div>
+                          <textarea
+                            value={excludedPathsText}
+                            onChange={(e) => setExcludedPathsText(e.target.value)}
+                            placeholder="test/&#10;third_party/&#10;tools/&#10;docs/"
+                            className="w-full h-32 font-mono text-vsc-xs bg-vsc-input border border-vsc-border rounded p-2"
+                            spellCheck={false}
+                          />
+                          <div className="mt-1 text-vsc-xs text-vsc-text-muted">
+                            Findings in these paths are auto-filtered
+                          </div>
+                        </div>
+
+                        {/* Right column: Verifiers */}
+                        <div>
+                          <div className="text-vsc-xs text-vsc-text-muted mb-2">Verification tools</div>
+                          <div className="space-y-2">
+                            {VERIFIER_OPTIONS.map((item) => (
+                              <label key={item.value} className="flex items-start gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={enabledVerifiers.includes(item.value)}
+                                  onChange={() =>
+                                    setEnabledVerifiers(
+                                      enabledVerifiers.includes(item.value)
+                                        ? enabledVerifiers.filter((v) => v !== item.value)
+                                        : [...enabledVerifiers, item.value]
+                                    )
+                                  }
+                                  className="mt-0.5"
+                                />
+                                <span className="text-vsc-xs">
+                                  <span className="text-vsc-text">{item.label}</span>
+                                  <span className="text-vsc-text-muted"> — {item.description}</span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+
+                          <div className="mt-4 text-vsc-xs text-vsc-text-muted">
+                            <div className="mb-1">Current attacker roles:</div>
+                            <div className="text-vsc-text">
+                              {validationProfile?.attacker_roles
+                                ? Object.keys(validationProfile.attacker_roles).join(', ') || 'None'
+                                : 'Not configured'}
+                            </div>
+                            <div className="mt-2 mb-1">Trust boundaries:</div>
+                            <div className="text-vsc-text">
+                              {validationProfile?.trust_boundaries
+                                ? Object.keys(validationProfile.trust_boundaries).join(', ') || 'None'
+                                : 'Not configured'}
+                            </div>
+                            <div className="mt-2 text-yellow-400">
+                              Use Advanced JSON mode to edit attacker roles and trust boundaries.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Save button */}
+                    <div className="mt-4 flex justify-end">
+                      <button
+                        onClick={handleSaveValidationProfile}
+                        disabled={isValidationSaving}
+                        className="px-3 py-1 rounded text-vsc-xs bg-vsc-accent/80 border border-vsc-accent hover:bg-vsc-accent disabled:opacity-50 flex items-center gap-1"
+                      >
+                        <Save className="w-3 h-3" />
+                        {isValidationSaving ? 'Saving...' : 'Save Validation Profile'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>

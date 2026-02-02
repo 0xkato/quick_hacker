@@ -5,9 +5,11 @@ Projects organize cloned repositories into workspaces.
 Each project contains a single cloned repository.
 """
 
+import asyncio
 import json
 import os
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Literal
@@ -82,6 +84,46 @@ class ProjectService:
         self.projects_file = self.data_dir / "projects.json"
         self._projects: dict[str, Project] = {}
         self._current_project_id: Optional[str] = None
+        # Track background deletions so we don't spawn duplicates.
+        self._delete_tasks: dict[str, asyncio.Task[None]] = {}
+
+    def _trash_project_path(self, project_id: str) -> Path:
+        trash_dir = self.data_dir / ".trash" / "projects"
+        suffix = uuid.uuid4().hex[:8]
+        return trash_dir / f"{project_id}-{suffix}"
+
+    async def _delete_project_dir_background(self, *, project_id: str, project_path: Path) -> None:
+        try:
+            projects_root = self.projects_dir.resolve()
+            resolved = project_path.resolve()
+
+            # Safety: only delete paths inside the projects directory.
+            try:
+                resolved.relative_to(projects_root)
+            except ValueError:
+                print(f"[ProjectService] Refusing to delete path outside projects_dir: {resolved}")
+                return
+
+            if not resolved.exists():
+                return
+
+            # Best-effort: move to trash first so deletion can't interfere with project management.
+            delete_target = resolved
+            try:
+                trash_path = self._trash_project_path(project_id)
+                trash_path.parent.mkdir(parents=True, exist_ok=True)
+                resolved.rename(trash_path)
+                delete_target = trash_path
+            except Exception:
+                delete_target = resolved
+
+            print(f"[ProjectService] Background deleting project files at {delete_target}")
+            await asyncio.to_thread(shutil.rmtree, delete_target)
+            print(f"[ProjectService] Background deleted project files at {delete_target}")
+        except Exception as e:
+            print(f"[ProjectService] Background deletion failed for project {project_id}: {e}")
+        finally:
+            self._delete_tasks.pop(project_id, None)
 
     async def initialize(self):
         """Initialize the project service."""
@@ -223,7 +265,8 @@ class ProjectService:
 
         except GitCommandError as e:
             if repo_path.exists():
-                shutil.rmtree(repo_path)
+                print(f"[ProjectService] Cleaning up failed clone at {repo_path}")
+                await asyncio.to_thread(shutil.rmtree, repo_path)
             raise ValueError(f"Failed to clone repository: {e}")
 
     async def delete_project(self, project_id: str) -> bool:
@@ -236,14 +279,16 @@ class ProjectService:
         if self._current_project_id == project_id:
             self._current_project_id = None
 
-        # Remove from disk
-        project_path = Path(project.path)
-        if project_path.exists():
-            shutil.rmtree(project_path)
-
         # Remove from memory
         del self._projects[project_id]
         await self._save_projects()
+
+        # Remove from disk asynchronously to avoid blocking the API for large repos.
+        project_path = Path(project.path)
+        if project_id not in self._delete_tasks and project_path.exists():
+            self._delete_tasks[project_id] = asyncio.create_task(
+                self._delete_project_dir_background(project_id=project_id, project_path=project_path),
+            )
 
         return True
 

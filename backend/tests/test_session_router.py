@@ -65,7 +65,8 @@ def test_get_snapshot_not_found(client, mock_project_service, mock_session_servi
     mock_session_service.get_snapshot_info.return_value = None
 
     response = client.get("/api/session/snapshot")
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json() is None
 
 
 def test_delete_snapshot(client, mock_project_service, mock_session_service):

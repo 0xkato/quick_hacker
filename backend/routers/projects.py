@@ -1,11 +1,14 @@
 """Project management API endpoints."""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, Literal, Any
 from datetime import datetime
 
+from database import get_db
+from middleware.auth import AuthContext, require_auth
 from services.project_service import project_service, Project
 from services.sink_signal_service import sink_signal_service
 from models.sink_signals import SinkSignal, SinkSignalStatus
@@ -265,6 +268,70 @@ async def apply_validation_preset(
     project.validation_profile = preset.model_dump()
     await project_service._save_projects()
     return preset.model_dump()
+
+
+@router.post("/{project_id}/validation-profile/auto-configure")
+async def auto_configure_validation_profile(
+    project_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Auto-configure validation profile by analyzing codebase structure with LLM.
+
+    Uses Claude Code CLI if available (no API key needed), otherwise falls back
+    to direct API calls with configured credentials.
+    """
+    from services.validation.auto_configure import auto_configure_profile
+    from middleware.auth import get_user_api_key_for_provider
+    from services.settings_service import settings_service
+
+    project = await project_service.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    repo_path = project_service.get_project_repo_path(project_id)
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Project has no cloned repository to analyze")
+
+    # Get user's configured provider settings for fallback
+    app_settings = await settings_service.get_settings()
+
+    # Determine which provider to use (prefer anthropic, fall back to openai)
+    provider = "anthropic"
+    model = "claude-sonnet-4-20250514"
+
+    # Check if user has anthropic configured
+    anthropic_settings = app_settings.providers.get("anthropic")
+    if anthropic_settings and anthropic_settings.default_model:
+        model = anthropic_settings.default_model
+
+    # Get API key as fallback (may be None if using Claude Code CLI)
+    api_key = await get_user_api_key_for_provider(provider, auth_context, db)
+
+    # If no anthropic key, try openai
+    if not api_key:
+        openai_settings = app_settings.providers.get("openai")
+        if openai_settings:
+            openai_key = await get_user_api_key_for_provider("openai", auth_context, db)
+            if openai_key:
+                provider = "openai"
+                api_key = openai_key
+                model = openai_settings.default_model or "gpt-4o"
+
+    try:
+        # auto_configure_profile will try Claude Code CLI first,
+        # then fall back to API if needed
+        profile = await auto_configure_profile(
+            repo_path=repo_path,
+            api_key=api_key,  # May be None if using Claude Code CLI
+            provider=provider,
+            model=model,
+        )
+        project.validation_profile = profile.model_dump()
+        await project_service._save_projects()
+        return profile.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Auto-configuration failed: {str(e)}")
 
 
 @router.delete("/{project_id}")

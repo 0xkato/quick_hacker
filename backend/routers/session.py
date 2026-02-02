@@ -17,7 +17,7 @@ from services.project_service import project_service
 router = APIRouter(prefix="/session", tags=["Session"])
 
 
-@router.get("/snapshot", response_model=SnapshotInfo)
+@router.get("/snapshot", response_model=Optional[SnapshotInfo])
 async def get_snapshot_info(_: str = Depends(require_auth)):
     """Get metadata about the current session snapshot."""
     project_path = project_service.get_current_project_path()
@@ -25,9 +25,6 @@ async def get_snapshot_info(_: str = Depends(require_auth)):
         raise HTTPException(status_code=400, detail="No project selected")
 
     info = session_service.get_snapshot_info(project_path)
-    if not info:
-        raise HTTPException(status_code=404, detail="No snapshot found")
-
     return info
 
 

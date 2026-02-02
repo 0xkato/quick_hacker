@@ -30,6 +30,7 @@ from services.investigation_queue_service import investigation_queue_service
 from services.persistence_service import persistence_service
 from services.report_service import report_service
 from services.finding_triage_service import triage_service
+from services.project_service import project_service
 from providers import list_all_models
 from prompting_loader import render_prompt
 from config import settings
@@ -620,6 +621,7 @@ async def retriage_findings(
     from protocol_config import ProtocolConfig
 
     protocol_policy = None
+    validation_profile = None
     if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
         try:
             # Get project's protocol_id from database
@@ -633,6 +635,11 @@ async def retriage_findings(
             # Load the protocol policy
             loader = ProtocolPolicyLoader(db)
             protocol_policy = await loader.get_policy(protocol_id)
+
+            # Load the project's validation profile
+            project = await project_service.get_project(agent_id)
+            if project:
+                validation_profile = project.get_validation_profile()
         except Exception as e:
             # Log but don't fail if protocol loading fails
             print(f"Warning: Failed to load protocol policy: {e}")
@@ -646,6 +653,7 @@ async def retriage_findings(
             budgets=budgets,
             protocol_policy=protocol_policy,
             db_conn=db,
+            validation_profile=validation_profile,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Triage failed: {str(e)}")

@@ -28,13 +28,29 @@ async def get_repo_path(id: str) -> str:
 
 
 @router.get("/{repo_id}/tree", response_model=FileNode)
-async def get_file_tree(repo_id: str, max_depth: int = Query(10, le=20)):
+async def get_file_tree(
+    repo_id: str,
+    max_depth: int = Query(10, le=20),
+    path: str = Query("", description="Directory path relative to repo root (for lazy expansion)"),
+    max_children: int = Query(1000, ge=1, le=5000, description="Maximum entries per directory"),
+    max_nodes: int = Query(20000, ge=100, le=100000, description="Maximum total nodes to return"),
+):
     """Get file tree for a repository."""
     repo_path = await get_repo_path(repo_id)
 
     try:
-        tree = await file_service.get_file_tree(repo_path, max_depth)
+        tree = await file_service.get_file_tree(
+            repo_path,
+            max_depth,
+            start_path=path,
+            max_children=max_children,
+            max_nodes=max_nodes,
+        )
         return tree
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Path not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get file tree: {str(e)}")
 

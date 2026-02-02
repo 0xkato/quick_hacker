@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Files,
   Search,
@@ -41,7 +41,6 @@ import { usePanelLayout, type ActivityView } from '@/hooks/usePanelLayout';
 import { useSessionManagement } from '@/hooks/useSessionManagement';
 import { useObservability } from '@/hooks/useObservability';
 import { agents as agentsApi, projects as projectsApi, files as filesApi, setAuthFunctions, type Project } from '@/lib/api';
-import { fetchProjectBootstrapData } from '@/lib/projectBootstrap';
 import type {
   InvestigationReport,
 } from '@/types';
@@ -90,6 +89,8 @@ export default function Home() {
     isAuthenticated,
   });
 
+  const projectLoadTokenRef = useRef(0);
+
   // Auto-select agent for findings view - now handled by useFindingsManagement hook
   // Persist selected agent across refreshes - now handled by useAgentManagement hook
 
@@ -99,21 +100,27 @@ export default function Home() {
   }, [getAccessToken, refreshToken]);
 
   // WebSocket - only connect after auth is ready (JWT or legacy session token)
-  const { isConnected } = useWebSocket({
-    enabled: isAuthenticated,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onFinding: useCallback((finding: any) => {
-      // Only add finding if it belongs to an agent in the current project
-      findingsMgmt.setFindings((prev) => {
-        // Check if this finding's agent belongs to current project
-        const belongsToCurrentProject = agentMgmt.agents.some(agent => agent.id === finding.agent_id);
-        if (!belongsToCurrentProject) {
-          console.log(`Ignoring finding from agent ${finding.agent_id} (different project)`);
-          return prev;
-        }
-        return [finding, ...prev];
-      });
-    }, [agentMgmt.agents, findingsMgmt.setFindings]),
+	  const { isConnected } = useWebSocket({
+	    enabled: isAuthenticated,
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    onFinding: useCallback((finding: any) => {
+	      const projectId = currentProject?.id;
+	      if (!projectId) return;
+
+	      // Only add finding if it belongs to the current project.
+	      // (The backend broadcasts all events to all clients.)
+	      findingsMgmt.setFindings((prev) => {
+	        if (finding?.repo_id !== projectId) return prev;
+
+	        // Deduplicate by (agent_id, id) to avoid duplicates when we also refresh from the API.
+	        const alreadyPresent = prev.some(
+	          (f) => f.id === finding.id && f.agent_id === finding.agent_id
+	        );
+	        if (alreadyPresent) return prev;
+
+	        return [finding, ...prev];
+	      });
+	    }, [currentProject?.id, findingsMgmt.setFindings]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onProgress: useCallback((agentId: string, progress: any) => {
       agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
@@ -123,31 +130,38 @@ export default function Home() {
           agentMgmt.setAgentFlow((progress as any).flow);
         }
       }
-    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentProgress, agentMgmt.setAgentFlow]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onAgentStatus: useCallback((agentId: string, status: string) => {
-      agentMgmt.setAgents((prev) =>
-        prev.map((a) =>
-          a.id === agentId ? { ...a, status: status as any } : a
-        )
-      );
-    }, [agentMgmt.setAgents]),
+	    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentProgress, agentMgmt.setAgentFlow]),
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    onAgentStatus: useCallback((agentId: string, status: string) => {
+	      const isKnownAgent = agentMgmt.agents.some((a) => a.id === agentId);
+	      if (!isKnownAgent) return;
+
+	      agentMgmt.setAgents((prev) =>
+	        prev.map((a) =>
+	          a.id === agentId ? { ...a, status: status as any } : a
+	        )
+	      );
+	      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+	        // Ensure findings are fresh even if we missed WS messages during refresh/reconnect.
+	        findingsMgmt.refreshFindings();
+	      }
+	    }, [agentMgmt.agents, agentMgmt.setAgents, findingsMgmt.refreshFindings]),
     // Observability handlers
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onLLMRequest: useCallback((agentId: string, interaction: any) => {
-      if (!agentMgmt.selectedAgentId || agentId === agentMgmt.selectedAgentId) {
+      if (agentId === agentMgmt.selectedAgentId) {
         observability.setLlmInteractions((prev) => [...prev, interaction]);
       }
     }, [agentMgmt.selectedAgentId, observability.setLlmInteractions]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onLLMResponse: useCallback((agentId: string, interaction: any) => {
-      if (!agentMgmt.selectedAgentId || agentId === agentMgmt.selectedAgentId) {
+      if (agentId === agentMgmt.selectedAgentId) {
         observability.setLlmInteractions((prev) => [...prev, interaction]);
       }
     }, [agentMgmt.selectedAgentId, observability.setLlmInteractions]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onToolDetail: useCallback((agentId: string, detail: any) => {
-      if (!agentMgmt.selectedAgentId || agentId === agentMgmt.selectedAgentId) {
+      if (agentId === agentMgmt.selectedAgentId) {
         observability.setToolDetails((prev) => [...prev, detail]);
       }
     }, [agentMgmt.selectedAgentId, observability.setToolDetails]),
@@ -200,19 +214,37 @@ export default function Home() {
 
   // Load project data when entering a project
   const loadProjectData = async (project: Project) => {
-    try {
-      const data = await fetchProjectBootstrapData(project, {
-        getTree: (repoId) => filesApi.getTree(repoId),
-        listAgents: (repoId) => agentsApi.list(repoId),
-        getAllFindings: (repoId) => agentsApi.getAllFindings(repoId),
-      });
+    const loadToken = ++projectLoadTokenRef.current;
 
-      workspace.setFileTree(data.fileTree);
-      agentMgmt.setAgents(data.agents);
-      findingsMgmt.setFindings(data.findings);
+    // Load critical UI state first (agents + findings) so refresh doesn't look "empty" if file-tree is slow.
+    try {
+      const [agents, findings] = await Promise.all([
+        agentsApi.list(project.id),
+        agentsApi.getAllFindings(project.id),
+      ]);
+      if (projectLoadTokenRef.current !== loadToken) return;
+      agentMgmt.setAgents(agents);
+      findingsMgmt.setFindings(findings);
     } catch (err) {
       console.error('Failed to load agents/findings:', err);
     }
+
+    // Load file tree after (don’t block the main UI on it).
+    const needsFileTree = project.repo_name || project.is_cloned;
+    if (!needsFileTree) {
+      if (projectLoadTokenRef.current !== loadToken) return;
+      workspace.setFileTree(null);
+      return;
+    }
+
+    filesApi.getTree(project.id, 1, '', { maxChildren: 200, maxNodes: 5000 })
+      .then((tree) => {
+        if (projectLoadTokenRef.current !== loadToken) return;
+        workspace.setFileTree(tree);
+      })
+      .catch((err) => {
+        console.error('Failed to load file tree:', err);
+      });
   };
 
   // Handle entering a project
@@ -631,6 +663,7 @@ export default function Home() {
                   tree={workspace.fileTree}
                   selectedPath={workspace.selectedPath}
                   onFileSelect={handleFileSelect}
+                  onDirectoryExpand={workspace.expandDirectory}
                 />
               )}
 
@@ -651,36 +684,38 @@ export default function Home() {
                   {/* Agent selector for findings */}
                   <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2 flex-shrink-0">
                     <Bug className="w-4 h-4 text-text-muted" />
-                    <select
-                      value={findingsMgmt.selectedFindingsAgentId || ''}
-                      onChange={(e) => {
-                        findingsMgmt.setUserSelectedFindingsAgentId(true);
-                        findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
-                      }}
-                      className="flex-1 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
-                    >
-                      {!findingsMgmt.selectedFindingsAgentId && <option value="">Select an agent...</option>}
-                      {agentMgmt.agents.map((agent) => (
-                        <option key={agent.id} value={agent.id}>
-                          {agent.name} ({findingsMgmt.findings.filter(f => f.agent_id === agent.id).length} findings)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    <FindingsList
-                      key={findingsMgmt.selectedFindingsAgentId || 'none'}
-                      findings={
-                        findingsMgmt.selectedFindingsAgentId
-                          ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
-                          : []
-                      }
-                      onFindingClick={handleFindingClick}
-                      onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
-                    />
-                  </div>
-                </div>
-              )}
+	                    <select
+	                      value={findingsMgmt.selectedFindingsAgentId || ''}
+	                      onChange={(e) => {
+	                        findingsMgmt.setUserSelectedFindingsAgentId(true);
+	                        findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
+	                      }}
+	                      className="flex-1 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
+	                    >
+	                      <option value="">
+	                        All agents ({findingsMgmt.findings.length} findings)
+	                      </option>
+	                      {agentMgmt.agents.map((agent) => (
+	                        <option key={agent.id} value={agent.id}>
+	                          {agent.name} ({findingsMgmt.findings.filter(f => f.agent_id === agent.id).length} findings)
+	                        </option>
+	                      ))}
+	                    </select>
+	                  </div>
+	                  <div className="flex-1 overflow-hidden">
+	                    <FindingsList
+	                      key={findingsMgmt.selectedFindingsAgentId || 'all'}
+	                      findings={
+	                        findingsMgmt.selectedFindingsAgentId
+	                          ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
+	                          : findingsMgmt.findings
+	                      }
+	                      onFindingClick={handleFindingClick}
+	                      onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
+	                    />
+	                  </div>
+	                </div>
+	              )}
             </div>
           </aside>
         )}

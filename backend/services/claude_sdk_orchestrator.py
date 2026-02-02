@@ -425,6 +425,13 @@ class ClaudeSDKOrchestrator:
                 "or set `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`."
             )
 
+        if "tool use concurrency" in lower:
+            return (
+                "Claude SDK tool concurrency error. "
+                "If you're using Claude Code auth (setting_sources=['user']), it may load user hooks/tools that "
+                "conflict with QuickHack's MCP tools. Prefer API key auth (disable Claude Code auth) and retry."
+            )
+
         return message
 
     def _emit_event(self, event_type: str, data: Dict[str, Any]) -> None:

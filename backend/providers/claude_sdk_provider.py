@@ -141,6 +141,14 @@ class ClaudeSDKProvider:
         api_key = self.config.get("api_key")
         auth_token = self.config.get("auth_token")
 
+        # Determine auth mode: explicit selection from config
+        # use_claude_code_auth=True → Claude Code subscription auth
+        # use_claude_code_auth=False (default) → API key mode
+        #
+        # Claude Code auth loads user-level settings/tools which can conflict with our MCP tools,
+        # so we default to API key mode unless explicitly requested.
+        use_claude_code_auth = self.config.get("use_claude_code_auth", False)
+
         print(f"[ClaudeSDKProvider] Creating ClaudeAgentOptions:")
         print(f"  model={model}")
         print(f"  cwd={self.repo_path}")
@@ -149,26 +157,47 @@ class ClaudeSDKProvider:
         print(f"  permission_mode={permission_mode}")
         print(f"  api_key={'SET' if api_key else 'NOT SET'}")
         print(f"  auth_token={'SET' if auth_token else 'NOT SET'}")
+        print(f"  auth_mode={'CLAUDE_CODE' if use_claude_code_auth else 'API_KEY'}")
         print(f"  mcp_servers keys: {list({'quickhack': self._mcp_server}.keys())}")
         print(f"  mcp_server type: {type(self._mcp_server)}")
         print(f"  system_prompt length: {len(system_prompt)}")
 
         env: dict[str, str] = {}
-        # Claude Code reads credentials from environment variables; pass them directly
-        # to the CLI subprocess environment (avoid mutating the backend process env).
-        # - `ANTHROPIC_API_KEY` for API key auth (X-Api-Key)
-        # - `ANTHROPIC_AUTH_TOKEN` for OAuth-style tokens (Authorization: Bearer)
-        resolved_auth_token = (auth_token or "").strip() or (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-        resolved_api_key = (api_key or "").strip() or (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+        setting_sources: list[str] | None = None
 
-        if resolved_auth_token:
-            env["ANTHROPIC_AUTH_TOKEN"] = resolved_auth_token
-        elif resolved_api_key:
-            # Heuristic: OAuth tokens are commonly `sk-ant-oat*`; treat them as auth tokens.
-            if resolved_api_key.lower().startswith("sk-ant-oat"):
-                env["ANTHROPIC_AUTH_TOKEN"] = resolved_api_key
+        if use_claude_code_auth:
+            # Claude Code mode: use subscription auth from user settings
+            # Set setting_sources to ["user"] so SDK loads user's Claude Code auth
+            setting_sources = ["user"]
+            print(f"[ClaudeSDKProvider] Using Claude Code auth mode, setting_sources={setting_sources}")
+        else:
+            # API Key mode: pass credentials via environment variables
+            # Don't set setting_sources (SDK defaults to empty, skipping user settings)
+            resolved_auth_token = (auth_token or "").strip()
+            resolved_api_key = (api_key or "").strip()
+
+            # Fallback to environment variables if not provided via config
+            if not resolved_auth_token and not resolved_api_key:
+                resolved_auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+                resolved_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+                if resolved_auth_token or resolved_api_key:
+                    print(f"[ClaudeSDKProvider] Using credentials from environment variables")
+
+            if resolved_auth_token:
+                env["ANTHROPIC_AUTH_TOKEN"] = resolved_auth_token
+                print(f"[ClaudeSDKProvider] Using auth_token, prefix: {resolved_auth_token[:15]}...")
+            elif resolved_api_key:
+                # Heuristic: OAuth tokens are commonly `sk-ant-oat*`; treat them as auth tokens.
+                if resolved_api_key.lower().startswith("sk-ant-oat"):
+                    env["ANTHROPIC_AUTH_TOKEN"] = resolved_api_key
+                    print(f"[ClaudeSDKProvider] OAuth token detected, using ANTHROPIC_AUTH_TOKEN, prefix: {resolved_api_key[:15]}...")
+                else:
+                    env["ANTHROPIC_API_KEY"] = resolved_api_key
+                    print(f"[ClaudeSDKProvider] API key detected, using ANTHROPIC_API_KEY, prefix: {resolved_api_key[:15]}...")
             else:
-                env["ANTHROPIC_API_KEY"] = resolved_api_key
+                print(f"[ClaudeSDKProvider] WARNING: No API key or auth token provided!")
+                print(f"[ClaudeSDKProvider] Set ANTHROPIC_API_KEY environment variable or configure in Settings > Providers")
+            print(f"[ClaudeSDKProvider] Using API key mode, env keys: {list(env.keys())}")
 
         options = ClaudeAgentOptions(
             model=model,
@@ -180,6 +209,7 @@ class ClaudeSDKProvider:
             max_budget_usd=max_budget,
             permission_mode=permission_mode,
             env=env,
+            setting_sources=setting_sources,
         )
 
         # Create ClaudeSDKClient

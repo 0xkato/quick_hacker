@@ -89,14 +89,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchUser = useCallback(async (token: string): Promise<User | null> => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+
       const response = await fetch(`${API_BASE}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+
       if (response.ok) {
         return await response.json();
       }
     } catch (error) {
-      console.error('Failed to fetch user:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('Auth request timed out');
+      } else {
+        console.error('Failed to fetch user:', error);
+      }
     }
     return null;
   }, []);
@@ -106,11 +116,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!refresh) return false;
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+
       const response = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refresh })
+        body: JSON.stringify({ refresh_token: refresh }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const data = await response.json();
@@ -120,7 +135,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return true;
       }
     } catch (error) {
-      console.error('Failed to refresh token:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('Token refresh request timed out');
+      } else {
+        console.error('Failed to refresh token:', error);
+      }
     }
 
     clearTokens();
@@ -129,11 +148,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [setTokens, clearTokens, fetchUser]);
 
   const login = useCallback(async (username: string, password: string) => {
-    const response = await fetch(`${API_BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Login request timed out - backend may be unavailable');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       throw new Error(await getErrorMessage(response));
@@ -146,11 +179,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [setTokens, fetchUser]);
 
   const register = useCallback(async (username: string, email: string, password: string) => {
-    const response = await fetch(`${API_BASE}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password })
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Registration request timed out - backend may be unavailable');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       throw new Error(await getErrorMessage(response));

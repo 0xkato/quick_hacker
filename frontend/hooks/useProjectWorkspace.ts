@@ -16,6 +16,7 @@ export interface UseProjectWorkspaceResult {
   setCurrentFile: React.Dispatch<React.SetStateAction<FileContent | null>>;
   setSelectedPath: React.Dispatch<React.SetStateAction<string | null>>;
   loadFileTree: () => Promise<void>;
+  expandDirectory: (path: string) => Promise<void>;
   selectFile: (path: string) => Promise<void>;
   clearFile: () => void;
 }
@@ -27,6 +28,33 @@ export function useProjectWorkspace({
   const [currentFile, setCurrentFile] = useState<FileContent | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
+  const setDirectoryChildren = useCallback((path: string, children: FileNode[] | null | undefined) => {
+    setFileTree((prev) => {
+      if (!prev) return prev;
+
+      const updateNode = (node: FileNode): FileNode => {
+        if (node.path === path) {
+          return { ...node, children: children ?? [] };
+        }
+
+        if (!Array.isArray(node.children)) {
+          return node;
+        }
+
+        let changed = false;
+        const nextChildren = node.children.map((child) => {
+          const updated = updateNode(child);
+          if (updated !== child) changed = true;
+          return updated;
+        });
+
+        return changed ? { ...node, children: nextChildren } : node;
+      };
+
+      return updateNode(prev);
+    });
+  }, []);
+
   const loadFileTree = useCallback(async () => {
     if (!currentProject) return;
 
@@ -34,12 +62,24 @@ export function useProjectWorkspace({
     if (!currentProject.repo_name && !currentProject.is_cloned) return;
 
     try {
-      const tree = await files.getTree(currentProject.id);
+      // Load a shallow tree initially; directories are lazily expanded on demand.
+      const tree = await files.getTree(currentProject.id, 1, '', { maxChildren: 200, maxNodes: 5000 });
       setFileTree(tree);
     } catch (err) {
       console.error('Failed to load file tree:', err);
     }
   }, [currentProject]);
+
+  const expandDirectory = useCallback(async (path: string) => {
+    if (!currentProject) return;
+
+    try {
+      const subtree = await files.getTree(currentProject.id, 1, path, { maxChildren: 200, maxNodes: 5000 });
+      setDirectoryChildren(path, subtree.children);
+    } catch (err) {
+      console.error('Failed to expand directory:', err);
+    }
+  }, [currentProject, setDirectoryChildren]);
 
   const selectFile = useCallback(async (path: string) => {
     if (!currentProject) return;
@@ -67,6 +107,7 @@ export function useProjectWorkspace({
     setCurrentFile,
     setSelectedPath,
     loadFileTree,
+    expandDirectory,
     selectFile,
     clearFile,
   };

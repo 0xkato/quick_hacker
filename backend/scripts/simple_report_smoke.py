@@ -1,4 +1,8 @@
-"""Test simple report endpoint by creating a test finding and fetching report."""
+"""Smoke-test helper for the simple report endpoint.
+
+This is a runnable script (not a pytest test). It inserts a test finding into the database
+and prints curl commands to fetch the report.
+"""
 
 import asyncio
 import sys

@@ -14,6 +14,7 @@ interface FileTreeProps {
   tree: FileNode | null;
   selectedPath: string | null;
   onFileSelect: (path: string) => void;
+  onDirectoryExpand?: (path: string) => Promise<void>;
 }
 
 // File type icons with VSCode-like colors
@@ -55,6 +56,7 @@ interface TreeNodeProps {
   onFileSelect: (path: string) => void;
   expandedPaths: Set<string>;
   onToggleExpand: (path: string) => void;
+  onDirectoryExpand?: (path: string) => Promise<void>;
 }
 
 function TreeNode({
@@ -64,12 +66,17 @@ function TreeNode({
   onFileSelect,
   expandedPaths,
   onToggleExpand,
+  onDirectoryExpand,
 }: TreeNodeProps) {
   const isExpanded = expandedPaths.has(node.path);
   const isSelected = selectedPath === node.path;
 
-  const handleClick = () => {
+  const handleClick = async () => {
     if (node.is_dir) {
+      // Lazy-load children on first expand (huge repos like chromium cannot be fully preloaded).
+      if (!isExpanded && !Array.isArray(node.children) && onDirectoryExpand) {
+        await onDirectoryExpand(node.path);
+      }
       onToggleExpand(node.path);
     } else {
       onFileSelect(node.path);
@@ -122,6 +129,7 @@ function TreeNode({
               onFileSelect={onFileSelect}
               expandedPaths={expandedPaths}
               onToggleExpand={onToggleExpand}
+              onDirectoryExpand={onDirectoryExpand}
             />
           ))}
         </div>
@@ -130,7 +138,7 @@ function TreeNode({
   );
 }
 
-export function FileTree({ tree, selectedPath, onFileSelect }: FileTreeProps) {
+export function FileTree({ tree, selectedPath, onFileSelect, onDirectoryExpand }: FileTreeProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(['']));
 
   const handleToggleExpand = useCallback((path: string) => {
@@ -166,6 +174,7 @@ export function FileTree({ tree, selectedPath, onFileSelect }: FileTreeProps) {
           onFileSelect={onFileSelect}
           expandedPaths={expandedPaths}
           onToggleExpand={handleToggleExpand}
+          onDirectoryExpand={onDirectoryExpand}
         />
       ))}
     </div>

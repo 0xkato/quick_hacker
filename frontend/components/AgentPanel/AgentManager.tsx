@@ -124,6 +124,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
   const [apiKey, setApiKey] = useState('');
   const [customPrompt, setCustomPrompt] = useState('');
   const [useClaudeSDK, setUseClaudeSDK] = useState(true);  // Default to SDK for Anthropic
+  const [useClaudeCodeAuth, setUseClaudeCodeAuth] = useState(false);  // Default to API key mode (will be updated based on settings)
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
@@ -179,7 +180,10 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
   const hasApiKeyConfigured = appSettings?.providers[provider]?.api_key
     && appSettings.providers[provider].api_key !== '****'
     && appSettings.providers[provider].api_key.length > 4;
-  const requiresApiKey = provider !== 'ollama' && provider !== 'codex_cli' && !(provider === 'anthropic' && useClaudeSDK);
+  // API key is required unless:
+  // - Provider is ollama or codex_cli (no key needed)
+  // - Provider is anthropic with Claude SDK and Claude Code auth enabled
+  const requiresApiKey = provider !== 'ollama' && provider !== 'codex_cli' && !(provider === 'anthropic' && useClaudeSDK && useClaudeCodeAuth);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -199,6 +203,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
         scan_tier: scanTier,
         custom_prompt: scanTier === 'custom' ? (customPrompt || undefined) : undefined,
         use_claude_sdk: provider === 'anthropic' ? useClaudeSDK : undefined,
+        use_claude_code_auth: provider === 'anthropic' && useClaudeSDK ? useClaudeCodeAuth : undefined,
       };
 
       const agent = await agentsApi.create(request);
@@ -314,20 +319,57 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
 
           {/* Claude SDK Toggle - Only for Anthropic */}
           {provider === 'anthropic' && (
-            <div className="flex items-center gap-3 p-3 rounded border border-vsc-border-subtle bg-vsc-input">
-              <input
-                type="checkbox"
-                id="use-claude-sdk"
-                checked={useClaudeSDK}
-                onChange={(e) => setUseClaudeSDK(e.target.checked)}
-                className="rounded"
-              />
-              <label htmlFor="use-claude-sdk" className="flex-1 cursor-pointer">
-                <span className="text-vsc-sm font-medium text-vsc-text">Use Claude Agent SDK</span>
-                <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
-                  Native tool loop with better performance. Uses ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN (or Claude Code setup-token).
-                </p>
-              </label>
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 p-3 rounded border border-vsc-border-subtle bg-vsc-input">
+                <input
+                  type="checkbox"
+                  id="use-claude-sdk"
+                  checked={useClaudeSDK}
+                  onChange={(e) => setUseClaudeSDK(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="use-claude-sdk" className="flex-1 cursor-pointer">
+                  <span className="text-vsc-sm font-medium text-vsc-text">Use Claude Agent SDK</span>
+                  <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
+                    Native tool loop with better performance.
+                  </p>
+                </label>
+              </div>
+
+              {/* Auth Mode Toggle - Only when Claude SDK is enabled */}
+              {useClaudeSDK && (
+                <div className="ml-6 p-3 rounded border border-vsc-border-subtle bg-vsc-bg">
+                  <div className="text-vsc-xs text-vsc-text-muted uppercase tracking-wider mb-2">Authentication</div>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="auth-mode"
+                        checked={useClaudeCodeAuth}
+                        onChange={() => setUseClaudeCodeAuth(true)}
+                        className="rounded"
+                      />
+                      <div>
+                        <span className="text-vsc-sm font-medium text-vsc-text">Claude Code (subscription)</span>
+                        <p className="text-vsc-xs text-vsc-text-muted">Uses your Claude Code login - no API key needed</p>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="auth-mode"
+                        checked={!useClaudeCodeAuth}
+                        onChange={() => setUseClaudeCodeAuth(false)}
+                        className="rounded"
+                      />
+                      <div>
+                        <span className="text-vsc-sm font-medium text-vsc-text">API Key</span>
+                        <p className="text-vsc-xs text-vsc-text-muted">Uses Anthropic API key from settings or entered below</p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -979,10 +979,15 @@ class AgentOrchestrator:
         )
 
         # Create ClaudeSDKProvider
+        # Get explicit auth mode from request (defaults to False = API key auth)
+        # Note: Claude Code auth (setting_sources=["user"]) loads user's Claude Code tools
+        # which can conflict with our MCP tools. Use API key auth by default.
+        use_claude_code_auth = getattr(agent.request, 'use_claude_code_auth', False)
         provider_config = {
             "model": config.model if config else "claude-sonnet-4-20250514",
             "api_key": sdk_api_key,
             "max_tokens": config.max_tokens if config else 8192,
+            "use_claude_code_auth": use_claude_code_auth,
         }
 
         provider = ClaudeSDKProvider(
@@ -1055,6 +1060,7 @@ class AgentOrchestrator:
                     from protocol_config import ProtocolConfig
 
                     protocol_policy = None
+                    validation_profile = None
                     db_conn = None
                     if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
                         try:
@@ -1071,6 +1077,13 @@ class AgentOrchestrator:
                                 loader = ProtocolPolicyLoader(db)
                                 protocol_policy = await loader.get_policy(protocol_id)
                                 db_conn = db
+
+                                # Load the project's validation profile
+                                project = await project_service.get_project(str(agent.repo_id))
+                                if project:
+                                    validation_profile = project.get_validation_profile()
+                                    if validation_profile:
+                                        print(f"[Orchestrator] Loaded validation profile with {len(validation_profile.excluded_paths or [])} excluded paths")
                         except Exception as e:
                             print(f"Warning: Failed to load protocol policy: {e}")
 
@@ -1082,6 +1095,7 @@ class AgentOrchestrator:
                         budgets=budgets,
                         protocol_policy=protocol_policy,
                         db_conn=db_conn,
+                        validation_profile=validation_profile,
                     )
 
                     # Assert no findings dropped
@@ -1800,6 +1814,7 @@ class AgentOrchestrator:
                         from protocol_config import ProtocolConfig
 
                         protocol_policy = None
+                        validation_profile = None
                         db_conn = None
                         if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
                             try:
@@ -1816,6 +1831,11 @@ class AgentOrchestrator:
                                     loader = ProtocolPolicyLoader(db)
                                     protocol_policy = await loader.get_policy(protocol_id)
                                     db_conn = db
+
+                                    # Load the project's validation profile
+                                    project = await project_service.get_project(str(agent.repo_id))
+                                    if project:
+                                        validation_profile = project.get_validation_profile()
                             except Exception as e:
                                 print(f"Warning: Failed to load protocol policy: {e}")
 
@@ -1827,6 +1847,7 @@ class AgentOrchestrator:
                             threat_model_profile=threat_model_profile_for_gating,
                             protocol_policy=protocol_policy,
                             db_conn=db_conn,
+                            validation_profile=validation_profile,
                         )
 
                         codex_findings[last_triaged_count:] = triage_result.triaged_findings
@@ -1929,6 +1950,7 @@ class AgentOrchestrator:
                     from protocol_config import ProtocolConfig
 
                     protocol_policy = None
+                    validation_profile = None
                     db_conn = None
                     if ProtocolConfig.ENABLE_PROTOCOL_EVALUATION:
                         try:
@@ -1945,6 +1967,11 @@ class AgentOrchestrator:
                                 loader = ProtocolPolicyLoader(db)
                                 protocol_policy = await loader.get_policy(protocol_id)
                                 db_conn = db
+
+                                # Load the project's validation profile
+                                project = await project_service.get_project(str(agent.repo_id))
+                                if project:
+                                    validation_profile = project.get_validation_profile()
                         except Exception as e:
                             print(f"Warning: Failed to load protocol policy: {e}")
 
@@ -1955,6 +1982,7 @@ class AgentOrchestrator:
                         budgets=budgets,
                         protocol_policy=protocol_policy,
                         db_conn=db_conn,
+                        validation_profile=validation_profile,
                     )
                     triaged_findings = triage_result.triaged_findings
                     reportable_count = triage_result.metrics.reportable_count

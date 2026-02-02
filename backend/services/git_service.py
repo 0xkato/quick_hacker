@@ -1,5 +1,6 @@
 """Git operations service for quick_hack."""
 
+import asyncio
 import os
 import shutil
 import uuid
@@ -16,6 +17,31 @@ from models.schemas import RepoInfo
 
 # In-memory store for repos (replace with SQLite later)
 _repos: dict[str, RepoInfo] = {}
+_delete_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+async def _delete_repo_dir_background(*, repo_id: str, repo_path: Path) -> None:
+    try:
+        root = settings.repos_dir.resolve()
+        resolved = repo_path.resolve()
+
+        # Safety: only delete inside the configured repos_dir.
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            print(f"[GitService] Refusing to delete path outside repos_dir: {resolved}")
+            return
+
+        if not resolved.exists():
+            return
+
+        print(f"[GitService] Background deleting repo files at {resolved}")
+        await asyncio.to_thread(shutil.rmtree, resolved)
+        print(f"[GitService] Background deleted repo files at {resolved}")
+    except Exception as e:
+        print(f"[GitService] Background deletion failed for repo {repo_id}: {e}")
+    finally:
+        _delete_tasks.pop(repo_id, None)
 
 
 # File extension to language mapping
@@ -123,7 +149,8 @@ async def clone_repo(url: str, branch: Optional[str] = None) -> RepoInfo:
     except GitCommandError as e:
         # Clean up on failure
         if repo_path.exists():
-            shutil.rmtree(repo_path)
+            print(f"[GitService] Cleaning up failed clone at {repo_path}")
+            await asyncio.to_thread(shutil.rmtree, repo_path)
         raise ValueError(f"Failed to clone repository: {e}")
 
 
@@ -143,13 +170,15 @@ async def delete_repo(repo_id: str) -> bool:
     if not repo_info:
         return False
 
-    # Remove from disk
-    repo_path = Path(repo_info.path)
-    if repo_path.exists():
-        shutil.rmtree(repo_path)
-
     # Remove from memory
     del _repos[repo_id]
+
+    # Remove from disk asynchronously so the API returns quickly for large repos.
+    repo_path = Path(repo_info.path)
+    if repo_id not in _delete_tasks and repo_path.exists():
+        _delete_tasks[repo_id] = asyncio.create_task(
+            _delete_repo_dir_background(repo_id=repo_id, repo_path=repo_path),
+        )
 
     return True
 

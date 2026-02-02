@@ -530,6 +530,39 @@ class AgentOrchestrator:
         finding_counter = [0]  # Use list to allow mutation in nested function
         # Capture overseer mode for policy selection
         _use_overseer = use_overseer
+        # Track current sub-agent phase for nameplating (Overseer mode)
+        current_subagent = ["Scanner"]  # Default, use list for mutation in closure
+
+        # Tool to sub-agent mapping for Overseer mode
+        TOOL_TO_SUBAGENT = {
+            # Reconnaissance phase
+            "list_directory": "RepoProfiler",
+            "read_file": None,  # Used by all phases
+            "get_repo_tree": "RepoProfiler",
+            # Sink hunting phase
+            "grep_semantic": "SinkHunter",
+            "search_code": "SinkHunter",
+            "upsert_sink_signal": "SinkHunter",
+            "scan_repo_for_secrets": "SinkHunter",
+            # Dataflow tracing phase
+            "trace_dataflow": "DataflowTracer",
+            "analyze_ast": "DataflowTracer",
+            "track_call_chain": "DataflowTracer",
+            # Triage/Audit phase
+            "triage_finding": "Triager",
+            "report_finding": "Auditor",
+            "generate_security_report": "Auditor",
+        }
+
+        def infer_subagent(tool_name: str) -> str:
+            """Infer sub-agent from tool being called."""
+            if not _use_overseer:
+                return "Scanner"
+            mapped = TOOL_TO_SUBAGENT.get(tool_name)
+            if mapped:
+                current_subagent[0] = mapped
+                return mapped
+            return current_subagent[0]  # Keep previous
 
         def on_sdk_event(event: dict) -> None:
             """Broadcast SDK events as WebSocket messages with flow + observability integration."""
@@ -654,11 +687,15 @@ class AgentOrchestrator:
                 tool_name = event.get("name", "")
                 tool_args = event.get("args", {})
 
+                # Infer sub-agent from tool (Overseer mode)
+                subagent = infer_subagent(tool_name)
+
                 # Track for correlation with results
                 current_tool_calls.append({
                     "id": tool_id,
                     "name": tool_name,
                     "args": tool_args,
+                    "subagent": subagent,
                 })
 
                 # === Add Flow Node for Tool Call ===
@@ -676,14 +713,17 @@ class AgentOrchestrator:
                     kind = tool_args.get("kind", "")
                     node_type = "entry_point" if kind == "entry_point" else "dangerous_sink"
 
-                # Create node label
+                # Create node label with sub-agent prefix in Overseer mode
                 args_preview = str(tool_args)[:50]
-                label = f"{tool_name}: {args_preview}..."
+                if _use_overseer:
+                    label = f"[{subagent}] {tool_name}: {args_preview}..."
+                else:
+                    label = f"{tool_name}: {args_preview}..."
 
-                # Add flow node
+                # Add flow node with subagent info
                 tool_node = flow_service.add_node(
                     agent_id, node_type, label,
-                    {"tool": tool_name, "args": tool_args}
+                    {"tool": tool_name, "args": tool_args, "subagent": subagent}
                 )
                 flow_service.update_node_status(agent_id, tool_node.id, "running")
                 current_tool_node_id = tool_node.id
@@ -716,10 +756,12 @@ class AgentOrchestrator:
                 # Find the corresponding tool_call
                 tool_name = "unknown"
                 tool_args = {}
+                subagent = current_subagent[0]
                 for tc in current_tool_calls:
                     if tc.get("id") == tool_use_id:
                         tool_name = tc.get("name", "unknown")
                         tool_args = tc.get("args", {})
+                        subagent = tc.get("subagent", current_subagent[0])
                         break
 
                 print(f"[Orchestrator DEBUG] tool_result: tool_use_id={tool_use_id}, tool_name={tool_name}, is_error={is_error}")
@@ -813,10 +855,11 @@ class AgentOrchestrator:
 
                                 print(f"[Orchestrator] Successfully extracted finding: {title} ({severity_str})")
 
-                                # Add finding node to flow
+                                # Add finding node to flow with subagent prefix in Overseer mode
+                                finding_label = f"[{subagent}] {severity_str.upper()}: {title}" if _use_overseer else f"{severity_str.upper()}: {title}"
                                 finding_node = flow_service.add_node(
-                                    agent_id, "finding", f"{severity_str.upper()}: {title}",
-                                    {"severity": severity_str, "finding": raw_finding}
+                                    agent_id, "finding", finding_label,
+                                    {"severity": severity_str, "finding": raw_finding, "subagent": subagent}
                                 )
                                 flow_service.update_node_status(agent_id, finding_node.id, "completed")
                                 # Attach finding to Structured Trace (best-effort).
@@ -873,7 +916,7 @@ class AgentOrchestrator:
                                         confidence=raw_finding.get("confidence", 0.5),
                                         source_trace=source_trace,
                                         created_at=datetime.utcnow(),
-                                        metadata={"source": "sdk_audit"},
+                                        metadata={"source": "sdk_audit", "subagent": subagent},
                                     )
                                     sdk_findings.append(finding_obj)
                                     agent.findings = sdk_findings

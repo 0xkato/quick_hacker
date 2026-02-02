@@ -364,7 +364,8 @@ class AgentOrchestrator:
                     use_sdk = use_claude_sdk
 
             # Check if Overseer mode was requested
-            use_overseer = getattr(agent.request, 'use_overseer', False)
+            use_overseer = getattr(agent, 'use_overseer', False)
+            print(f"[Orchestrator] Agent {agent.id}: use_overseer={use_overseer}, use_sdk={use_sdk}")
 
             if use_codex:
                 findings = await self._run_codex_cli_agent(agent)

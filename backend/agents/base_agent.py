@@ -44,6 +44,8 @@ class BaseAgent(ABC):
         self.target_files = request.target_files
         self.focus_areas = request.focus_areas
         self.on_message = on_message
+        self.use_overseer = getattr(request, 'use_overseer', False)
+        self.request = request  # Store original request for SDK mode access
 
         # State
         self.status = AgentStatus.PENDING

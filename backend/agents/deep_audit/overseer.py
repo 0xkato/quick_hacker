@@ -315,7 +315,19 @@ Continue the investigation. What should the next wave focus on?"""
         2. Executes tool calls
         3. Synthesizes results
         4. Repeats until time runs out
+
+        Returns:
+            List of confirmed findings
         """
+        print("=" * 60)
+        print("[Overseer] STARTING PARALLEL SUB-AGENT ORCHESTRATION")
+        print(f"[Overseer] Time budget: {self.time_budget} seconds")
+        print(f"[Overseer] Project: {self.campaign_state.project_id}")
+        print(f"[Overseer] Repository: {self.repo_path_str}")
+        print("=" * 60)
+
+        await self.emit_log("Overseer starting parallel sub-agent orchestration...")
+
         # Initialize conversation
         system_prompt = self._get_system_prompt()
         tools = self._get_tools()

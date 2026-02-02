@@ -73,8 +73,27 @@ class BaseAgent(ABC):
     @property
     def provider(self) -> BaseProvider:
         """Lazy initialize provider."""
+        import os
+        from models.schemas import ProviderConfig, ProviderType
+
         if self._provider is None:
-            self._provider = get_provider(self.provider_config)
+            config = self.provider_config
+
+            # If no API key in config, try environment variable
+            if config and not config.api_key:
+                env_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+                if env_key:
+                    print(f"[BaseAgent] Using ANTHROPIC_API_KEY from environment")
+                    config = ProviderConfig(
+                        provider=config.provider,
+                        model=config.model,
+                        api_key=env_key,
+                        base_url=config.base_url,
+                        temperature=config.temperature,
+                        max_tokens=config.max_tokens,
+                    )
+
+            self._provider = get_provider(config)
         return self._provider
 
     def to_schema(self) -> Agent:

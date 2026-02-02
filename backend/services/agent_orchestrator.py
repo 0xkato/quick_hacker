@@ -363,10 +363,20 @@ class AgentOrchestrator:
                     use_claude_sdk = getattr(agent.request, 'use_claude_sdk', False)
                     use_sdk = use_claude_sdk
 
+            # Overseer has its own LLM loop with sub-agents, skip SDK mode for it
+            is_overseer = isinstance(agent, Overseer)
+            if is_overseer and use_sdk:
+                print("[Orchestrator] Overseer detected - skipping SDK mode, using native orchestration")
+                use_sdk = False
+
             if use_codex:
                 findings = await self._run_codex_cli_agent(agent)
             elif use_sdk:
                 findings = await self._run_sdk_agent(agent)
+            elif is_overseer:
+                # Overseer runs its own analyze loop
+                print("[Orchestrator] Running Overseer with parallel sub-agents...")
+                findings = await agent.analyze()
             else:
                 findings = await agent.run()
             print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")

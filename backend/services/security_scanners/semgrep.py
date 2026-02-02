@@ -231,6 +231,7 @@ class SemgrepScanner:
         cmd = self._build_command(language, severity, category, scan_path)
 
         # Execute with timeout and cancellation support
+        process = None
         try:
             process = subprocess.Popen(
                 cmd,
@@ -244,6 +245,11 @@ class SemgrepScanner:
                 # Check cancellation
                 if limits.is_cancelled():
                     process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
                     duration_ms = int((time.time() - start_time) * 1000)
                     return ScanResult(
                         success=False,
@@ -283,3 +289,12 @@ class SemgrepScanner:
                 duration_ms=duration_ms,
                 error=str(e),
             )
+        finally:
+            # Ensure subprocess is cleaned up even on unexpected exceptions
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()

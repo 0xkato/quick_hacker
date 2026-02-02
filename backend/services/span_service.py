@@ -5,12 +5,18 @@ Provides CRUD operations for spans and maintains per-agent span stores.
 """
 
 import hashlib
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 from models.investigation_trace import (
     Span, SpanType, SpanState, SpanOutcome, FocusGap
 )
+
+logger = logging.getLogger(__name__)
+
+# Maximum spans per agent to prevent unbounded growth
+MAX_SPANS_PER_AGENT = 2000
 
 
 def generate_deterministic_span_id(
@@ -49,12 +55,13 @@ class SpanService:
     """
     Manages investigation spans for agents.
 
-    Spans are stored in-memory per agent.
+    Spans are stored in-memory per agent with LRU eviction when limit exceeded.
     """
 
-    def __init__(self):
+    def __init__(self, max_spans_per_agent: int = MAX_SPANS_PER_AGENT):
         # agent_id -> {span_id -> Span}
         self._spans: dict[str, dict[str, Span]] = defaultdict(dict)
+        self._max_spans_per_agent = max_spans_per_agent
 
     def create_span(
         self,
@@ -103,6 +110,14 @@ class SpanService:
         )
 
         self._spans[agent_id][span_id] = span
+
+        # LRU eviction: remove oldest spans when over limit
+        agent_spans = self._spans[agent_id]
+        while len(agent_spans) > self._max_spans_per_agent:
+            oldest_key = next(iter(agent_spans))
+            del agent_spans[oldest_key]
+            logger.debug(f"Evicted oldest span for agent {agent_id} (limit: {self._max_spans_per_agent})")
+
         return span
 
     def get_span(self, agent_id: str, span_id: str) -> Optional[Span]:

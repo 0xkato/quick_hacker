@@ -8,17 +8,23 @@ from collections import defaultdict
 from typing import Optional
 from models.investigation_trace import Artifact, ArtifactType
 
+# Maximum number of artifacts to keep in memory (LRU eviction)
+MAX_ARTIFACTS = 5000
+
 
 class ArtifactService:
     """
     Manages investigation artifacts with content-hash deduplication.
 
     Artifacts are stored globally by artifact_id (content hash).
+    Uses LRU eviction when MAX_ARTIFACTS is exceeded.
     """
 
-    def __init__(self):
+    def __init__(self, max_artifacts: int = MAX_ARTIFACTS):
         # artifact_id -> Artifact (global deduplication)
+        # Uses dict insertion order (Python 3.7+) for LRU tracking
         self._artifacts: dict[str, Artifact] = {}
+        self._max_artifacts = max_artifacts
 
     def create_artifact(
         self,
@@ -48,9 +54,11 @@ class ArtifactService:
         Returns:
             Artifact (existing or newly created)
         """
-        # Deduplication: return existing if present
+        # Deduplication: return existing if present (and move to end for LRU)
         if artifact_id in self._artifacts:
-            return self._artifacts[artifact_id]
+            artifact = self._artifacts.pop(artifact_id)
+            self._artifacts[artifact_id] = artifact
+            return artifact
 
         # Create new artifact
         artifact = Artifact(
@@ -64,11 +72,22 @@ class ArtifactService:
         )
 
         self._artifacts[artifact_id] = artifact
+
+        # LRU eviction: remove oldest entries when over limit
+        while len(self._artifacts) > self._max_artifacts:
+            oldest_key = next(iter(self._artifacts))
+            del self._artifacts[oldest_key]
+
         return artifact
 
     def get_artifact(self, artifact_id: str) -> Optional[Artifact]:
-        """Get artifact by ID"""
-        return self._artifacts.get(artifact_id)
+        """Get artifact by ID. Moves to end for LRU tracking."""
+        if artifact_id not in self._artifacts:
+            return None
+        # Move to end to mark as recently used
+        artifact = self._artifacts.pop(artifact_id)
+        self._artifacts[artifact_id] = artifact
+        return artifact
 
     def get_all_artifacts(self) -> list[Artifact]:
         """Get all artifacts"""

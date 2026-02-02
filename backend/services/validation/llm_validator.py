@@ -11,6 +11,7 @@ from typing import Optional, Any
 
 from models.schemas import Finding, Evidence, ValidationResult
 from services.classification.classifier import ClassificationResult
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ class LLMFindingValidator:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=settings.grep_timeout_seconds,
             )
 
             # Return code 0 = found matches, 1 = no matches, 2+ = error
@@ -223,7 +224,7 @@ class LLMFindingValidator:
                 input=gdb_script,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=settings.gdb_timeout_seconds,
                 cwd=str(self.repo_root),
             )
 
@@ -231,7 +232,7 @@ class LLMFindingValidator:
             return output[:10000]  # Limit output size
 
         except subprocess.TimeoutExpired:
-            return "Error: GDB timeout - execution exceeded 30s limit"
+            return f"Error: GDB timeout - execution exceeded {settings.gdb_timeout_seconds}s limit"
         except FileNotFoundError:
             return "Error: GDB not found - install GDB to use this tool"
         except Exception as e:

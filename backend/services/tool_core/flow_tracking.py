@@ -138,6 +138,11 @@ class FlowTrackingMixin:
 
             # Respect max_call_depth
             if new_depth > context.max_call_depth:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(
+                    f"Skipping call to {target} - depth {new_depth} exceeds max {context.max_call_depth}"
+                )
                 continue
 
             # Update context with new depth

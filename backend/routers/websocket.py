@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Set, Optional
 
@@ -15,6 +16,7 @@ from services.persistence_service import persistence_service
 from services.report_service import report_service
 from middleware.auth import verify_ws_token
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,7 +54,8 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_text(message_str)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Broadcast failed for connection: {e}")
                 disconnected.add(connection)
 
         # Clean up disconnected clients
@@ -64,7 +67,8 @@ class ConnectionManager:
         """Send message to a specific client."""
         try:
             await websocket.send_text(json.dumps(message, default=str))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Send failed: {e}")
             await self.disconnect(websocket)
 
 
@@ -81,12 +85,23 @@ def set_main_loop(loop: asyncio.AbstractEventLoop):
     _main_loop = loop
 
 
+def _handle_broadcast_task_exception(task: asyncio.Task):
+    """Callback to log exceptions from fire-and-forget broadcast tasks."""
+    try:
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"Broadcast task failed: {exc}")
+    except asyncio.CancelledError:
+        pass  # Task was cancelled, not an error
+
+
 def broadcast_agent_message(message: WSMessage):
     """Callback for agent messages - schedules broadcast."""
     try:
         # Try to get the running loop (works if called from async context)
         loop = asyncio.get_running_loop()
-        loop.create_task(manager.broadcast(message.model_dump()))
+        task = loop.create_task(manager.broadcast(message.model_dump()))
+        task.add_done_callback(_handle_broadcast_task_exception)
     except RuntimeError:
         # No running loop - use the main loop if available
         if _main_loop and _main_loop.is_running():
@@ -202,9 +217,21 @@ async def websocket_endpoint(
     await manager.send_personal(websocket, {"type": "auth_ok"})
 
     try:
+        # Receive timeout in seconds - clients should send ping within this interval
+        receive_timeout = 120  # 2 minutes
+
         while True:
-            # Receive and parse message
-            data = await websocket.receive_text()
+            # Receive and parse message with timeout
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=receive_timeout
+                )
+            except asyncio.TimeoutError:
+                # No message received within timeout - close idle connection
+                print(f"WebSocket receive timeout after {receive_timeout}s")
+                await websocket.close(code=1001, reason="Idle timeout")
+                break
 
             try:
                 message = json.loads(data)
@@ -254,7 +281,15 @@ async def websocket_endpoint(
                 )
 
     except WebSocketDisconnect:
+        logger.debug("WebSocket client disconnected normally")
+        await manager.disconnect(websocket)
+    except asyncio.CancelledError:
+        logger.debug("WebSocket connection cancelled")
+        await manager.disconnect(websocket)
+        raise  # Re-raise CancelledError for proper cleanup
+    except ConnectionResetError as e:
+        logger.warning(f"WebSocket connection reset by peer: {e}")
         await manager.disconnect(websocket)
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.exception(f"Unexpected WebSocket error: {type(e).__name__}: {e}")
         await manager.disconnect(websocket)

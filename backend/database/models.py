@@ -123,6 +123,9 @@ class Finding(Base):
     attack_scenario: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     proof_of_concept: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     recommended_fix: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Confidence score (0.0-1.0). Note: For equality comparisons, use tolerance
+    # or compare against rounded values. New code should prefer classification_confidence
+    # (integer 0-100) for triage-related confidence scores.
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     source_trace: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

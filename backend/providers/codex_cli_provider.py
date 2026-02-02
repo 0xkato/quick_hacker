@@ -36,6 +36,7 @@ class CodexCLIProvider:
     provider_type: str = "codex_cli"
     _READ_CHUNK_BYTES: int = 64 * 1024
     _MAX_LINE_BUFFER_BYTES: int = 64 * 1024 * 1024
+    _READ_TIMEOUT_SECONDS: float = 300.0  # 5 minute timeout per read
 
     def __init__(
         self,
@@ -315,7 +316,18 @@ class CodexCLIProvider:
                         on_event(ev)
 
             while True:
-                chunk = await self._process.stdout.read(self._READ_CHUNK_BYTES)
+                try:
+                    chunk = await asyncio.wait_for(
+                        self._process.stdout.read(self._READ_CHUNK_BYTES),
+                        timeout=self._READ_TIMEOUT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    # Read timed out - process may be hung
+                    handle_line(json.dumps({
+                        "type": "error",
+                        "message": f"Codex read timed out after {self._READ_TIMEOUT_SECONDS}s"
+                    }))
+                    break
                 if not chunk:
                     break
                 buffer.extend(chunk)
@@ -348,8 +360,24 @@ class CodexCLIProvider:
 
             await self._process.wait()
         finally:
+            # Ensure process is properly cleaned up even on exceptions
             async with self._process_lock:
+                proc = self._process
                 self._process = None
+
+            if proc is not None and proc.returncode is None:
+                # Process still running - terminate it
+                try:
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                except ProcessLookupError:
+                    pass  # Already exited
+                except Exception:
+                    pass  # Best effort cleanup
 
         return events
 

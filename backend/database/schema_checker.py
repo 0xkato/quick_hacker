@@ -3,7 +3,8 @@
 Detects if triage columns exist and automatically disables triage if not present.
 This ensures seamless operation without requiring migrations in production.
 """
-from typing import Set
+import time
+from typing import Optional, Set
 import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -11,8 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 logger = logging.getLogger(__name__)
 
 
-# Global flag indicating if triage columns are available
-TRIAGE_COLUMNS_AVAILABLE = False
+# Schema check cache with TTL
+_TRIAGE_COLUMNS_AVAILABLE: bool = False
+_LAST_CHECK_TIME: float = 0.0
+_CHECK_TTL_SECONDS: float = 300.0  # Re-check every 5 minutes
+_ENGINE_REF: Optional[AsyncEngine] = None  # Store engine reference for lazy re-checks
 
 # Required triage columns for full functionality
 REQUIRED_TRIAGE_COLUMNS = {
@@ -111,7 +115,7 @@ async def initialize_triage_availability(engine: AsyncEngine) -> bool:
     Initialize triage system availability based on database schema.
 
     This checks if the required schema is present and sets the global
-    TRIAGE_COLUMNS_AVAILABLE flag accordingly.
+    cache accordingly. The engine reference is stored for periodic re-checks.
 
     Args:
         engine: SQLAlchemy async engine
@@ -119,16 +123,19 @@ async def initialize_triage_availability(engine: AsyncEngine) -> bool:
     Returns:
         True if triage is available, False otherwise
     """
-    global TRIAGE_COLUMNS_AVAILABLE
+    global _TRIAGE_COLUMNS_AVAILABLE, _LAST_CHECK_TIME, _ENGINE_REF
+
+    _ENGINE_REF = engine  # Store for lazy re-checks
 
     logger.info("Checking triage system database schema compatibility...")
 
     columns_exist = await check_triage_columns_exist(engine)
     table_exists = await check_evidence_blobs_table_exists(engine)
 
-    TRIAGE_COLUMNS_AVAILABLE = columns_exist and table_exists
+    _TRIAGE_COLUMNS_AVAILABLE = columns_exist and table_exists
+    _LAST_CHECK_TIME = time.monotonic()
 
-    if TRIAGE_COLUMNS_AVAILABLE:
+    if _TRIAGE_COLUMNS_AVAILABLE:
         logger.info("✓ Triage system database schema is available")
     else:
         logger.warning(
@@ -137,14 +144,65 @@ async def initialize_triage_availability(engine: AsyncEngine) -> bool:
             "To enable, run: psql $DATABASE_URL < backend/migrations/add_triage_columns.sql"
         )
 
-    return TRIAGE_COLUMNS_AVAILABLE
+    return _TRIAGE_COLUMNS_AVAILABLE
 
 
 def is_triage_available() -> bool:
     """
-    Check if triage system is available based on database schema.
+    Check if triage system is available based on cached database schema check.
+
+    Note: This returns the cached value. For runtime schema changes, use
+    check_triage_available_async() which re-validates if TTL has expired.
 
     Returns:
         True if triage columns exist and triage can be used
     """
-    return TRIAGE_COLUMNS_AVAILABLE
+    return _TRIAGE_COLUMNS_AVAILABLE
+
+
+async def check_triage_available_async() -> bool:
+    """
+    Check if triage system is available, re-validating if cache has expired.
+
+    This should be used in async contexts where you want to detect runtime
+    schema changes (e.g., migrations applied while server is running).
+
+    Returns:
+        True if triage columns exist and triage can be used
+    """
+    global _TRIAGE_COLUMNS_AVAILABLE, _LAST_CHECK_TIME
+
+    # Check if cache has expired
+    if _ENGINE_REF is not None:
+        elapsed = time.monotonic() - _LAST_CHECK_TIME
+        if elapsed > _CHECK_TTL_SECONDS:
+            logger.debug(f"Triage schema cache expired ({elapsed:.1f}s > {_CHECK_TTL_SECONDS}s), re-checking...")
+            columns_exist = await check_triage_columns_exist(_ENGINE_REF)
+            table_exists = await check_evidence_blobs_table_exists(_ENGINE_REF)
+            new_value = columns_exist and table_exists
+
+            # Log if status changed
+            if new_value != _TRIAGE_COLUMNS_AVAILABLE:
+                if new_value:
+                    logger.info("Triage schema now available (detected at runtime)")
+                else:
+                    logger.warning("Triage schema no longer available (detected at runtime)")
+
+            _TRIAGE_COLUMNS_AVAILABLE = new_value
+            _LAST_CHECK_TIME = time.monotonic()
+
+    return _TRIAGE_COLUMNS_AVAILABLE
+
+
+async def force_recheck_triage_availability() -> bool:
+    """
+    Force an immediate re-check of triage schema availability.
+
+    Use this after running migrations to immediately detect schema changes.
+
+    Returns:
+        True if triage is now available, False otherwise
+    """
+    global _LAST_CHECK_TIME
+    _LAST_CHECK_TIME = 0.0  # Invalidate cache
+    return await check_triage_available_async()

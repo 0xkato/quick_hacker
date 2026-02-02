@@ -22,6 +22,7 @@ ThreatModel = Literal["A", "AB", "ABC"]
 PROFILE_MAPPING_VERSION = 1
 INPUT_CHANNEL_SEMANTICS_VERSION = 1
 PROMPT_THREAT_MODEL_BLOCK_VERSION = 1
+MAX_DELETE_TASKS = 100  # Maximum number of concurrent delete tasks
 
 
 def _default_threat_model_profile(threat_model: ThreatModel):
@@ -159,7 +160,6 @@ class ProjectService:
 
     async def create_project(self, name: str, description: str = "") -> Project:
         """Create a new empty project."""
-        import uuid
         project_id = str(uuid.uuid4())[:8]
 
         # Create project directory
@@ -286,6 +286,11 @@ class ProjectService:
         # Remove from disk asynchronously to avoid blocking the API for large repos.
         project_path = Path(project.path)
         if project_id not in self._delete_tasks and project_path.exists():
+            # Clean up completed tasks if over limit
+            if len(self._delete_tasks) >= MAX_DELETE_TASKS:
+                completed = [tid for tid, task in self._delete_tasks.items() if task.done()]
+                for tid in completed:
+                    del self._delete_tasks[tid]
             self._delete_tasks[project_id] = asyncio.create_task(
                 self._delete_project_dir_background(project_id=project_id, project_path=project_path),
             )

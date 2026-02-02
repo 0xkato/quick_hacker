@@ -34,6 +34,7 @@ __all__ = [
 # This code is no longer used but kept temporarily
 
 import ast
+import json
 import re
 import subprocess
 import time
@@ -554,7 +555,6 @@ class EvidenceGatherer:
             )
 
             # Parse JSON output
-            import json
             for line in result.stdout.strip().split('\n'):
                 if not line:
                     continue

@@ -1,15 +1,16 @@
 """Protocol policy and submission management routes."""
 
-from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional
+import json
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Depends, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-import json
 
-from models.schemas import ProtocolPolicy, Finding, SubmissionResult
-from services.protocol_policies import ProtocolPolicyLoader
 from database import get_db
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["protocol"])
 
@@ -25,14 +26,18 @@ async def get_policies(db: AsyncSession = Depends(get_db)):
 
     policies = []
     for row in rows:
-        config = json.loads(row[2])
-        policies.append(config)
+        try:
+            config = json.loads(row[2]) if row[2] else {}
+            policies.append(config)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Skipping policy {row[0]} with malformed JSON config: {e}")
+            continue
 
     return {"policies": policies}
 
 
 @router.get("/protocol-policies/{policy_id}")
-async def get_policy(policy_id: str, db: AsyncSession = Depends(get_db)):
+async def get_policy(policy_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$"), db: AsyncSession = Depends(get_db)):
     """Get a specific protocol policy."""
     # Query the policy from database
     result = await db.execute(
@@ -44,7 +49,12 @@ async def get_policy(policy_id: str, db: AsyncSession = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail=f"Protocol not found: {policy_id}")
 
-    config = json.loads(row[0])
+    try:
+        config = json.loads(row[0]) if row[0] else {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Policy {policy_id} has malformed JSON config: {e}")
+        raise HTTPException(status_code=500, detail="Policy configuration is corrupted")
+
     return config
 
 

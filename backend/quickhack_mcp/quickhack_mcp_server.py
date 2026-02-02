@@ -20,6 +20,9 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "quickhack"
 SERVER_VERSION = "0.1.0"
 
+# Timeout for readline - prevents indefinite blocking if stdin is broken
+STDIO_READ_TIMEOUT_SECONDS = 300.0  # 5 minutes
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -494,7 +497,15 @@ async def _stdio_loop(server: QuickHackMCPServer) -> None:
         await writer.drain()
 
     while True:
-        line = await reader.readline()
+        try:
+            line = await asyncio.wait_for(
+                reader.readline(),
+                timeout=STDIO_READ_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            # No input received within timeout - continue waiting
+            # This prevents indefinite blocking if stdin is in a bad state
+            continue
         if not line:
             break
         try:

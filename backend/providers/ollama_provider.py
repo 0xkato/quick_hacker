@@ -90,8 +90,6 @@ class OllamaProvider(BaseProvider):
                 if not line:
                     continue
 
-                import json
-
                 try:
                     data = json.loads(line)
                 except json.JSONDecodeError:
@@ -231,8 +229,9 @@ class OllamaProvider(BaseProvider):
             # Parse tool calls from content
             result = {"content": content, "tool_calls": None}
 
-            import re
-            tool_match = re.search(r'TOOL_CALL:\s*(\w+)\s*\((.+?)\)', content)
+            # Lazy import re to avoid module-level dependency (used only in fallback path)
+            import re as re_module
+            tool_match = re_module.search(r'TOOL_CALL:\s*(\w+)\s*\((.+?)\)', content)
             if tool_match:
                 result["tool_calls"] = [{
                     "id": "call_0",

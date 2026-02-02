@@ -1,8 +1,10 @@
 """Agent management API router."""
 
-import asyncio
 import json
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
@@ -199,7 +201,7 @@ async def load_agent_state(agent_id: str):
                 interaction = LLMInteraction(**interaction_data)
                 observability_service._interactions[agent_id].append(interaction)
             except Exception as e:
-                print(f"[LoadAgent] Failed to restore LLM interaction: {e}")
+                logger.warning(f"Failed to restore LLM interaction for agent {agent_id}: {e}")
 
     # Restore tool details to observability service
     if snapshot.tool_details:
@@ -209,7 +211,7 @@ async def load_agent_state(agent_id: str):
                 tool_detail = ToolDetail(**tool_data)
                 observability_service._tool_details[agent_id].append(tool_detail)
             except Exception as e:
-                print(f"[LoadAgent] Failed to restore tool detail: {e}")
+                logger.warning(f"Failed to restore tool detail for agent {agent_id}: {e}")
 
     # Restore flow visualization
     if snapshot.flow_nodes or snapshot.flow_edges:
@@ -544,7 +546,6 @@ async def retriage_findings(
     Security note: This endpoint exposes code snippets and reasoning.
     Authorization is strictly enforced.
     """
-    import asyncio
     from database.models import Finding as FindingModel, EvidenceBlob as EvidenceBlobModel
     from database.schema_checker import is_triage_available
     from sqlalchemy import select
@@ -642,7 +643,7 @@ async def retriage_findings(
                 validation_profile = project.get_validation_profile()
         except Exception as e:
             # Log but don't fail if protocol loading fails
-            print(f"Warning: Failed to load protocol policy: {e}")
+            logger.error(f"Failed to load protocol policy for agent {agent_id}: {e}")
 
     # Run triage with protocol evaluation
     try:

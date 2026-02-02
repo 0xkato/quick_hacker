@@ -19,6 +19,9 @@ from models.schemas import RepoInfo
 _repos: dict[str, RepoInfo] = {}
 _delete_tasks: dict[str, asyncio.Task[None]] = {}
 
+# Timeout for git operations (clone, pull, etc.)
+GIT_OPERATION_TIMEOUT = 300  # seconds
+
 
 async def _delete_repo_dir_background(*, repo_id: str, repo_path: Path) -> None:
     try:
@@ -121,7 +124,17 @@ async def clone_repo(url: str, branch: Optional[str] = None) -> RepoInfo:
         if branch:
             clone_args["branch"] = branch
 
-        repo = Repo.clone_from(url, repo_path, **clone_args)
+        try:
+            repo = await asyncio.wait_for(
+                asyncio.to_thread(Repo.clone_from, url, repo_path, **clone_args),
+                timeout=GIT_OPERATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            # Clean up on timeout
+            if repo_path.exists():
+                print(f"[GitService] Cleaning up timed out clone at {repo_path}")
+                await asyncio.to_thread(shutil.rmtree, repo_path)
+            raise ValueError(f"Clone operation timed out after {GIT_OPERATION_TIMEOUT} seconds")
 
         # Get actual branch name
         actual_branch = branch or repo.active_branch.name
@@ -196,7 +209,13 @@ async def refresh_repo(repo_id: str) -> Optional[RepoInfo]:
     try:
         repo = Repo(repo_path)
         origin = repo.remotes.origin
-        origin.pull()
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(origin.pull),
+                timeout=GIT_OPERATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise ValueError(f"Pull operation timed out after {GIT_OPERATION_TIMEOUT} seconds")
 
         # Update file count
         repo_info.file_count = count_files(repo_path)

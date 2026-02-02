@@ -1,6 +1,6 @@
 """Project management API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -135,7 +135,7 @@ async def list_validation_presets() -> dict[str, dict]:
 
 
 @router.get("/{project_id}", response_model=Project)
-async def get_project(project_id: str):
+async def get_project(project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Get a specific project."""
     project = await project_service.get_project(project_id)
     if not project:
@@ -144,7 +144,7 @@ async def get_project(project_id: str):
 
 
 @router.put("/{project_id}", response_model=Project)
-async def update_project(project_id: str, request: UpdateProjectRequest):
+async def update_project(request: UpdateProjectRequest, project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Update project metadata."""
     project = await project_service.update_project(
         project_id=project_id,
@@ -158,7 +158,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
 
 
 @router.get("/{project_id}/threat-model-profile", response_model=ThreatModelProfileResponse)
-async def get_threat_model_profile(project_id: str):
+async def get_threat_model_profile(project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Get the canonical ThreatModelProfile for this project (includes profile_hash)."""
     project = await project_service.get_project(project_id)
     if not project:
@@ -168,7 +168,7 @@ async def get_threat_model_profile(project_id: str):
 
 
 @router.put("/{project_id}/threat-model-profile", response_model=ThreatModelProfileResponse)
-async def update_threat_model_profile(project_id: str, request: ThreatModelProfileUpdateRequest):
+async def update_threat_model_profile(request: ThreatModelProfileUpdateRequest, project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Update the project's ThreatModelProfile (optimistic concurrency enforced by expected_profile_hash)."""
     project = await project_service.get_project(project_id)
     if not project:
@@ -229,7 +229,7 @@ async def update_threat_model_profile(project_id: str, request: ThreatModelProfi
 
 
 @router.get("/{project_id}/validation-profile")
-async def get_validation_profile(project_id: str) -> dict:
+async def get_validation_profile(project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")) -> dict:
     """Get validation profile for project."""
     project = await project_service.get_project(project_id)
     if not project:
@@ -239,8 +239,8 @@ async def get_validation_profile(project_id: str) -> dict:
 
 @router.put("/{project_id}/validation-profile")
 async def update_validation_profile(
-    project_id: str,
     profile: ValidationProfile,
+    project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$"),
 ) -> dict:
     """Replace validation profile for project."""
     project = await project_service.get_project(project_id)
@@ -253,13 +253,13 @@ async def update_validation_profile(
 
 @router.post("/{project_id}/validation-profile/apply-preset")
 async def apply_validation_preset(
-    project_id: str,
     request: ApplyPresetRequest,
+    project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$"),
 ) -> dict:
     """Apply a preset validation profile."""
     preset = get_preset(request.preset)
     if preset is None:
-        raise HTTPException(status_code=404, detail=f"Unknown preset: {request.preset}")
+        raise HTTPException(status_code=400, detail=f"Unknown preset: {request.preset}")
 
     project = await project_service.get_project(project_id)
     if not project:
@@ -272,7 +272,7 @@ async def apply_validation_preset(
 
 @router.post("/{project_id}/validation-profile/auto-configure")
 async def auto_configure_validation_profile(
-    project_id: str,
+    project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$"),
     auth_context: AuthContext = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -335,7 +335,7 @@ async def auto_configure_validation_profile(
 
 
 @router.delete("/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Delete a project."""
     success = await project_service.delete_project(project_id)
     if not success:
@@ -344,7 +344,7 @@ async def delete_project(project_id: str):
 
 
 @router.post("/{project_id}/enter", response_model=Project)
-async def enter_project(project_id: str):
+async def enter_project(project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Enter/select a project as the current workspace."""
     project = await project_service.enter_project(project_id)
     if not project:
@@ -360,7 +360,7 @@ async def exit_project():
 
 
 @router.post("/{project_id}/clone", response_model=Project)
-async def clone_into_project(project_id: str, request: CloneIntoProjectRequest):
+async def clone_into_project(request: CloneIntoProjectRequest, project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Clone a repository into a project."""
     # Check if already in a project
     current = await project_service.get_current_project()
@@ -388,7 +388,7 @@ async def clone_into_project(project_id: str, request: CloneIntoProjectRequest):
 
 
 @router.post("/{project_id}/refresh", response_model=Project)
-async def refresh_project(project_id: str):
+async def refresh_project(project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$")):
     """Pull latest changes for a project's repository."""
     try:
         project = await project_service.refresh_project(project_id)
@@ -401,7 +401,7 @@ async def refresh_project(project_id: str):
 
 @router.get("/{project_id}/sink-signals", response_model=list[SinkSignal])
 async def list_sink_signals(
-    project_id: str,
+    project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$"),
     status: Optional[SinkSignalStatus] = Query(None, description="Filter by signal status"),
     limit: Optional[int] = Query(200, ge=1, le=2000, description="Maximum signals to return"),
 ):
@@ -415,9 +415,9 @@ async def list_sink_signals(
 
 @router.put("/{project_id}/sink-signals/{fingerprint}/status", response_model=SinkSignal)
 async def update_sink_signal_status(
-    project_id: str,
-    fingerprint: str,
     request: UpdateSinkSignalStatusRequest,
+    project_id: str = Path(..., pattern="^[a-zA-Z0-9_-]{1,64}$"),
+    fingerprint: str = Path(...),
 ):
     """Update a sink signal's lifecycle status (no downgrades)."""
     project = await project_service.get_project(project_id)

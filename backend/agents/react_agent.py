@@ -169,6 +169,7 @@ class ReActSecurityAgent:
         # Duplicate detection - track recent tool calls to prevent loops
         self._recent_tool_calls: dict[str, int] = {}  # hash -> count
         self._max_duplicate_calls = 2  # Max times same call can be made
+        self._max_tool_call_history = 500  # LRU eviction threshold
         self._consecutive_duplicates = 0  # Track consecutive duplicate iterations
         self._max_consecutive_duplicates = 3  # Force move on after this many
 
@@ -249,6 +250,7 @@ class ReActSecurityAgent:
 
         # Conversation history for the agent
         self.messages: list[dict] = []
+        self._max_message_history = 200  # Hard cap to prevent memory issues (keeps system + recent)
 
         # Limits
         self.max_iterations = 100  # Safety limit (may be overridden by agent profile)
@@ -1265,11 +1267,15 @@ class ReActSecurityAgent:
             if self._cancelled:
                 break
 
-            if self.max_runtime_seconds and self.started_at:
-                elapsed = (datetime.utcnow() - self.started_at).total_seconds()
-                if elapsed >= self.max_runtime_seconds:
-                    self._log(f"Max runtime reached ({int(elapsed)}s). Stopping audit.")
-                    break
+            if self.max_runtime_seconds:
+                if self.started_at:
+                    elapsed = (datetime.utcnow() - self.started_at).total_seconds()
+                    if elapsed >= self.max_runtime_seconds:
+                        self._log(f"Max runtime reached ({int(elapsed)}s). Stopping audit.")
+                        break
+                else:
+                    # This should never happen - started_at should be set in run()
+                    self._log("Warning: max_runtime_seconds set but started_at is None - timeout check skipped", "warning")
 
             # Add phase label in dual mode
             phase_label = f"[{self._current_phase}] " if self._is_dual_mode else ""
@@ -1410,6 +1416,9 @@ class ReActSecurityAgent:
                 # Summarize and compact
                 self._compact_messages()
 
+            # Hard cap on message history (safety net for unbounded growth)
+            self._trim_message_history()
+
             # Throttle: Wait before next iteration to avoid rate limits
             # This gives the API time to breathe and prevents spam
             await asyncio.sleep(self.iteration_delay)
@@ -1518,9 +1527,40 @@ class ReActSecurityAgent:
         return is_duplicate, count
 
     def _record_tool_call(self, tool_name: str, arguments: dict):
-        """Record a tool call for duplicate detection."""
+        """Record a tool call for duplicate detection with LRU eviction."""
         call_hash = self._hash_tool_call(tool_name, arguments)
-        self._recent_tool_calls[call_hash] = self._recent_tool_calls.get(call_hash, 0) + 1
+
+        # If key exists, remove and re-add to maintain LRU order (most recent at end)
+        if call_hash in self._recent_tool_calls:
+            count = self._recent_tool_calls.pop(call_hash)
+            self._recent_tool_calls[call_hash] = count + 1
+        else:
+            self._recent_tool_calls[call_hash] = 1
+
+        # LRU eviction: remove oldest entries (first keys) when over limit
+        while len(self._recent_tool_calls) > self._max_tool_call_history:
+            oldest_key = next(iter(self._recent_tool_calls))
+            del self._recent_tool_calls[oldest_key]
+
+    def _trim_message_history(self):
+        """Trim message history to prevent memory issues.
+
+        Keeps the system message (first) and most recent messages up to the cap.
+        """
+        if len(self.messages) <= self._max_message_history:
+            return
+
+        # Keep system message (index 0) and most recent messages
+        # Reserve 1 slot for system message, rest for recent history
+        keep_recent = self._max_message_history - 1
+        if keep_recent > 0 and self.messages:
+            system_msg = self.messages[0] if self.messages[0].get("role") == "system" else None
+            if system_msg:
+                self.messages = [system_msg] + self.messages[-keep_recent:]
+            else:
+                self.messages = self.messages[-self._max_message_history:]
+
+            self._log(f"Trimmed message history to {len(self.messages)} messages", "debug")
 
     async def _process_tool_calls(self, tool_calls: list[dict]):
         """Process tool calls from LLM."""

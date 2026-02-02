@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Optional
 
 from services.settings_service import (
     settings_service,
@@ -292,5 +292,5 @@ async def import_settings(data: dict):
     """Import settings from JSON."""
     success = await settings_service.import_settings(data)
     if not success:
-        raise HTTPException(400, "Failed to import settings")
+        raise HTTPException(500, "Failed to import settings")
     return {"status": "imported"}

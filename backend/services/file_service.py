@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -362,8 +363,6 @@ async def search_files(
     max_results: int = 100,
 ) -> list[dict]:
     """Search for pattern in files."""
-    import re
-
     # Security: Limit pattern length to prevent ReDoS attacks
     MAX_PATTERN_LENGTH = 100
     if len(pattern) > MAX_PATTERN_LENGTH:

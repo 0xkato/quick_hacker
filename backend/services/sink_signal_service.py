@@ -18,6 +18,7 @@ from models.sink_signals import SinkSignal, SinkSignalStatus
 
 
 SIGNALS_FILENAME = "sink_signals.json"
+MAX_LOCKS = 500  # Maximum number of project locks to prevent unbounded memory growth
 
 
 def compute_signal_fingerprint(
@@ -51,6 +52,14 @@ class SinkSignalService:
     def _get_lock(self, project_id: str) -> asyncio.Lock:
         lock = self._locks.get(project_id)
         if lock is None:
+            # LRU cleanup: remove oldest locks when exceeding MAX_LOCKS
+            if len(self._locks) >= MAX_LOCKS:
+                # Remove first (oldest) entry that isn't locked
+                for old_id in list(self._locks.keys()):
+                    old_lock = self._locks[old_id]
+                    if not old_lock.locked():
+                        del self._locks[old_id]
+                        break
             lock = asyncio.Lock()
             self._locks[project_id] = lock
         return lock
@@ -115,8 +124,9 @@ class SinkSignalService:
             values = [s for s in values if s.status == status]
 
         values.sort(key=lambda s: s.updated_at, reverse=True)
-        if limit is not None:
-            values = values[: max(0, int(limit))]
+        # Apply max limit validation to prevent excessive memory usage
+        limit = min(int(limit), 10000) if limit else 10000
+        values = values[:limit]
         return values
 
     async def upsert_signals(

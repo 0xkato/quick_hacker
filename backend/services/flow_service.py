@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 
 from services.feature_flags import feature_flags, FeatureFlag
+from config import settings
 
 
 @dataclass
@@ -152,6 +153,8 @@ class FlowService:
     def initialize_flow(self, agent_id: str) -> InvestigationFlow:
         """Create a new flow for an agent."""
         flow = InvestigationFlow(session_id=agent_id)
+        # Use configurable max_call_depth from settings
+        flow.context.max_call_depth = settings.max_call_depth
         self._flows[agent_id] = flow
         return flow
 
@@ -191,6 +194,8 @@ class FlowService:
         flow.nodes = restored_nodes
         flow.edges = restored_edges
         flow.current_node_id = current_node_id
+        # Use configurable max_call_depth from settings
+        flow.context.max_call_depth = settings.max_call_depth
 
         self._flows[agent_id] = flow
         self._notify_subscribers(agent_id, flow)
@@ -504,6 +509,15 @@ class FlowService:
             del self._subscribers[agent_id]
         if agent_id in self._structured_index:
             del self._structured_index[agent_id]
+
+    def clear_subscribers(self, agent_id: str) -> None:
+        """Clear all subscribers for an agent without clearing flow data.
+
+        This can be called during agent cleanup to ensure no dangling
+        subscriber references remain that could cause memory leaks.
+        """
+        if agent_id in self._subscribers:
+            self._subscribers[agent_id].clear()
 
     def ensure_structured_trace(self, agent_id: str) -> dict[str, str]:
         """Ensure the Structured Trace root nodes exist (idempotent).

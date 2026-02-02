@@ -6,6 +6,10 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Default CORS origins (defined once to avoid duplication)
+DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+DEFAULT_CORS_ORIGINS_STR = ",".join(DEFAULT_CORS_ORIGINS)
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -105,9 +109,33 @@ class Settings(BaseSettings):
     sandbox_memory_limit: str = "256m"
     sandbox_network_disabled: bool = True
 
+    # Tool timeout settings (used by LLM validator and other tools)
+    grep_timeout_seconds: int = Field(
+        default=10,
+        description="Timeout for grep/ripgrep operations in seconds"
+    )
+    gdb_timeout_seconds: int = Field(
+        default=30,
+        description="Timeout for GDB debugging operations in seconds"
+    )
+    validation_timeout_seconds: int = Field(
+        default=120,
+        description="Timeout for LLM validation operations in seconds"
+    )
+    file_read_max_bytes: int = Field(
+        default=100000,
+        description="Maximum bytes to read from a single file (100KB default)"
+    )
+
+    # Flow tracing settings
+    max_call_depth: int = Field(
+        default=3,
+        description="Maximum call chain depth for flow tracing"
+    )
+
     # CORS
     cors_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000",
+        default=DEFAULT_CORS_ORIGINS_STR,
         description=(
             "Allowed CORS origins. Supports comma-separated values or a JSON array (e.g. "
             "['http://localhost:3000'])."
@@ -123,7 +151,7 @@ class Settings(BaseSettings):
         """
         raw = (self.cors_origins or "").strip()
         if not raw:
-            return ["http://localhost:3000", "http://127.0.0.1:3000"]
+            return DEFAULT_CORS_ORIGINS.copy()
 
         if raw.startswith("["):
             try:
@@ -142,6 +170,14 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Security check: fail if using default JWT secret in non-debug mode
+_DEFAULT_JWT_SECRET = "CHANGE_ME_IN_PRODUCTION_USE_RANDOM_64_CHAR_STRING"
+if not settings.debug and settings.jwt_secret_key == _DEFAULT_JWT_SECRET:
+    raise RuntimeError(
+        "SECURITY ERROR: Cannot use default JWT secret in production (debug=False). "
+        "Set JWT_SECRET_KEY environment variable to a secure random string."
+    )
 
 # Ensure directories exist
 settings.repos_dir.mkdir(parents=True, exist_ok=True)

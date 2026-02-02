@@ -1,11 +1,14 @@
 """Chat API endpoints for AI-assisted analysis."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, AsyncGenerator
 import json
-import asyncio
+
+logger = logging.getLogger(__name__)
 
 from services.settings_service import settings_service
 from providers import Message, get_provider
@@ -231,6 +234,8 @@ async def stream_chat_response(
 
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    finally:
+        logger.debug("Stream chat response cleanup - client may have disconnected")
 
 
 @router.post("/stream")

@@ -8,12 +8,18 @@ This supports:
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Optional
 
+logger = logging.getLogger(__name__)
+
+# Lock acquisition timeout to prevent deadlocks
+LOCK_TIMEOUT_SECONDS = 5.0
 
 QueueSource = Literal["user", "auto"]
 
@@ -35,8 +41,21 @@ class InvestigationQueueService:
         self._dedupe: dict[str, set[str]] = defaultdict(set)  # agent_id -> flow_node_ids
         self._lock = asyncio.Lock()
 
+    @asynccontextmanager
+    async def _acquire_lock(self, operation: str = "operation"):
+        """Acquire lock with timeout to prevent deadlocks."""
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=LOCK_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.error(f"Lock acquisition timeout during {operation} after {LOCK_TIMEOUT_SECONDS}s")
+            raise RuntimeError(f"Investigation queue lock timeout during {operation}")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
     async def enqueue(self, task: InvestigationTask) -> bool:
-        async with self._lock:
+        async with self._acquire_lock("enqueue"):
             if task.flow_node_id in self._dedupe[task.agent_id]:
                 return False
             self._queues[task.agent_id].append(task)
@@ -44,7 +63,7 @@ class InvestigationQueueService:
             return True
 
     async def dequeue(self, agent_id: str) -> Optional[InvestigationTask]:
-        async with self._lock:
+        async with self._acquire_lock("dequeue"):
             if not self._queues.get(agent_id):
                 return None
             if not self._queues[agent_id]:
@@ -54,7 +73,7 @@ class InvestigationQueueService:
             return task
 
     async def size(self, agent_id: str) -> int:
-        async with self._lock:
+        async with self._acquire_lock("size"):
             return len(self._queues.get(agent_id, deque()))
 
     @staticmethod

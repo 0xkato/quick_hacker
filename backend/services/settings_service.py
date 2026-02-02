@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 import aiofiles
 import asyncio
 
+from config import settings as app_settings
+
 
 class ProviderSettings(BaseModel):
     """Settings for an AI provider."""
@@ -352,3 +354,11 @@ class SettingsService:
 
 # Global instance
 settings_service = SettingsService(os.environ.get("DATA_DIR", "data"))
+
+# Security check: fail if using default encryption key in non-debug mode
+_DEFAULT_SETTINGS_SECRET = "quick_hack_default_key"
+if not app_settings.debug and settings_service._secret == _DEFAULT_SETTINGS_SECRET:
+    raise RuntimeError(
+        "SECURITY ERROR: Cannot use default SETTINGS_SECRET in production (debug=False). "
+        "Set SETTINGS_SECRET environment variable to a secure random string."
+    )

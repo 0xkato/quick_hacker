@@ -1,4 +1,5 @@
 """Authentication middleware using JWT tokens."""
+import logging
 import os
 import uuid
 from typing import Optional
@@ -12,6 +13,7 @@ from database import get_db
 from database.models import User
 from services.auth_service import auth_service
 
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
@@ -96,8 +98,9 @@ async def get_user_api_key_for_provider(
             key = await auth_service.get_user_api_key(db, auth_context.user_id, provider)
             if key:
                 return key
-        except Exception:
-            pass
+        except Exception as e:
+            # Log actual errors (not just "key not found")
+            logger.warning(f"Error retrieving user API key for {provider}: {type(e).__name__}: {e}")
 
     # Fall back to app-level settings
     try:
@@ -107,8 +110,9 @@ async def get_user_api_key_for_provider(
         provider_settings = app_settings.providers.get(provider)
         if provider_settings and provider_settings.api_key:
             return provider_settings.api_key
-    except Exception:
-        pass
+    except Exception as e:
+        # Log actual errors (not just "settings not found")
+        logger.warning(f"Error retrieving app-level API key for {provider}: {type(e).__name__}: {e}")
 
     # Final fallback: environment variables
     if provider == "anthropic":

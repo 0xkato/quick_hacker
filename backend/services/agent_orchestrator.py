@@ -4,6 +4,7 @@ DEPRECATED: This module is deprecated. Use services.agents.AgentOrchestrator ins
 The module will remain for backward compatibility but may be removed in a future version.
 """
 
+import json
 import warnings
 import asyncio
 import logging
@@ -54,6 +55,7 @@ from services.persistence_service import persistence_service
 from services.report_service import report_service
 from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
+from services.span_service import span_service
 from services.observability_service import observability_service
 from services.finding_triage_service import triage_service
 from services.threat_model_prompt_block import build_threat_model_prompt_block
@@ -400,6 +402,12 @@ class AgentOrchestrator:
             # Cleanup task reference
             if agent.id in self._tasks:
                 del self._tasks[agent.id]
+            # Cleanup flow graph to prevent memory leaks
+            flow_service.clear_flow(agent.id)
+            # Cleanup spans to prevent memory leaks
+            span_service.clear_agent_spans(agent.id)
+            # Cleanup observability data to prevent memory leaks
+            observability_service.clear_agent(agent.id)
 
     async def _run_sdk_agent(self, agent: BaseAgent) -> list[Finding]:
         """Run an agent using the Claude SDK provider.
@@ -529,7 +537,6 @@ class AgentOrchestrator:
             # Transform event data to match frontend expectations
             import uuid as uuid_mod
             from datetime import datetime as dt
-            import json
             ws_data = dict(event)
             timestamp = dt.utcnow().isoformat()
 
@@ -1350,7 +1357,6 @@ class AgentOrchestrator:
         last_triaged_count = 0
         files_read: list[str] = []
 
-        import json as json_mod
         import uuid as uuid_mod
 
         def normalize_tool_name(tool_name: str) -> str:
@@ -1535,19 +1541,19 @@ class AgentOrchestrator:
                                     text = item.get("text", "")
                                     if isinstance(text, str) and text.strip().startswith("{"):
                                         try:
-                                            parsed = json_mod.loads(text)
+                                            parsed = json.loads(text)
                                             if isinstance(parsed, dict) and "finding" in parsed:
                                                 finding_data = parsed
                                                 break
-                                        except json_mod.JSONDecodeError:
+                                        except json.JSONDecodeError:
                                             continue
                     # Strategy 3: JSON string.
                     elif isinstance(result, str):
                         try:
-                            parsed = json_mod.loads(result)
+                            parsed = json.loads(result)
                             if isinstance(parsed, dict) and "finding" in parsed:
                                 finding_data = parsed
-                        except json_mod.JSONDecodeError:
+                        except json.JSONDecodeError:
                             finding_data = None
 
                     if isinstance(finding_data, dict) and isinstance(finding_data.get("finding"), dict):

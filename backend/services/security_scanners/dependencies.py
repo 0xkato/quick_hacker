@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .base import (
     WorkspacePolicy,
@@ -47,11 +50,41 @@ def _load_advisory_db() -> dict:
     if _ADVISORY_DB:
         return _ADVISORY_DB
 
+    default_db = {"version": "unknown", "npm": {}, "pypi": {}}
+
     try:
         with open(_ADVISORY_DB_PATH, "r", encoding="utf-8") as f:
-            _ADVISORY_DB = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        _ADVISORY_DB = {"version": "unknown", "npm": {}, "pypi": {}}
+            data = json.load(f)
+
+        # Validate expected structure
+        if not isinstance(data, dict):
+            logger.error(f"Advisory DB has invalid root type: {type(data).__name__}, expected dict")
+            _ADVISORY_DB = default_db
+            return _ADVISORY_DB
+
+        # Validate required keys exist and have correct types
+        if "npm" in data and not isinstance(data["npm"], dict):
+            logger.warning(f"Advisory DB 'npm' has invalid type: {type(data['npm']).__name__}")
+            data["npm"] = {}
+
+        if "pypi" in data and not isinstance(data["pypi"], dict):
+            logger.warning(f"Advisory DB 'pypi' has invalid type: {type(data['pypi']).__name__}")
+            data["pypi"] = {}
+
+        # Ensure required keys exist
+        data.setdefault("version", "unknown")
+        data.setdefault("npm", {})
+        data.setdefault("pypi", {})
+
+        _ADVISORY_DB = data
+        logger.debug(f"Loaded advisory DB version {data.get('version')} with {len(data.get('npm', {}))} npm and {len(data.get('pypi', {}))} pypi entries")
+
+    except OSError as e:
+        logger.warning(f"Could not read advisory DB file: {e}")
+        _ADVISORY_DB = default_db
+    except json.JSONDecodeError as e:
+        logger.error(f"Advisory DB contains invalid JSON: {e}")
+        _ADVISORY_DB = default_db
 
     return _ADVISORY_DB
 

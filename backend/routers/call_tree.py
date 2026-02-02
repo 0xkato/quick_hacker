@@ -47,9 +47,17 @@ async def get_call_tree(
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    return builder.build_call_tree(
+    result = builder.build_call_tree(
         route,
         max_depth=max_depth,
         max_nodes=max_nodes,
         include_external=include_external,
     )
+
+    # Post-build validation: truncate if node count exceeds max_nodes
+    nodes = result.get("nodes", [])
+    if len(nodes) > max_nodes:
+        result["nodes"] = nodes[:max_nodes]
+        result["warning"] = f"Result truncated: {len(nodes)} nodes exceeded limit of {max_nodes}"
+
+    return result

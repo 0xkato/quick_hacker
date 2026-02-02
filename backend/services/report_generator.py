@@ -1,5 +1,6 @@
 """Report generation service for findings."""
 
+import json
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from enum import Enum
@@ -296,8 +297,6 @@ class ReportGenerator:
         include_metadata: bool
     ) -> str:
         """Generate JSON report."""
-        import json
-
         report = {
             "generated_at": self.timestamp,
             "total_findings": len(findings),

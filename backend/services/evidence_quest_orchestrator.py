@@ -34,6 +34,7 @@ __all__ = [
 # This code is no longer used but kept temporarily
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -266,7 +267,6 @@ class EvidenceQuestOrchestrator:
 
     async def _store_quest(self, quest: EvidenceQuest):
         """Store quest in database."""
-        import json
         await self.db.execute("""
             INSERT INTO evidence_quests
             (id, finding_id, category, quest_type, status, missing_items, started_at)
@@ -284,7 +284,6 @@ class EvidenceQuestOrchestrator:
 
     async def _update_quest(self, quest: EvidenceQuest):
         """Update quest in database."""
-        import json
         await self.db.execute("""
             UPDATE evidence_quests
             SET status = ?,

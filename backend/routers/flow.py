@@ -2,7 +2,7 @@
 
 from typing import List, Any
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from services.flow_service import flow_service
 from services.persistence_service import persistence_service
 from services.reconstruction_service import reconstruction_service
@@ -13,7 +13,7 @@ router = APIRouter()
 
 class ReconstructionRequest(BaseModel):
     """Request body for investigation reconstruction."""
-    events: List[Any]
+    events: List[Any] = Field(..., max_length=10000)
 
 
 @router.get("/agents/{agent_id}/flow")

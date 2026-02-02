@@ -23,6 +23,7 @@ from database.schema_checker import initialize_triage_availability
 from services.settings_service import settings_service
 from services.project_service import project_service
 from middleware.auth import require_auth
+from middleware.request_id import RequestIDMiddleware
 
 
 @asynccontextmanager
@@ -65,13 +66,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Request ID middleware - generates/propagates X-Request-ID for log correlation
+app.add_middleware(RequestIDMiddleware)
+
 # CORS middleware - explicit methods/headers for security
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
 
 # Include routers

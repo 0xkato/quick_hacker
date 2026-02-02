@@ -100,6 +100,10 @@ def format_tool_result_summary(result: Any) -> str:
 class ObservabilityService:
     """Manages LLM interaction and tool execution logging."""
 
+    # Bounds to prevent unbounded memory growth
+    MAX_INTERACTIONS_PER_AGENT = 1000
+    MAX_TOOL_DETAILS_PER_AGENT = 1000
+
     def __init__(self):
         # agent_id -> list of interactions
         self._interactions: dict[str, list[LLMInteraction]] = defaultdict(list)
@@ -156,6 +160,9 @@ class ObservabilityService:
         )
 
         self._interactions[agent_id].append(interaction)
+        # Evict oldest entries if over limit to prevent unbounded memory growth
+        while len(self._interactions[agent_id]) > self.MAX_INTERACTIONS_PER_AGENT:
+            self._interactions[agent_id].pop(0)
 
         # Broadcast to WebSocket
         self._broadcast(WSMessage(
@@ -231,6 +238,9 @@ class ObservabilityService:
         )
 
         self._interactions[agent_id].append(interaction)
+        # Evict oldest entries if over limit to prevent unbounded memory growth
+        while len(self._interactions[agent_id]) > self.MAX_INTERACTIONS_PER_AGENT:
+            self._interactions[agent_id].pop(0)
 
         # Broadcast to WebSocket
         self._broadcast(WSMessage(
@@ -276,6 +286,9 @@ class ObservabilityService:
         )
 
         self._tool_details[agent_id].append(tool_detail)
+        # Evict oldest entries if over limit to prevent unbounded memory growth
+        while len(self._tool_details[agent_id]) > self.MAX_TOOL_DETAILS_PER_AGENT:
+            self._tool_details[agent_id].pop(0)
 
         # Broadcast to WebSocket
         self._broadcast(WSMessage(

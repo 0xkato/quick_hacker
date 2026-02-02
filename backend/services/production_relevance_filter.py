@@ -7,7 +7,12 @@ submission based on file path, code context, and production impact.
 
 import warnings
 from typing import Optional
-from anthropic import Anthropic
+
+try:
+    from anthropic import Anthropic
+except ImportError:
+    Anthropic = None  # Optional dependency
+
 from models.schemas import Finding, Disposition
 from protocol_config.protocol_config import ProtocolConfig
 
@@ -38,6 +43,11 @@ class ProductionRelevanceFilter:
         max_tokens: int = 300,
         temperature: float = 0
     ):
+        if Anthropic is None:
+            raise ImportError(
+                "The 'anthropic' package is required for ProductionRelevanceFilter. "
+                "Install it with: pip install anthropic"
+            )
         self.client = Anthropic(api_key=anthropic_api_key)
         self.model = model or ProtocolConfig.QUEST_LLM_MODEL
         self.max_tokens = max_tokens

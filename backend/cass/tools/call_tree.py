@@ -161,6 +161,9 @@ class CallTreeBuilder:
         if next_node_id >= max_nodes:
             return {"session_id": route_id, "nodes": nodes, "edges": edges, "current_node_id": None}
 
+        # Track already-expanded functions to prevent duplicate work across paths
+        visited: set[str] = set()
+
         def expand_function(
             caller_ref: _FunctionRef,
             caller_node_id: str,
@@ -215,14 +218,19 @@ class CallTreeBuilder:
                 )
                 add_edge(caller_node_id, callee_node_id, "calls")
 
-                expand_function(
-                    callee,
-                    callee_node_id,
-                    callee_ast,
-                    depth + 1,
-                    stack + [callee.symbol_id],
-                )
+                # Only expand if not already visited (prevents duplicate work across paths)
+                if callee.symbol_id not in visited:
+                    visited.add(callee.symbol_id)
+                    expand_function(
+                        callee,
+                        callee_node_id,
+                        callee_ast,
+                        depth + 1,
+                        stack + [callee.symbol_id],
+                    )
 
+        # Mark handler as visited before expanding
+        visited.add(handler_ref.symbol_id)
         expand_function(
             handler_ref,
             handler_node_id,

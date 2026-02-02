@@ -11,9 +11,14 @@ DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://quickhack:quickhack_dev@localhost:5432/quickhack"
 )
 
+# Separate DB_ECHO flag - defaults to False even in debug mode
+# SQL logging can expose sensitive data (API keys, tokens, etc.)
+# Only enable explicitly when needed for debugging
+DB_ECHO = os.environ.get("DB_ECHO", "false").lower() == "true"
+
 engine = create_async_engine(
     DATABASE_URL,
-    echo=os.environ.get("DEBUG", "false").lower() == "true",
+    echo=DB_ECHO,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,

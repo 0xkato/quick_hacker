@@ -205,6 +205,9 @@ def _call_claude_code(prompt: str, model: str = "claude-sonnet-4-20250514") -> s
 
         if result.returncode != 0:
             error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+            # Truncate error message to prevent oversized responses
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             raise RuntimeError(f"Claude Code failed (exit {result.returncode}): {error_msg}")
 
         return result.stdout

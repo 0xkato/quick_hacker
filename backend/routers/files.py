@@ -1,13 +1,20 @@
 """File operations API router."""
 
+import asyncio
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from config import settings
 from models.schemas import FileNode, FileContent
 from services import git_service, file_service
 from services.project_service import project_service
 
+# Safety limits for file tree operations
+FILE_TREE_TIMEOUT_SECONDS = 30.0  # Timeout for tree traversal
+MAX_NODES_LIMIT = 10000  # Hard cap on nodes (reduced from 100K)
+MAX_CHILDREN_LIMIT = 1000  # Hard cap on children per directory
 
 router = APIRouter()
 
@@ -32,21 +39,30 @@ async def get_file_tree(
     repo_id: str,
     max_depth: int = Query(10, le=20),
     path: str = Query("", description="Directory path relative to repo root (for lazy expansion)"),
-    max_children: int = Query(1000, ge=1, le=5000, description="Maximum entries per directory"),
-    max_nodes: int = Query(20000, ge=100, le=100000, description="Maximum total nodes to return"),
+    max_children: int = Query(500, ge=1, le=MAX_CHILDREN_LIMIT, description="Maximum entries per directory"),
+    max_nodes: int = Query(5000, ge=100, le=MAX_NODES_LIMIT, description="Maximum total nodes to return"),
 ):
     """Get file tree for a repository."""
     repo_path = await get_repo_path(repo_id)
 
     try:
-        tree = await file_service.get_file_tree(
-            repo_path,
-            max_depth,
-            start_path=path,
-            max_children=max_children,
-            max_nodes=max_nodes,
+        # Add timeout to prevent long-running traversals
+        tree = await asyncio.wait_for(
+            file_service.get_file_tree(
+                repo_path,
+                max_depth,
+                start_path=path,
+                max_children=max_children,
+                max_nodes=max_nodes,
+            ),
+            timeout=FILE_TREE_TIMEOUT_SECONDS
         )
         return tree
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"File tree traversal timed out after {FILE_TREE_TIMEOUT_SECONDS}s. Try a smaller scope."
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Path not found")
     except ValueError as e:
@@ -59,6 +75,17 @@ async def get_file_tree(
 async def get_file_content(repo_id: str, path: str = Query(..., description="File path relative to repo root")):
     """Get content of a specific file."""
     repo_path = await get_repo_path(repo_id)
+
+    # Check file size before reading
+    full_path = os.path.join(repo_path, path)
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    file_size = os.path.getsize(full_path)
+    if file_size > settings.file_read_max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size ({file_size} bytes) exceeds limit ({settings.file_read_max_bytes} bytes)"
+        )
 
     try:
         content = await file_service.read_file(repo_path, path)

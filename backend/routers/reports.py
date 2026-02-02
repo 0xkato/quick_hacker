@@ -1,14 +1,14 @@
 """Report generation API endpoints."""
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text, select
-from typing import Optional, List
-import io
+from sqlalchemy import text
+from typing import Optional
 
 from database.connection import get_db
-from database.models import Finding
 from services.report_generator import ReportGenerator, ReportFormat
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -61,8 +61,11 @@ async def export_findings_report(
 
     query_text = " ".join(query_parts)
 
-    # Execute query
-    result = await db.execute(text(query_text), params)
+    # Execute query with timeout
+    try:
+        result = await asyncio.wait_for(db.execute(text(query_text), params), timeout=30.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Database query timed out")
     rows = result.fetchall()
 
     if not rows:
@@ -75,13 +78,10 @@ async def export_findings_report(
 
         # Parse JSON fields
         if finding_dict.get('submission_result') and isinstance(finding_dict['submission_result'], str):
-            import json
             finding_dict['submission_result'] = json.loads(finding_dict['submission_result'])
         if finding_dict.get('proof_checklist') and isinstance(finding_dict['proof_checklist'], str):
-            import json
             finding_dict['proof_checklist'] = json.loads(finding_dict['proof_checklist'])
         if finding_dict.get('metadata_') and isinstance(finding_dict['metadata_'], str):
-            import json
             finding_dict['metadata'] = json.loads(finding_dict['metadata_'])
 
         findings.append(finding_dict)
@@ -146,7 +146,10 @@ async def preview_findings_report(
         LIMIT :limit
     """)
 
-    result = await db.execute(query, {"agent_id": agent_id, "limit": limit})
+    try:
+        result = await asyncio.wait_for(db.execute(query, {"agent_id": agent_id, "limit": limit}), timeout=30.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Database query timed out")
     rows = result.fetchall()
 
     if not rows:
@@ -157,7 +160,6 @@ async def preview_findings_report(
     for row in rows:
         finding_dict = dict(row._mapping)
         if finding_dict.get('submission_result') and isinstance(finding_dict['submission_result'], str):
-            import json
             finding_dict['submission_result'] = json.loads(finding_dict['submission_result'])
         findings.append(finding_dict)
 
@@ -193,7 +195,10 @@ async def get_findings_statistics(
     """
     # Get all findings for agent
     query = text("SELECT * FROM findings WHERE agent_id = :agent_id")
-    result = await db.execute(query, {"agent_id": agent_id})
+    try:
+        result = await asyncio.wait_for(db.execute(query, {"agent_id": agent_id}), timeout=30.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Database query timed out")
     rows = result.fetchall()
 
     if not rows:
@@ -209,7 +214,6 @@ async def get_findings_statistics(
     for row in rows:
         finding_dict = dict(row._mapping)
         if finding_dict.get('submission_result') and isinstance(finding_dict['submission_result'], str):
-            import json
             finding_dict['submission_result'] = json.loads(finding_dict['submission_result'])
         findings.append(finding_dict)
 

@@ -68,35 +68,40 @@ async def list_findings(
         if finding_dict.get("submission_result"):
             try:
                 if isinstance(finding_dict["submission_result"], str):
-                    finding_dict["submission_result"] = json.loads(finding_dict["submission_result"])
+                    parsed = json.loads(finding_dict["submission_result"])
+                    finding_dict["submission_result"] = parsed if isinstance(parsed, dict) else None
             except (json.JSONDecodeError, TypeError):
                 finding_dict["submission_result"] = None
 
         if finding_dict.get("proof_checklist"):
             try:
                 if isinstance(finding_dict["proof_checklist"], str):
-                    finding_dict["proof_checklist"] = json.loads(finding_dict["proof_checklist"])
+                    parsed = json.loads(finding_dict["proof_checklist"])
+                    finding_dict["proof_checklist"] = parsed if isinstance(parsed, (dict, list)) else None
             except (json.JSONDecodeError, TypeError):
                 finding_dict["proof_checklist"] = None
 
         if finding_dict.get("metadata"):
             try:
                 if isinstance(finding_dict["metadata"], str):
-                    finding_dict["metadata"] = json.loads(finding_dict["metadata"])
+                    parsed = json.loads(finding_dict["metadata"])
+                    finding_dict["metadata"] = parsed if isinstance(parsed, dict) else {}
             except (json.JSONDecodeError, TypeError):
                 finding_dict["metadata"] = {}
 
         if finding_dict.get("source_trace"):
             try:
                 if isinstance(finding_dict["source_trace"], str):
-                    finding_dict["source_trace"] = json.loads(finding_dict["source_trace"])
+                    parsed = json.loads(finding_dict["source_trace"])
+                    finding_dict["source_trace"] = parsed if isinstance(parsed, (dict, list)) else None
             except (json.JSONDecodeError, TypeError):
                 finding_dict["source_trace"] = None
 
         if finding_dict.get("reasoning"):
             try:
                 if isinstance(finding_dict["reasoning"], str):
-                    finding_dict["reasoning"] = json.loads(finding_dict["reasoning"])
+                    parsed = json.loads(finding_dict["reasoning"])
+                    finding_dict["reasoning"] = parsed if isinstance(parsed, (dict, list)) else None
             except (json.JSONDecodeError, TypeError):
                 finding_dict["reasoning"] = None
 

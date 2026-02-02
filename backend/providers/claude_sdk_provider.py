@@ -349,7 +349,7 @@ class ClaudeSDKProvider:
             - ResultMessage -> {type: "turn_complete", total_cost_usd, result}
             - AssistantMessage with TextBlock -> {type: "agent_text", text}
             - AssistantMessage with ToolUseBlock -> {type: "tool_call", id, name, args}
-            - AssistantMessage with ToolResultBlock -> {type: "tool_result", tool_use_id, result}
+            - UserMessage with ToolResultBlock -> {type: "tool_result", tool_use_id, result}
         """
         events: list[dict[str, Any]] = []
         msg_type = msg.__class__.__name__
@@ -397,7 +397,8 @@ class ClaudeSDKProvider:
             })
 
         elif msg_type == "AssistantMessage":
-            # AssistantMessage.content is list of TextBlock|ThinkingBlock|ToolUseBlock|ToolResultBlock
+            # AssistantMessage.content is list of TextBlock|ThinkingBlock|ToolUseBlock
+            # Note: ToolResultBlock belongs in UserMessage, not AssistantMessage
             content_blocks = getattr(msg, "content", [])
             for block in content_blocks:
                 # SDK blocks are class instances, check __class__.__name__ not .type attribute
@@ -437,17 +438,10 @@ class ClaudeSDKProvider:
                         "args": getattr(block, "input", {}),
                     })
 
-                elif block_type == "ToolResultBlock" or fallback_type == "tool_result":
-                    # ToolResultBlock has .tool_use_id, .content, .is_error attributes
-                    events.append({
-                        "type": "tool_result",
-                        "tool_use_id": getattr(block, "tool_use_id", ""),
-                        "result": getattr(block, "content", ""),
-                        "is_error": getattr(block, "is_error", False),
-                    })
-
                 else:
-                    logger.debug(f"Unknown block type in AssistantMessage: {block_type}")
+                    # ToolResultBlock should NOT appear in AssistantMessage (only in UserMessage)
+                    # Log unexpected block types for debugging
+                    logger.debug(f"Unexpected block type in AssistantMessage: {block_type}")
 
         elif msg_type == "UserMessage":
             # UserMessage contains tool results from tool execution

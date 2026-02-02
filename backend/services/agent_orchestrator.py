@@ -41,6 +41,7 @@ from models.schemas import (
 )
 from agents.base_agent import BaseAgent
 from agents.deep_audit import DeepAuditSupervisor, Overseer
+from agents.react_agent import ReActSecurityAgent
 from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 from providers.codex_cli_provider import CodexCLIProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator

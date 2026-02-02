@@ -1197,6 +1197,52 @@ class ToolExecutor:
         # The agent loop will intercept this and create a proper Finding
         return ToolResult(True, {'reported': True, 'finding': kwargs})
 
+    def _rule_based_triage(self, file_path: str, title: str, description: str) -> tuple[bool, str]:
+        """Rule-based triage for obvious non-production code. Returns (should_filter, reason)."""
+        file_lower = file_path.lower()
+        title_lower = title.lower()
+        desc_lower = description.lower()
+
+        # Test directories and files
+        test_patterns = [
+            '/tests/', '/test/', '/__tests__/', '/spec/',
+            '_test.', '_spec.', '.test.', '.spec.',
+            '/testing/', '/testdata/', '/fixtures/',
+        ]
+        for pattern in test_patterns:
+            if pattern in file_lower:
+                return (True, f"Test code - path contains '{pattern}'")
+
+        # Database seeders and factories (Laravel, Rails, etc.)
+        seed_patterns = ['/seeders/', '/seeds/', '/factories/', '/fixtures/']
+        for pattern in seed_patterns:
+            if pattern in file_lower:
+                return (True, f"Seed/fixture data - path contains '{pattern}'")
+
+        # Example/demo/sample code
+        example_patterns = ['/examples/', '/example/', '/samples/', '/sample/', '/demo/', '/demos/']
+        for pattern in example_patterns:
+            if pattern in file_lower:
+                return (True, f"Example/demo code - path contains '{pattern}'")
+
+        # Mock data
+        if '/mock' in file_lower or 'mock_' in file_lower or '_mock.' in file_lower:
+            return (True, "Mock data file")
+
+        # Vendor/third-party code
+        vendor_patterns = ['/vendor/', '/node_modules/', '/third_party/', '/external/']
+        for pattern in vendor_patterns:
+            if pattern in file_lower:
+                return (True, f"Third-party code - path contains '{pattern}'")
+
+        # Check title/description for test indicators
+        test_indicators = ['testing', 'test key', 'test host', 'dummy', 'example key', 'sample key']
+        for indicator in test_indicators:
+            if indicator in title_lower or indicator in desc_lower:
+                return (True, f"Test/dummy data - contains '{indicator}'")
+
+        return (False, "")
+
     async def _tool_triage_finding(
         self,
         title: str,
@@ -1205,20 +1251,31 @@ class ToolExecutor:
         severity: str,
         description: str
     ) -> ToolResult:
-        """Triage a finding using LLM-based production relevance filter."""
+        """Triage a finding using rule-based and LLM-based production relevance filter."""
         try:
-            # Import here to avoid circular dependencies
+            # STAGE 1: Rule-based filtering for obvious cases
+            should_filter, rule_reason = self._rule_based_triage(file_path, title, description)
+            if should_filter:
+                return ToolResult(True, {
+                    "decision": "filter",
+                    "reason": rule_reason,
+                    "is_production_code": False,
+                    "filter_method": "rule_based"
+                })
+
+            # STAGE 2: LLM-based filtering for ambiguous cases
             from services.finding_filters import ProductionRelevanceFilter
             from protocol_config.protocol_config import ProtocolConfig
             from models.schemas import Finding, Severity as SeverityEnum
 
-            # Check if filter is available
+            # Check if LLM filter is available
             api_key = ProtocolConfig.ANTHROPIC_API_KEY
             if not api_key:
                 return ToolResult(True, {
                     "decision": "keep",
-                    "reason": "No API key configured - filter unavailable",
-                    "is_production_code": True
+                    "reason": "Passed rule-based filter, LLM filter unavailable (no API key)",
+                    "is_production_code": True,
+                    "filter_method": "rule_based_only"
                 })
 
             # Create minimal Finding object for filter

@@ -71,10 +71,18 @@ export default function Home() {
   // Auth state
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
 
+  // WebSocket connection state - tracked separately to pass to useAgentManagement
+  // This allows us to disable polling when WebSocket is connected
+  const [wsConnectedState, setWsConnectedState] = useState(false);
+
   // Custom hooks for state management
   const panels = usePanelLayout();
   const workspace = useProjectWorkspace({ currentProject });
-  const agentMgmt = useAgentManagement({ projectId: currentProject?.id || null, isAuthenticated });
+  const agentMgmt = useAgentManagement({
+    projectId: currentProject?.id || null,
+    isAuthenticated,
+    isWebSocketConnected: wsConnectedState,
+  });
   const findingsMgmt = useFindingsManagement({
     projectId: currentProject?.id || null,
     agents: agentMgmt.agents,
@@ -93,6 +101,24 @@ export default function Home() {
 
   const projectLoadTokenRef = useRef(0);
 
+  // Debouncing/throttling refs for WebSocket message batching
+  // Accumulator refs for batching LLM interactions and tool details
+  const llmInteractionBatchRef = useRef<any[]>([]);
+  const toolDetailBatchRef = useRef<any[]>([]);
+  const llmFlushTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const toolFlushTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Throttling refs for progress updates (max 5/sec = 200ms interval)
+  const lastProgressUpdateRef = useRef<Record<string, number>>({});
+  const pendingProgressRef = useRef<Record<string, any>>({});
+  const progressFlushTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
+
+  // Debouncing ref for refreshFindings (500ms)
+  const refreshFindingsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Track last agent status to avoid redundant updates
+  const lastAgentStatusRef = useRef<Record<string, string>>({});
+
   // Auto-select agent for findings view - now handled by useFindingsManagement hook
   // Persist selected agent across refreshes - now handled by useAgentManagement hook
 
@@ -101,72 +127,187 @@ export default function Home() {
     setAuthFunctions(getAccessToken, refreshToken);
   }, [getAccessToken, refreshToken]);
 
+  // Debounced refreshFindings - waits 500ms after last call before executing
+  const debouncedRefreshFindings = useCallback(() => {
+    if (refreshFindingsTimeoutRef.current) {
+      clearTimeout(refreshFindingsTimeoutRef.current);
+    }
+    refreshFindingsTimeoutRef.current = setTimeout(() => {
+      findingsMgmt.refreshFindings();
+      refreshFindingsTimeoutRef.current = null;
+    }, 500);
+  }, [findingsMgmt]);
+
+  // Flush batched LLM interactions to state
+  const flushLlmInteractions = useCallback(() => {
+    if (llmInteractionBatchRef.current.length === 0) return;
+    const batch = llmInteractionBatchRef.current;
+    llmInteractionBatchRef.current = [];
+    observability.setLlmInteractions((prev) => [...prev, ...batch]);
+  }, [observability]);
+
+  // Flush batched tool details to state
+  const flushToolDetails = useCallback(() => {
+    if (toolDetailBatchRef.current.length === 0) return;
+    const batch = toolDetailBatchRef.current;
+    toolDetailBatchRef.current = [];
+    observability.setToolDetails((prev) => [...prev, ...batch]);
+  }, [observability]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (llmFlushTimeoutRef.current) clearTimeout(llmFlushTimeoutRef.current);
+      if (toolFlushTimeoutRef.current) clearTimeout(toolFlushTimeoutRef.current);
+      if (refreshFindingsTimeoutRef.current) clearTimeout(refreshFindingsTimeoutRef.current);
+      Object.values(progressFlushTimeoutRef.current).forEach(clearTimeout);
+    };
+  }, []);
+
   // WebSocket - only connect after auth is ready (JWT or legacy session token)
-	  const { isConnected } = useWebSocket({
-	    enabled: isAuthenticated,
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    onFinding: useCallback((finding: any) => {
-	      const projectId = currentProject?.id;
-	      if (!projectId) return;
+  const { isConnected } = useWebSocket({
+    enabled: isAuthenticated,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onFinding: useCallback((finding: any) => {
+      const projectId = currentProject?.id;
+      if (!projectId) return;
 
-	      // Only add finding if it belongs to the current project.
-	      // (The backend broadcasts all events to all clients.)
-	      findingsMgmt.setFindings((prev) => {
-	        if (finding?.repo_id !== projectId) return prev;
+      // Only add finding if it belongs to the current project.
+      // (The backend broadcasts all events to all clients.)
+      findingsMgmt.setFindings((prev) => {
+        if (finding?.repo_id !== projectId) return prev;
 
-	        // Deduplicate by (agent_id, id) to avoid duplicates when we also refresh from the API.
-	        const alreadyPresent = prev.some(
-	          (f) => f.id === finding.id && f.agent_id === finding.agent_id
-	        );
-	        if (alreadyPresent) return prev;
+        // Deduplicate by (agent_id, id) to avoid duplicates when we also refresh from the API.
+        const alreadyPresent = prev.some(
+          (f) => f.id === finding.id && f.agent_id === finding.agent_id
+        );
+        if (alreadyPresent) return prev;
 
-	        return [finding, ...prev];
-	      });
-	    }, [currentProject?.id, findingsMgmt.setFindings]),
+        return [finding, ...prev];
+      });
+    }, [currentProject?.id, findingsMgmt.setFindings]),
+    // Throttled progress handler - max 5 updates per second (200ms interval) per agent
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onProgress: useCallback((agentId: string, progress: any) => {
-      agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
-      // Check for flow updates in progress data
-      if (progress && (progress as any).type === 'flow_update' && (progress as any).flow) {
-        if (agentId === agentMgmt.selectedAgentId) {
-          agentMgmt.setAgentFlow((progress as any).flow);
+      const now = Date.now();
+      const lastUpdate = lastProgressUpdateRef.current[agentId] || 0;
+      const timeSinceLastUpdate = now - lastUpdate;
+      const THROTTLE_INTERVAL = 200; // 5 updates/sec max
+
+      // Always store the latest progress for this agent
+      pendingProgressRef.current[agentId] = progress;
+
+      // If enough time has passed, update immediately
+      if (timeSinceLastUpdate >= THROTTLE_INTERVAL) {
+        lastProgressUpdateRef.current[agentId] = now;
+        agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
+
+        // Check for flow updates in progress data
+        if (progress && (progress as any).type === 'flow_update' && (progress as any).flow) {
+          if (agentId === agentMgmt.selectedAgentId) {
+            agentMgmt.setAgentFlow((progress as any).flow);
+          }
+        }
+      } else {
+        // Schedule a flush for the pending progress if not already scheduled
+        if (!progressFlushTimeoutRef.current[agentId]) {
+          progressFlushTimeoutRef.current[agentId] = setTimeout(() => {
+            const pendingProgress = pendingProgressRef.current[agentId];
+            if (pendingProgress) {
+              lastProgressUpdateRef.current[agentId] = Date.now();
+              agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: pendingProgress }));
+
+              // Check for flow updates
+              if (pendingProgress && (pendingProgress as any).type === 'flow_update' && (pendingProgress as any).flow) {
+                if (agentId === agentMgmt.selectedAgentId) {
+                  agentMgmt.setAgentFlow((pendingProgress as any).flow);
+                }
+              }
+              delete pendingProgressRef.current[agentId];
+            }
+            delete progressFlushTimeoutRef.current[agentId];
+          }, THROTTLE_INTERVAL - timeSinceLastUpdate);
         }
       }
-	    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentProgress, agentMgmt.setAgentFlow]),
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    onAgentStatus: useCallback((agentId: string, status: string) => {
-	      const isKnownAgent = agentMgmt.agents.some((a) => a.id === agentId);
-	      if (!isKnownAgent) return;
+    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentProgress, agentMgmt.setAgentFlow]),
+    // Agent status handler - only update if status actually changed
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onAgentStatus: useCallback((agentId: string, status: string) => {
+      const isKnownAgent = agentMgmt.agents.some((a) => a.id === agentId);
+      if (!isKnownAgent) return;
 
-	      agentMgmt.setAgents((prev) =>
-	        prev.map((a) =>
-	          a.id === agentId ? { ...a, status: status as any } : a
-	        )
-	      );
-	      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-	        // Ensure findings are fresh even if we missed WS messages during refresh/reconnect.
-	        findingsMgmt.refreshFindings();
-	      }
-	    }, [agentMgmt.agents, agentMgmt.setAgents, findingsMgmt.refreshFindings]),
-    // Observability handlers
+      // Only update if status actually changed
+      if (lastAgentStatusRef.current[agentId] === status) {
+        return;
+      }
+      lastAgentStatusRef.current[agentId] = status;
+
+      agentMgmt.setAgents((prev) =>
+        prev.map((a) =>
+          a.id === agentId ? { ...a, status: status as any } : a
+        )
+      );
+      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+        // Debounced refresh - ensures findings are fresh even if we missed WS messages
+        debouncedRefreshFindings();
+      }
+    }, [agentMgmt.agents, agentMgmt.setAgents, debouncedRefreshFindings]),
+    // Batched LLM request handler - collect for 150ms then flush
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onLLMRequest: useCallback((agentId: string, interaction: any) => {
-      if (agentId === agentMgmt.selectedAgentId) {
-        observability.setLlmInteractions((prev) => [...prev, interaction]);
+      if (agentId !== agentMgmt.selectedAgentId) return;
+
+      // Add to batch
+      llmInteractionBatchRef.current.push(interaction);
+
+      // Schedule flush if not already scheduled
+      if (!llmFlushTimeoutRef.current) {
+        llmFlushTimeoutRef.current = setTimeout(() => {
+          flushLlmInteractions();
+          llmFlushTimeoutRef.current = null;
+        }, 150);
       }
-    }, [agentMgmt.selectedAgentId, observability.setLlmInteractions]),
+    }, [agentMgmt.selectedAgentId, flushLlmInteractions]),
+    // Batched LLM response handler - collect for 150ms then flush
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onLLMResponse: useCallback((agentId: string, interaction: any) => {
-      if (agentId === agentMgmt.selectedAgentId) {
-        observability.setLlmInteractions((prev) => [...prev, interaction]);
+      if (agentId !== agentMgmt.selectedAgentId) return;
+
+      // Add to batch
+      llmInteractionBatchRef.current.push(interaction);
+
+      // Schedule flush if not already scheduled
+      if (!llmFlushTimeoutRef.current) {
+        llmFlushTimeoutRef.current = setTimeout(() => {
+          flushLlmInteractions();
+          llmFlushTimeoutRef.current = null;
+        }, 150);
       }
-    }, [agentMgmt.selectedAgentId, observability.setLlmInteractions]),
+    }, [agentMgmt.selectedAgentId, flushLlmInteractions]),
+    // Batched tool detail handler - collect for 150ms then flush
     // eslint-disable-next-line react-hooks/exhaustive-deps
     onToolDetail: useCallback((agentId: string, detail: any) => {
-      if (agentId === agentMgmt.selectedAgentId) {
-        observability.setToolDetails((prev) => [...prev, detail]);
+      if (agentId !== agentMgmt.selectedAgentId) return;
+
+      // Add to batch
+      toolDetailBatchRef.current.push(detail);
+
+      // Schedule flush if not already scheduled
+      if (!toolFlushTimeoutRef.current) {
+        toolFlushTimeoutRef.current = setTimeout(() => {
+          flushToolDetails();
+          toolFlushTimeoutRef.current = null;
+        }, 150);
       }
-    }, [agentMgmt.selectedAgentId, observability.setToolDetails]),
+    }, [agentMgmt.selectedAgentId, flushToolDetails]),
+    // Flow update handler - receives real-time flow updates via WebSocket
+    // This is the primary flow update mechanism when WebSocket is connected
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onFlowUpdate: useCallback((agentId: string, flow: any) => {
+      if (agentId === agentMgmt.selectedAgentId) {
+        agentMgmt.setAgentFlow(flow);
+      }
+    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentFlow]),
     onReportReady: useCallback(async (agentId: string, reportId: string) => {
       // Auto-fetch and show report when ready
       try {
@@ -181,6 +322,12 @@ export default function Home() {
 
   // Load flow and observability data - now handled by useAgentManagement and useObservability hooks
   // Load call-tree routes and build call tree - now handled by useCallTree hook
+
+  // Sync WebSocket connection state to local state for useAgentManagement
+  // This allows polling to be disabled when WebSocket is connected
+  useEffect(() => {
+    setWsConnectedState(isConnected);
+  }, [isConnected]);
 
   // Initialize auth and check project status on mount
   useEffect(() => {

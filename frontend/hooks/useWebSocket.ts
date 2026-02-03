@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { WSMessage, Finding, AgentProgress, LLMInteraction, ToolDetail } from '@/types';
+import type { WSMessage, Finding, AgentProgress, LLMInteraction, ToolDetail, InvestigationFlow } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
@@ -22,6 +22,7 @@ interface UseWebSocketOptions {
   onToolDetail?: (agentId: string, detail: ToolDetail) => void;
   onStateSync?: (agentId: string, state: Record<string, unknown>) => void;
   onReportReady?: (agentId: string, reportId: string) => void;
+  onFlowUpdate?: (agentId: string, flow: InvestigationFlow) => void;
   autoReconnect?: boolean;
   enabled?: boolean; // Only connect when true (default: true)
 }
@@ -245,6 +246,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
               opts.onReportReady?.(
                 message.agent_id,
                 message.data.report_id as string
+              );
+              break;
+            case 'flow_update':
+              opts.onFlowUpdate?.(
+                message.agent_id,
+                message.data as unknown as InvestigationFlow
               );
               break;
           }

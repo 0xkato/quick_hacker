@@ -261,6 +261,7 @@ export type WSMessageType =
   | 'session_pausing'
   | 'session_paused'
   | 'session_resumed'
+  | 'flow_update'
   | 'auth_required'
   | 'auth_ok';
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import type { LLMInteraction, ToolDetail } from '@/types';
 import styles from './LLMInteractionPanel.module.css';
 
@@ -22,7 +22,7 @@ function formatTokens(tokens: number | undefined): string {
   return String(tokens);
 }
 
-function InteractionEntry({
+const InteractionEntry = memo(function InteractionEntry({
   interaction,
   isExpanded,
   onToggle,
@@ -101,9 +101,9 @@ function InteractionEntry({
       )}
     </div>
   );
-}
+});
 
-function ToolDetailEntry({
+const ToolDetailEntry = memo(function ToolDetailEntry({
   detail,
   isExpanded,
   onToggle,
@@ -164,13 +164,13 @@ function ToolDetailEntry({
       )}
     </div>
   );
-}
+});
 
 type EntryType =
   | { type: 'interaction'; data: LLMInteraction }
   | { type: 'tool'; data: ToolDetail };
 
-export default function LLMInteractionPanel({
+function LLMInteractionPanelComponent({
   agentId,
   interactions,
   toolDetails,
@@ -180,38 +180,50 @@ export default function LLMInteractionPanel({
   const [filter, setFilter] = useState<'all' | 'llm' | 'tools'>('all');
   const [subagentFilter, setSubagentFilter] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [scrollTop, setScrollTop] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Get unique subagents from tool details and LLM interactions
-  const toolSubagents = toolDetails.map(t => t.subagent).filter(Boolean);
-  const interactionSubagents = interactions.map(i => i.subagent).filter(Boolean);
-  const subagents = [...new Set([...toolSubagents, ...interactionSubagents])] as string[];
+  // Virtualization constants
+  const ITEM_HEIGHT = 60; // Approximate height of each entry when collapsed
+  const OVERSCAN = 5; // Number of items to render outside the visible area
+  const VIRTUALIZATION_THRESHOLD = 100; // Only virtualize when there are this many entries
+
+  // Memoize unique subagents from tool details and LLM interactions
+  const subagents = useMemo(() => {
+    const toolSubagents = toolDetails.map(t => t.subagent).filter(Boolean);
+    const interactionSubagents = interactions.map(i => i.subagent).filter(Boolean);
+    return [...new Set([...toolSubagents, ...interactionSubagents])] as string[];
+  }, [toolDetails, interactions]);
   const hasSubagents = subagents.length > 0;
 
-  // Combine and sort entries by timestamp
-  const allEntries: EntryType[] = [
-    ...interactions.map(i => ({ type: 'interaction' as const, data: i })),
-    ...toolDetails.map(t => ({ type: 'tool' as const, data: t })),
-  ].sort((a, b) =>
-    new Date(a.data.timestamp).getTime() - new Date(b.data.timestamp).getTime()
-  );
+  // Memoize combined and sorted entries by timestamp
+  const allEntries = useMemo<EntryType[]>(() => {
+    const entries: EntryType[] = [
+      ...interactions.map(i => ({ type: 'interaction' as const, data: i })),
+      ...toolDetails.map(t => ({ type: 'tool' as const, data: t })),
+    ];
+    // Sort by timestamp
+    return entries.sort((a, b) =>
+      new Date(a.data.timestamp).getTime() - new Date(b.data.timestamp).getTime()
+    );
+  }, [interactions, toolDetails]);
 
-  // Filter entries
-  const filteredEntries = allEntries.filter(entry => {
-    // Type filter
-    if (filter === 'llm' && entry.type !== 'interaction') return false;
-    if (filter === 'tools' && entry.type !== 'tool') return false;
+  // Memoize filtered entries
+  const filteredEntries = useMemo(() => {
+    return allEntries.filter(entry => {
+      // Type filter
+      if (filter === 'llm' && entry.type !== 'interaction') return false;
+      if (filter === 'tools' && entry.type !== 'tool') return false;
 
-    // Subagent filter (applies to both tools and LLM interactions)
-    if (subagentFilter) {
-      const entrySubagent = entry.type === 'tool'
-        ? entry.data.subagent
-        : entry.data.subagent;
-      if (entrySubagent !== subagentFilter) return false;
-    }
+      // Subagent filter (applies to both tools and LLM interactions)
+      if (subagentFilter) {
+        const entrySubagent = entry.data.subagent;
+        if (entrySubagent !== subagentFilter) return false;
+      }
 
-    return true;
-  });
+      return true;
+    });
+  }, [allEntries, filter, subagentFilter]);
 
   // Auto-scroll to bottom when new entries arrive
   useEffect(() => {
@@ -220,7 +232,41 @@ export default function LLMInteractionPanel({
     }
   }, [filteredEntries.length, autoScroll]);
 
-  const toggleExpanded = (id: string) => {
+  // Track scroll position for virtualization
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  // Calculate virtualized items to render
+  const virtualizedData = useMemo(() => {
+    const shouldVirtualize = filteredEntries.length >= VIRTUALIZATION_THRESHOLD;
+
+    if (!shouldVirtualize) {
+      return {
+        items: filteredEntries,
+        startIndex: 0,
+        paddingTop: 0,
+        paddingBottom: 0,
+        totalHeight: 0,
+      };
+    }
+
+    const containerHeight = containerRef.current?.clientHeight || 600;
+    const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
+    const endIndex = Math.min(
+      filteredEntries.length,
+      Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN
+    );
+
+    const items = filteredEntries.slice(startIndex, endIndex);
+    const paddingTop = startIndex * ITEM_HEIGHT;
+    const paddingBottom = (filteredEntries.length - endIndex) * ITEM_HEIGHT;
+    const totalHeight = filteredEntries.length * ITEM_HEIGHT;
+
+    return { items, startIndex, paddingTop, paddingBottom, totalHeight };
+  }, [filteredEntries, scrollTop]);
+
+  const toggleExpanded = useCallback((id: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -230,15 +276,18 @@ export default function LLMInteractionPanel({
       }
       return next;
     });
-  };
+  }, []);
 
-  // Calculate stats
-  const totalTokens = interactions.reduce(
-    (sum, i) => sum + (i.total_tokens || 0),
-    0
-  );
-  const llmCalls = interactions.filter(i => i.interaction_type === 'response').length;
-  const toolCalls = toolDetails.length;
+  // Memoize stats calculations
+  const { totalTokens, llmCalls, toolCalls } = useMemo(() => {
+    const totalTokens = interactions.reduce(
+      (sum, i) => sum + (i.total_tokens || 0),
+      0
+    );
+    const llmCalls = interactions.filter(i => i.interaction_type === 'response').length;
+    const toolCalls = toolDetails.length;
+    return { totalTokens, llmCalls, toolCalls };
+  }, [interactions, toolDetails]);
 
   if (!agentId) {
     return (
@@ -321,7 +370,7 @@ export default function LLMInteractionPanel({
         </label>
       </div>
 
-      <div className={styles.entries} ref={containerRef}>
+      <div className={styles.entries} ref={containerRef} onScroll={handleScroll}>
         {filteredEntries.length === 0 ? (
           <div className={styles.empty}>
             {filter === 'all'
@@ -329,29 +378,45 @@ export default function LLMInteractionPanel({
               : `No ${filter === 'llm' ? 'LLM' : 'tool'} entries.`}
           </div>
         ) : (
-          filteredEntries.map((entry) => {
-            if (entry.type === 'interaction') {
-              return (
-                <InteractionEntry
-                  key={entry.data.id}
-                  interaction={entry.data}
-                  isExpanded={expandedIds.has(entry.data.id)}
-                  onToggle={() => toggleExpanded(entry.data.id)}
-                />
-              );
-            } else {
-              return (
-                <ToolDetailEntry
-                  key={entry.data.id}
-                  detail={entry.data}
-                  isExpanded={expandedIds.has(entry.data.id)}
-                  onToggle={() => toggleExpanded(entry.data.id)}
-                />
-              );
-            }
-          })
+          <>
+            {/* Virtualization spacer - top */}
+            {virtualizedData.paddingTop > 0 && (
+              <div style={{ height: virtualizedData.paddingTop }} />
+            )}
+            {virtualizedData.items.map((entry) => {
+              if (entry.type === 'interaction') {
+                return (
+                  <InteractionEntry
+                    key={entry.data.id}
+                    interaction={entry.data}
+                    isExpanded={expandedIds.has(entry.data.id)}
+                    onToggle={() => toggleExpanded(entry.data.id)}
+                  />
+                );
+              } else {
+                return (
+                  <ToolDetailEntry
+                    key={entry.data.id}
+                    detail={entry.data}
+                    isExpanded={expandedIds.has(entry.data.id)}
+                    onToggle={() => toggleExpanded(entry.data.id)}
+                  />
+                );
+              }
+            })}
+            {/* Virtualization spacer - bottom */}
+            {virtualizedData.paddingBottom > 0 && (
+              <div style={{ height: virtualizedData.paddingBottom }} />
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
+
+// Wrap the component with React.memo for performance optimization
+const LLMInteractionPanel = memo(LLMInteractionPanelComponent);
+LLMInteractionPanel.displayName = 'LLMInteractionPanel';
+
+export default LLMInteractionPanel;

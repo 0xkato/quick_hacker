@@ -7,6 +7,12 @@ import { agents as agentsApi } from '@/lib/api';
 export interface UseAgentManagementOptions {
   projectId: string | null;
   isAuthenticated: boolean;
+  /**
+   * When WebSocket is connected and sending flow_update messages,
+   * polling is disabled to avoid redundancy and race conditions.
+   * Polling only runs as a fallback when WebSocket is disconnected.
+   */
+  isWebSocketConnected?: boolean;
 }
 
 export interface UseAgentManagementResult {
@@ -26,6 +32,7 @@ export interface UseAgentManagementResult {
 export function useAgentManagement({
   projectId,
   isAuthenticated,
+  isWebSocketConnected = false,
 }: UseAgentManagementOptions): UseAgentManagementResult {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -77,6 +84,12 @@ export function useAgentManagement({
     }
   }, [agents, selectedAgentId]);
 
+  // Track WebSocket connection state in a ref to avoid recreating interval
+  const isWebSocketConnectedRef = useRef(isWebSocketConnected);
+  useEffect(() => {
+    isWebSocketConnectedRef.current = isWebSocketConnected;
+  }, [isWebSocketConnected]);
+
   // Load flow when agent is selected (separate from polling to avoid recreating interval)
   useEffect(() => {
     if (!isAuthenticated || !selectedAgentId) {
@@ -124,12 +137,17 @@ export function useAgentManagement({
       }
     };
 
-    // Initial load
+    // Initial load - always fetch once to get the current state
     loadFlow();
 
-    // Start polling - check ref on each tick to decide if we should continue
-    // Poll every 10 seconds while agent is running
+    // Start polling as fallback - only poll when WebSocket is disconnected
+    // Poll every 10 seconds while agent is running AND WebSocket is not connected
     intervalId = setInterval(() => {
+      // Skip polling if WebSocket is connected (flow updates come via WebSocket)
+      if (isWebSocketConnectedRef.current) {
+        return;
+      }
+      // Only poll if agent is running
       if (isAgentRunningRef.current) {
         loadFlow();
       }
@@ -141,7 +159,7 @@ export function useAgentManagement({
         clearInterval(intervalId);
       }
     };
-  }, [selectedAgentId, isAuthenticated]); // Note: removed 'agents' from deps
+  }, [selectedAgentId, isAuthenticated]); // Note: removed 'agents' and 'isWebSocketConnected' from deps to avoid interval recreation
 
   const selectAgent = useCallback((agentId: string | null) => {
     setSelectedAgentId(agentId);

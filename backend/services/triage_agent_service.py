@@ -1,16 +1,18 @@
-"""Triage Agent Service - Creates a triage agent with tool access and observability.
+"""Triage Agent Service - Iterative one-at-a-time finding triage.
 
-This service creates a proper agent for triage that:
-1. Appears in the agent dropdown
-2. Has access to file reading tools to verify findings
-3. Logs all LLM interactions to the observability service
-4. Uses the same auth flow as scan agents
+This service processes findings ONE AT A TIME to avoid context overflow:
+1. get_next_finding - returns the next finding to triage
+2. read_file - examines the actual code
+3. submit_decision - records decision and moves to next finding
+
+This keeps context small - only one finding in scope at any time.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -43,53 +45,64 @@ class TriageAgentResult:
     triaged_findings: list[Finding]
 
 
-# Strict triage system prompt
-TRIAGE_SYSTEM_PROMPT = """You are an extremely strict security auditor with access to file reading tools.
+# System prompt for iterative triage - ONE finding at a time
+TRIAGE_SYSTEM_PROMPT = """You are an extremely strict security auditor. You will triage findings ONE AT A TIME.
 
-## CRITICAL RULE: We prefer ZERO valid issues over ANY false positives.
+## YOUR WORKFLOW (repeat for each finding):
 
-You MUST use the read_file tool to verify each finding before making a decision.
+1. Call `get_next_finding` to get the next finding to review
+2. Call `read_file` to examine the actual source code at the file path
+3. Analyze: Is this a REAL vulnerability in PRODUCTION code?
+4. Call `submit_decision` with your verdict
+5. Repeat until get_next_finding returns "No more findings"
 
-## ALWAYS REJECT (mark as by_design, hardening, or speculative):
+## REJECTION CRITERIA (mark as by_design, hardening, or speculative):
 
-1. **Intentional Features**: Auth bypass flags like `disableAuthentication`, `skipAuth`, `devMode`, `debugMode`, `testMode`
-2. **Dev/Test Code**: ANYTHING in test files, seeders, fixtures, factories, examples, demos, mocks, stubs
-3. **Development Vulnerabilities**: Issues that only exist in dev/debug builds or require debug flags
-4. **No Direct Security Impact**: Information disclosure without sensitive data, missing headers, etc.
-5. **Speculative Attacks**: Issues requiring unlikely conditions, specific timing, or attacker-controlled servers
-6. **Hardening Suggestions**: "Should use X instead of Y" without actual vulnerability
-7. **Configuration Templates**: .env.example, config.sample, settings.template files
-8. **Vendor/Third-Party Code**: Issues in node_modules, vendor, third_party directories
-9. **Obvious Placeholders**: "changeme", "password123", "secret" in example configs
-10. **Feature Flags**: Intentional toggles that disable security for testing/development
+- Test/dev/example code (test files, seeders, fixtures, mocks, examples)
+- Intentional dev flags (disableAuth, debugMode, testMode)
+- Config templates (.env.example, settings.sample)
+- Vendor code (node_modules, vendor, third_party)
+- Placeholder secrets ("changeme", "password123")
+- No clear exploitation path
 
-## ONLY ACCEPT as valid_security_issue:
+## ACCEPTANCE CRITERIA (valid_security_issue):
 
-- SQL injection with clear user input → query path
-- Command injection with clear user input → shell execution
-- Authentication bypass in PRODUCTION code (not dev flags)
-- Remote code execution with clear exploitation path
-- SSRF with internal network access potential
-- Path traversal with file read/write capability
-- Hardcoded PRODUCTION credentials (not test/example)
-- Privilege escalation between real user roles
+- SQL/Command injection with user input -> dangerous sink
+- Auth bypass in PRODUCTION code
+- RCE with clear exploitation
+- SSRF to internal networks
+- Path traversal with file access
+- Real hardcoded credentials
 
-## Workflow
+## Decision values:
+- valid_security_issue: Real exploitable vulnerability
+- bug: Code defect but not security
+- misconfiguration: Config issue
+- hardening: Security improvement suggestion
+- by_design: Intentional behavior
+- speculative: Theoretical/unlikely attack
 
-For EACH finding:
-1. Use read_file to examine the actual code
-2. Look for context clues (dev flags, test patterns, etc.)
-3. Determine if it's exploitable in production
-4. Make your decision
+BE STRICT. When in doubt, REJECT. We prefer zero valid issues over any false positives.
 
-## Response Format
+START NOW: Call get_next_finding to begin."""
 
-After examining all findings, output ONLY a JSON array:
-```json
-[{"finding_id": "id", "decision": "disposition", "confidence": 0-100, "reasoning": ["reason1", "reason2"]}]
-```
 
-BE AGGRESSIVE. When in doubt, REJECT."""
+@dataclass
+class TriageState:
+    """Mutable state for iterative triage."""
+    findings: list[Finding]
+    current_index: int = 0
+    decisions: list[TriageDecision] = field(default_factory=list)
+
+    def get_next(self) -> Finding | None:
+        if self.current_index < len(self.findings):
+            finding = self.findings[self.current_index]
+            return finding
+        return None
+
+    def submit(self, decision: TriageDecision) -> None:
+        self.decisions.append(decision)
+        self.current_index += 1
 
 
 class TriageAgent:
@@ -140,7 +153,149 @@ class TriageAgent:
     def broadcast(self, msg_type: WSMessageType, data: dict[str, Any] | None = None):
         """Broadcast a message via callback."""
         if self.on_message:
-            self.on_message(WSMessage(type=msg_type, agent_id=self.id, data=data))
+            self.on_message(WSMessage(type=msg_type, agent_id=self.id, data=data or {}))
+
+
+def _create_triage_tools(state: TriageState, repo_path: str):
+    """Create MCP-style tools for iterative triage."""
+
+    async def get_next_finding(args: dict) -> dict:
+        """Get the next finding to triage."""
+        finding = state.get_next()
+        if finding is None:
+            return {
+                "status": "complete",
+                "message": "No more findings to triage",
+                "triaged_count": len(state.decisions),
+            }
+
+        return {
+            "status": "pending",
+            "finding_number": state.current_index + 1,
+            "total_findings": len(state.findings),
+            "finding": {
+                "id": finding.id,
+                "title": finding.title,
+                "severity": finding.severity,
+                "vulnerability_type": finding.vulnerability_type,
+                "file_path": finding.file_path,
+                "line_start": finding.line_start,
+                "line_end": finding.line_end,
+                "description": finding.description,
+                "code_snippet": finding.code_snippet[:500] if finding.code_snippet else None,
+            }
+        }
+
+    async def read_file(args: dict) -> dict:
+        """Read file content for verification."""
+        file_path = args.get("file_path", "")
+
+        # Resolve relative to repo
+        if not file_path.startswith("/"):
+            full_path = Path(repo_path) / file_path
+        else:
+            full_path = Path(file_path)
+
+        try:
+            if not full_path.exists():
+                return {"error": f"File not found: {file_path}"}
+
+            content = full_path.read_text(errors="replace")
+
+            # Limit content size
+            if len(content) > 10000:
+                content = content[:10000] + "\n... [truncated]"
+
+            return {
+                "file_path": str(file_path),
+                "content": content,
+                "line_count": content.count("\n") + 1,
+            }
+        except Exception as e:
+            return {"error": f"Failed to read file: {e}"}
+
+    async def submit_decision(args: dict) -> dict:
+        """Submit triage decision for current finding."""
+        finding_id = args.get("finding_id", "")
+        decision = args.get("decision", "speculative")
+        confidence = args.get("confidence", 50)
+        reasoning = args.get("reasoning", [])
+
+        if isinstance(reasoning, str):
+            reasoning = [reasoning]
+
+        # Validate decision
+        valid_decisions = ["valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"]
+        if decision not in valid_decisions:
+            return {"error": f"Invalid decision: {decision}. Must be one of: {valid_decisions}"}
+
+        # Record decision
+        state.submit(TriageDecision(
+            finding_id=finding_id,
+            decision=decision,
+            confidence=confidence,
+            reasoning=reasoning,
+        ))
+
+        remaining = len(state.findings) - state.current_index
+        return {
+            "status": "recorded",
+            "finding_id": finding_id,
+            "decision": decision,
+            "remaining_findings": remaining,
+            "message": f"Decision recorded. {remaining} findings remaining." if remaining > 0 else "All findings triaged!",
+        }
+
+    # Return tools in MCP format
+    return {
+        "get_next_finding": {
+            "fn": get_next_finding,
+            "schema": {
+                "name": "get_next_finding",
+                "description": "Get the next finding to triage. Returns finding details or 'complete' status when done.",
+                "input_schema": {"type": "object", "properties": {}, "required": []},
+            }
+        },
+        "read_file": {
+            "fn": read_file,
+            "schema": {
+                "name": "read_file",
+                "description": "Read file content to verify the finding. Use the file_path from the finding.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Path to the file to read"}
+                    },
+                    "required": ["file_path"],
+                },
+            }
+        },
+        "submit_decision": {
+            "fn": submit_decision,
+            "schema": {
+                "name": "submit_decision",
+                "description": "Submit your triage decision for the current finding.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "finding_id": {"type": "string", "description": "The ID of the finding being triaged"},
+                        "decision": {
+                            "type": "string",
+                            "enum": ["valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"],
+                            "description": "Your triage decision"
+                        },
+                        "confidence": {"type": "integer", "minimum": 0, "maximum": 100, "description": "Confidence in decision (0-100)"},
+                        "reasoning": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of reasons for your decision"
+                        },
+                    },
+                    "required": ["finding_id", "decision", "reasoning"],
+                },
+            }
+        },
+    }
 
 
 async def run_triage_agent(
@@ -152,13 +307,13 @@ async def run_triage_agent(
     use_claude_code_auth: bool = False,
     on_message: Callable[[WSMessage], None] | None = None,
 ) -> tuple[TriageAgent, TriageAgentResult]:
-    """Run a triage agent that verifies findings with file access.
+    """Run iterative triage agent that processes findings one at a time.
 
     Returns:
         Tuple of (agent, result) - agent can be used for tracking in UI
     """
-    import json
     import os
+    import time
 
     # Check SDK availability
     try:
@@ -180,10 +335,14 @@ async def run_triage_agent(
     agent.started_at = datetime.utcnow()
     agent.broadcast(WSMessageType.AGENT_STATUS, {"agent": agent.to_schema().model_dump()})
 
-    print(f"[TriageAgent] Created agent {agent_id} for {len(findings)} findings")
+    print(f"[TriageAgent] Created agent {agent_id} for {len(findings)} findings (iterative mode)")
 
     # Set up observability
     observability_service.set_broadcast_callback(on_message)
+
+    # Create triage state and tools
+    state = TriageState(findings=findings)
+    tools = _create_triage_tools(state, repo_path)
 
     # Build auth
     env: dict[str, str] = {}
@@ -210,64 +369,78 @@ async def run_triage_agent(
             env["ANTHROPIC_API_KEY"] = resolved_key
         print(f"[TriageAgent] Using API key")
 
-    # Build findings prompt
-    findings_text = []
-    for i, finding in enumerate(findings, 1):
-        findings_text.append(f"""
-## Finding {i}: {finding.title}
-- **ID**: {finding.id}
-- **File**: {finding.file_path}
-- **Line**: {finding.line_start or "unknown"}
-- **Type**: {finding.vulnerability_type}
-- **Severity**: {finding.severity}
+    # Create MCP server config for our tools
+    from claude_agent_sdk import McpSdkServerConfig
 
-**Description**: {finding.description}
-""")
+    # Build tool handlers
+    tool_handlers = {name: info["fn"] for name, info in tools.items()}
+    tool_schemas = [info["schema"] for info in tools.values()]
 
-    user_prompt = f"""Please triage these {len(findings)} security findings.
+    # Create SDK MCP server
+    from mcp.server import Server
+    from mcp import types as mcp_types
 
-For EACH finding, use the read_file tool to examine the actual source code before deciding.
+    mcp_server = Server("triage-tools")
 
-{chr(10).join(findings_text)}
+    @mcp_server.list_tools()
+    async def list_tools() -> list[mcp_types.Tool]:
+        return [
+            mcp_types.Tool(
+                name=schema["name"],
+                description=schema["description"],
+                inputSchema=schema["input_schema"],
+            )
+            for schema in tool_schemas
+        ]
 
-After examining all findings, output your decisions as a JSON array."""
+    @mcp_server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[mcp_types.TextContent]:
+        handler = tool_handlers.get(name)
+        if not handler:
+            return [mcp_types.TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
 
-    # Create SDK options with file reading tool
+        try:
+            result = await handler(arguments)
+            return [mcp_types.TextContent(type="text", text=json.dumps(result, indent=2))]
+        except Exception as e:
+            return [mcp_types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+    # Create SDK options
+    allowed_tools = [f"mcp__triage__{name}" for name in tools.keys()]
+
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=TRIAGE_SYSTEM_PROMPT,
         cwd=repo_path,
-        max_turns=len(findings) * 2 + 5,  # Allow multiple reads per finding
+        max_turns=len(findings) * 4 + 10,  # ~4 turns per finding (get, read, decide, next)
         permission_mode="bypassPermissions",
-        allowed_tools=["Read"],  # Only allow file reading
+        allowed_tools=allowed_tools,
+        mcp_servers={"triage": mcp_server},
         env=env,
         setting_sources=setting_sources,
+        hooks={},  # Disable inherited hooks to prevent tool concurrency errors
     )
 
     client = ClaudeSDKClient(options)
-    decisions: list[TriageDecision] = []
 
     try:
         await client.connect()
-        print(f"[TriageAgent] SDK connected, starting triage")
+        print(f"[TriageAgent] SDK connected, starting iterative triage")
 
         # Log initial request
         request_id = observability_service.log_llm_request(
             agent_id=agent_id,
-            messages=[
-                {"role": "system", "content": TRIAGE_SYSTEM_PROMPT[:500] + "..."},
-                {"role": "user", "content": user_prompt[:1000] + "..."},
-            ],
-            tools_available=["read_file"],
+            messages=[{"role": "system", "content": TRIAGE_SYSTEM_PROMPT[:500] + "..."}],
+            tools_available=list(tools.keys()),
             model=model,
             provider="anthropic",
         )
 
-        await client.query(user_prompt)
+        # Start the triage loop
+        await client.query("Begin triaging findings. Call get_next_finding to start.")
 
-        response_parts: list[str] = []
         tool_calls: list[dict] = []
-        pending_tools: dict[str, tuple[str, dict, float]] = {}  # tool_id -> (name, input, start_time)
+        pending_tools: dict[str, tuple[str, dict, float]] = {}
 
         async for message in client.receive_response():
             msg_type = message.__class__.__name__
@@ -276,28 +449,22 @@ After examining all findings, output your decisions as a JSON array."""
                 content_blocks = getattr(message, "content", [])
                 for block in content_blocks:
                     block_type = block.__class__.__name__
-                    if block_type == "TextBlock":
-                        text = getattr(block, "text", "")
-                        if text:
-                            response_parts.append(text)
-                    elif block_type == "ToolUseBlock":
-                        import time
+                    if block_type == "ToolUseBlock":
                         tool_name = getattr(block, "name", "unknown")
                         tool_input = getattr(block, "input", {})
                         tool_id = getattr(block, "id", "")
 
-                        # Track pending tool for when result comes back
                         pending_tools[tool_id] = (tool_name, tool_input, time.time())
-                        tool_calls.append({
-                            "name": tool_name,
-                            "input": tool_input,
-                            "id": tool_id,
-                        })
-                        print(f"[TriageAgent] Tool call: {tool_name}({tool_input.get('file_path', '')})")
+
+                        # Broadcast progress
+                        if "get_next_finding" in tool_name:
+                            agent.broadcast(WSMessageType.PROGRESS, {
+                                "current": state.current_index,
+                                "total": len(findings),
+                                "message": f"Triaging finding {state.current_index + 1}/{len(findings)}",
+                            })
 
             elif msg_type == "ToolResultMessage":
-                # Tool result received - log the execution with actual result
-                import time
                 content = getattr(message, "content", [])
                 for block in content:
                     block_type = block.__class__.__name__
@@ -306,45 +473,36 @@ After examining all findings, output your decisions as a JSON array."""
                         is_error = getattr(block, "is_error", False)
                         result_content = getattr(block, "content", "")
 
-                        # Get pending tool info
                         if tool_use_id in pending_tools:
                             tool_name, tool_input, start_time = pending_tools.pop(tool_use_id)
                             duration_ms = int((time.time() - start_time) * 1000)
-
-                            # Truncate result for logging (keep first 500 chars)
-                            result_summary = str(result_content)[:500] if result_content else "No result"
 
                             observability_service.log_tool_execution(
                                 agent_id=agent_id,
                                 tool_name=tool_name,
                                 tool_call_id=tool_use_id,
                                 arguments=tool_input,
-                                result=result_summary,
+                                result=str(result_content)[:500],
                                 success=not is_error,
                                 duration_ms=duration_ms,
-                                error_message=str(result_content) if is_error else None,
                             )
-                            print(f"[TriageAgent] Tool result: {tool_name} ({'error' if is_error else 'success'}, {duration_ms}ms)")
 
-        # Log final response
-        full_response = "".join(response_parts)
+        # Log completion
         if request_id:
             observability_service.log_llm_response(
                 agent_id=agent_id,
                 request_id=request_id,
-                content=full_response[:2000] + ("..." if len(full_response) > 2000 else ""),
-                tool_calls=tool_calls if tool_calls else None,
+                content=f"Triaged {len(state.decisions)} findings",
                 model=model,
                 provider="anthropic",
             )
 
-        print(f"[TriageAgent] Response received ({len(full_response)} chars)")
-
-        # Parse decisions from response
-        decisions = _parse_triage_response(full_response, [f.id for f in findings])
+        print(f"[TriageAgent] Triage complete: {len(state.decisions)} decisions")
 
     except Exception as e:
         print(f"[TriageAgent] Error: {e}")
+        import traceback
+        traceback.print_exc()
         agent.status = AgentStatus.FAILED
         agent.error_message = str(e)
         raise
@@ -353,7 +511,7 @@ After examining all findings, output your decisions as a JSON array."""
         await client.disconnect()
 
     # Apply decisions to findings
-    decision_map = {d.finding_id: d for d in decisions}
+    decision_map = {d.finding_id: d for d in state.decisions}
     triaged_findings: list[Finding] = []
 
     disposition_map = {
@@ -385,58 +543,4 @@ After examining all findings, output your decisions as a JSON array."""
 
     print(f"[TriageAgent] Completed: {agent.findings_count} valid issues found")
 
-    return agent, TriageAgentResult(decisions=decisions, triaged_findings=triaged_findings)
-
-
-def _parse_triage_response(response_text: str, finding_ids: list[str]) -> list[TriageDecision]:
-    """Parse triage decisions from response."""
-    import json
-
-    decisions = []
-
-    try:
-        text = response_text.strip()
-
-        # Extract JSON
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            text = text[start:end]
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            text = text[start:end]
-
-        # Find array
-        start_idx = text.find("[")
-        end_idx = text.rfind("]")
-
-        if start_idx != -1 and end_idx != -1:
-            json_text = text[start_idx:end_idx + 1]
-            parsed = json.loads(json_text)
-
-            if isinstance(parsed, list):
-                for item in parsed:
-                    if isinstance(item, dict):
-                        decisions.append(TriageDecision(
-                            finding_id=item.get("finding_id", "unknown"),
-                            decision=item.get("decision", "speculative"),
-                            confidence=item.get("confidence", 50),
-                            reasoning=item.get("reasoning", []),
-                        ))
-
-    except Exception as e:
-        print(f"[TriageAgent] Parse error: {e}")
-
-    # Fill in missing decisions
-    seen_ids = {d.finding_id for d in decisions}
-    for fid in finding_ids:
-        if fid not in seen_ids:
-            decisions.append(TriageDecision(
-                finding_id=fid,
-                decision="speculative",
-                confidence=30,
-                reasoning=["Could not parse triage decision"],
-            ))
-
-    return decisions
+    return agent, TriageAgentResult(decisions=state.decisions, triaged_findings=triaged_findings)

@@ -48,6 +48,7 @@ from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
 from services.tool_core import ToolCore
 from services.tool_cache import ToolCache
 from services import git_service
+from services.resource_monitor import get_resource_monitor
 from services.project_service import project_service
 from services.settings_service import settings_service
 from services.persistence_service import persistence_service
@@ -179,6 +180,24 @@ class AgentOrchestrator:
             if not repo:
                 raise ValueError(f"Project or repository not found: {request.repo_id}")
             repo_path = repo.path
+
+        # Check repository size and system resources
+        resource_monitor = get_resource_monitor()
+
+        # Check current system resources
+        resource_status = resource_monitor.get_status()
+        if resource_status.is_critical:
+            raise ValueError(
+                f"Cannot start scan: {resource_status.message}. "
+                f"Please wait for current scans to complete or free up system resources."
+            )
+
+        # Check repository size (file count)
+        repo_ok, repo_message = resource_monitor.check_repo_size(repo_path)
+        if not repo_ok:
+            raise ValueError(repo_message)
+        if "Warning" in repo_message:
+            print(f"[Orchestrator] {repo_message}")
 
         # Check concurrent agent limit
         running_count = sum(

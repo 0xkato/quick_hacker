@@ -33,6 +33,7 @@ from services.persistence_service import persistence_service
 from services.report_service import report_service
 from services.finding_triage_service import triage_service
 from services.project_service import project_service
+from services.settings_service import settings_service
 from providers import list_all_models
 from prompting_loader import render_prompt
 from config import settings
@@ -869,17 +870,17 @@ async def llm_triage_findings(
     auth_context: AuthContext = Depends(require_auth),
 ):
     """
-    LLM-based triage of findings using Claude SDK.
+    Triage findings using LLM analysis (same Claude SDK as the scan).
 
-    This endpoint uses Claude to analyze each finding and determine:
-    - Is it a real security vulnerability?
-    - What is its disposition (valid_security_issue, bug, hardening, etc.)?
-    - What is the confidence level?
+    This endpoint sends findings to Claude for intelligent analysis:
+    - Evaluates each finding for real exploitability
+    - Considers file context (test code, seeders, etc.)
+    - Provides detailed reasoning for each decision
 
-    Uses Claude SDK auth (no separate API key needed).
+    Falls back to rule-based triage if SDK is unavailable.
     """
-    import anthropic
     from models.schemas import Disposition
+    from services.llm_triage_service import run_llm_triage, SDK_AVAILABLE as TRIAGE_SDK_AVAILABLE
 
     # Get agent
     agent = await orchestrator.get_agent(agent_id)
@@ -889,12 +890,17 @@ async def llm_triage_findings(
             raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get findings
+    print(f"[LLM Triage] Looking for findings for agent {agent_id}")
     findings = await orchestrator.get_findings(agent_id=agent_id)
+    print(f"[LLM Triage] Found {len(findings) if findings else 0} findings from orchestrator")
+
     if not findings:
         snapshot = persistence_service.load_agent_state(agent_id)
         if snapshot and snapshot.findings:
             findings = [Finding(**f) for f in snapshot.findings]
+            print(f"[LLM Triage] Loaded {len(findings)} findings from snapshot")
         else:
+            print(f"[LLM Triage] No findings found for agent {agent_id}")
             return LLMTriageResponse(triaged_count=0, results=[], findings=[])
 
     # Filter to specific IDs if requested
@@ -902,116 +908,148 @@ async def llm_triage_findings(
         finding_id_set = set(request.finding_ids)
         findings = [f for f in findings if f.id in finding_id_set]
 
-    # Apply batch size limit to prevent rate limiting
+    # Apply batch size limit
     if len(findings) > request.max_findings:
         findings = findings[:request.max_findings]
 
-    # Initialize Claude SDK client
+    print(f"[LLM Triage] Processing {len(findings)} findings")
+
+    # Get API key from settings if available
+    api_key = None
     try:
-        client = anthropic.Anthropic()  # Uses Claude SDK auth
+        app_settings = await settings_service.get_settings()
+        provider_settings = app_settings.providers.get("anthropic")
+        if provider_settings and provider_settings.api_key:
+            api_key = provider_settings.api_key
     except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Claude SDK not available: {str(e)}. Make sure you're running via Claude Code."
-        )
+        print(f"[LLM Triage] Could not get API key from settings: {e}")
 
-    results = []
-    triaged_findings = []
-
-    for finding in findings:
-        # Build triage prompt
-        triage_prompt = f"""You are a security vulnerability triage expert. Analyze this finding and determine if it's a real security vulnerability.
-
-## Finding Details
-- **Title**: {finding.title}
-- **Severity**: {finding.severity}
-- **Type**: {finding.vulnerability_type}
-- **File**: {finding.file_path}:{finding.line_start}
-- **Description**: {finding.description}
-- **Code Snippet**:
-```
-{finding.code_snippet or 'N/A'}
-```
-
-## Your Task
-Analyze this finding and respond with a JSON object containing:
-1. `decision`: One of: "valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"
-   - valid_security_issue: Real exploitable vulnerability
-   - bug: Code bug but not security-relevant
-   - misconfiguration: Config issue, not code vulnerability
-   - hardening: Best practice suggestion, not actual vulnerability
-   - by_design: Intentional behavior, not a flaw
-   - speculative: Not enough evidence to determine
-2. `confidence`: 0-100 confidence in your decision
-3. `reasoning`: Array of reasons for your decision
-
-Consider:
-- Is the code actually reachable in production?
-- Can an attacker control the input?
-- Is there actual security impact?
-- Is this test/example code?
-
-Respond ONLY with valid JSON, no other text."""
-
+    # Try LLM triage if SDK is available
+    if TRIAGE_SDK_AVAILABLE:
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                timeout=60.0,  # 60 second timeout per finding
-                messages=[{"role": "user", "content": triage_prompt}]
+            # Convert findings to dicts for the triage service
+            findings_dicts = [f.model_dump() for f in findings]
+
+            print(f"[LLM Triage] Running LLM triage with Claude SDK...")
+            triage_result = await run_llm_triage(findings_dicts, api_key=api_key)
+
+            # Map decisions back to findings
+            decision_map = {d.finding_id: d for d in triage_result.decisions}
+
+            triaged_findings = []
+            results = []
+
+            for finding in findings:
+                decision = decision_map.get(finding.id)
+
+                if decision:
+                    # Map decision string to Disposition enum
+                    disposition_map = {
+                        "valid_security_issue": Disposition.VALID_SECURITY_ISSUE,
+                        "bug": Disposition.BUG,
+                        "misconfiguration": Disposition.MISCONFIGURATION,
+                        "hardening": Disposition.HARDENING,
+                        "by_design": Disposition.BY_DESIGN,
+                        "speculative": Disposition.SPECULATIVE,
+                    }
+                    finding.disposition = disposition_map.get(decision.decision, Disposition.SPECULATIVE)
+                    finding.classification_confidence = decision.confidence
+                    finding.reasoning = decision.reasoning
+
+                    results.append(LLMTriageResult(
+                        finding_id=finding.id,
+                        decision=decision.decision,
+                        confidence=decision.confidence,
+                        reasoning=decision.reasoning,
+                    ))
+                else:
+                    # No decision from LLM, mark as speculative
+                    finding.disposition = Disposition.SPECULATIVE
+                    finding.classification_confidence = 30
+                    finding.reasoning = ["No LLM triage decision received"]
+
+                    results.append(LLMTriageResult(
+                        finding_id=finding.id,
+                        decision="speculative",
+                        confidence=30,
+                        reasoning=["No LLM triage decision received"],
+                    ))
+
+                triaged_findings.append(finding)
+
+            # Update findings in orchestrator
+            orchestrator._findings[agent_id] = triaged_findings
+            print(f"[LLM Triage] Completed: {len(triaged_findings)} findings processed with LLM")
+
+            return LLMTriageResponse(
+                triaged_count=len(results),
+                results=results,
+                findings=triaged_findings,
             )
 
-            # Parse response
-            response_text = response.content[0].text.strip()
-            # Handle markdown code blocks
-            if response_text.startswith("```"):
-                response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
-                response_text = response_text.strip()
-
-            triage_result = json.loads(response_text)
-
-            decision = triage_result.get("decision", "speculative")
-            confidence = triage_result.get("confidence", 50)
-            reasoning = triage_result.get("reasoning", ["LLM triage completed"])
-
-            # Map decision to disposition
-            disposition_map = {
-                "valid_security_issue": Disposition.VALID_SECURITY_ISSUE,
-                "bug": Disposition.BUG,
-                "misconfiguration": Disposition.MISCONFIGURATION,
-                "hardening": Disposition.HARDENING,
-                "by_design": Disposition.BY_DESIGN,
-                "speculative": Disposition.SPECULATIVE,
-            }
-
-            finding.disposition = disposition_map.get(decision, Disposition.SPECULATIVE)
-            finding.classification_confidence = confidence
-            finding.reasoning = reasoning if isinstance(reasoning, list) else [reasoning]
-
-            results.append(LLMTriageResult(
-                finding_id=finding.id,
-                decision=decision,
-                confidence=confidence,
-                reasoning=finding.reasoning,
-            ))
-
         except Exception as e:
-            # On error, mark as speculative
-            finding.disposition = Disposition.SPECULATIVE
-            finding.reasoning = [f"Triage error: {str(e)}"]
-            results.append(LLMTriageResult(
-                finding_id=finding.id,
-                decision="speculative",
-                confidence=0,
-                reasoning=[f"Triage error: {str(e)}"],
-            ))
+            print(f"[LLM Triage] LLM triage failed, falling back to rule-based: {e}")
+            import traceback
+            traceback.print_exc()
 
+    # Fallback to rule-based triage
+    print(f"[LLM Triage] Using rule-based triage (SDK unavailable or LLM call failed)")
+
+    triaged_findings = []
+    results = []
+
+    for finding in findings:
+        should_filter, reason = _rule_based_triage(finding)
+
+        if should_filter:
+            finding.disposition = Disposition.HARDENING
+            finding.reasoning = [reason]
+            finding.classification_confidence = 80
+            decision = "hardening"
+        else:
+            file_path = (finding.file_path or "").lower()
+            title = (finding.title or "").lower()
+            description = (finding.description or "").lower()
+
+            high_risk_patterns = [
+                "sql injection", "command injection", "remote code execution",
+                "authentication bypass", "privilege escalation", "ssrf",
+                "path traversal", "file inclusion", "deserialization",
+            ]
+
+            is_high_risk = any(pattern in title or pattern in description
+                              for pattern in high_risk_patterns)
+
+            prod_paths = ["/app/", "/src/", "/lib/", "/core/", "/api/"]
+            is_prod_path = any(p in file_path for p in prod_paths)
+
+            if is_high_risk:
+                finding.disposition = Disposition.VALID_SECURITY_ISSUE
+                finding.classification_confidence = 90
+                finding.reasoning = ["High-risk vulnerability pattern (rule-based)", "Requires manual verification"]
+                decision = "valid_security_issue"
+            elif is_prod_path:
+                finding.disposition = Disposition.VALID_SECURITY_ISSUE
+                finding.classification_confidence = 75
+                finding.reasoning = ["Production code path (rule-based)", "Requires manual verification"]
+                decision = "valid_security_issue"
+            else:
+                finding.disposition = Disposition.SPECULATIVE
+                finding.classification_confidence = 50
+                finding.reasoning = ["Needs manual review (rule-based triage)"]
+                decision = "speculative"
+
+        results.append(LLMTriageResult(
+            finding_id=finding.id,
+            decision=decision,
+            confidence=finding.classification_confidence or 50,
+            reasoning=finding.reasoning or [],
+        ))
         triaged_findings.append(finding)
 
     # Update findings in orchestrator
     orchestrator._findings[agent_id] = triaged_findings
+    print(f"[LLM Triage] Completed: {len(triaged_findings)} findings processed (rule-based fallback)")
 
     return LLMTriageResponse(
         triaged_count=len(results),

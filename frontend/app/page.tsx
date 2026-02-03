@@ -717,6 +717,7 @@ export default function Home() {
 	                    <FindingsList
 	                      key={findingsMgmt.selectedFindingsAgentId || 'all'}
 	                      agentId={findingsMgmt.selectedFindingsAgentId}
+	                      allAgents={agentMgmt.agents}
 	                      findings={
 	                        findingsMgmt.selectedFindingsAgentId
 	                          ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
@@ -845,6 +846,7 @@ export default function Home() {
                   <FindingsList
                     key={findingsMgmt.selectedFindingsAgentId || 'all'}
                     agentId={findingsMgmt.selectedFindingsAgentId}
+                    allAgents={agentMgmt.agents}
                     findings={
                       findingsMgmt.selectedFindingsAgentId
                         ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)

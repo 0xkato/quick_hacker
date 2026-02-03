@@ -8,7 +8,7 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type FindingClassification = 'security_issue' | 'bug' | 'misconfiguration' | 'hardening';
 export type FixType = 'code' | 'config' | 'docs' | 'warning';
 export type AgentStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
-export type AgentType = 'deep_audit' | 'custom';
+export type AgentType = 'deep_audit' | 'custom' | 'triage';
 export type ScanTier = 'quick' | 'medium' | 'advanced' | 'pro' | 'ultra' | 'evil';
 export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'codex_cli';
 

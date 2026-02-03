@@ -61,6 +61,7 @@ const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['valid_security_issue', 'b
 interface FindingsListProps {
   findings: Finding[];
   agentId?: string | null;
+  allAgents?: Array<{ id: string; status: string; agent_type: string }>;  // To check triage agent status
   onFindingClick?: (finding: Finding) => void;
   onNavigateToFile?: (finding: Finding) => void;
   onFindingsUpdated?: (findings: Finding[]) => void;
@@ -189,12 +190,99 @@ function FindingCard({ finding, onClick, onNavigateToFile }: FindingCardProps) {
   );
 }
 
-export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFile, onFindingsUpdated }: FindingsListProps) {
+// localStorage key for tracking pending triage
+const TRIAGE_STORAGE_KEY = 'pendingTriage';
+const TRIAGE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour max triage time
+
+interface StoredTriageState {
+  agentId: string;
+  startedAt: number;
+  triageAgentId?: string;
+}
+
+function getStoredTriageState(): StoredTriageState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem(TRIAGE_STORAGE_KEY);
+    if (!stored) return null;
+    const state = JSON.parse(stored) as StoredTriageState;
+    // Expire if older than timeout
+    if (Date.now() - state.startedAt > TRIAGE_TIMEOUT_MS) {
+      localStorage.removeItem(TRIAGE_STORAGE_KEY);
+      return null;
+    }
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredTriageState(agentId: string, triageAgentId?: string): void {
+  if (typeof window === 'undefined') return;
+  const state: StoredTriageState = { agentId, startedAt: Date.now(), triageAgentId };
+  localStorage.setItem(TRIAGE_STORAGE_KEY, JSON.stringify(state));
+}
+
+function clearStoredTriageState(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(TRIAGE_STORAGE_KEY);
+}
+
+export function FindingsList({ findings, agentId, allAgents, onFindingClick, onNavigateToFile, onFindingsUpdated }: FindingsListProps) {
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
   const [showReportView, setShowReportView] = useState(false);
   const [isTriaging, setIsTriaging] = useState(false);
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
   const [showTriageModal, setShowTriageModal] = useState(false);
+  const [triageAgentId, setTriageAgentId] = useState<string | null>(null);
+
+  // Check for pending triage on mount and when agents change
+  useEffect(() => {
+    const stored = getStoredTriageState();
+    if (!stored || stored.agentId !== agentId) {
+      // No pending triage for this agent
+      return;
+    }
+
+    // If we have a triage agent ID, check its status
+    if (stored.triageAgentId) {
+      const triageAgent = allAgents?.find(a => a.id === stored.triageAgentId);
+      if (triageAgent) {
+        if (triageAgent.status === 'running' || triageAgent.status === 'pending') {
+          setIsTriaging(true);
+          setTriageAgentId(stored.triageAgentId);
+        } else if (triageAgent.status === 'completed' || triageAgent.status === 'failed') {
+          // Triage finished while we were away
+          clearStoredTriageState();
+          setIsTriaging(false);
+          setTriageAgentId(null);
+          if (triageAgent.status === 'completed') {
+            setTriageMessage('Triage completed');
+          } else {
+            setTriageMessage('Triage failed');
+          }
+        }
+      } else {
+        // Triage agent not in list - might be loading, keep showing spinner
+        setIsTriaging(true);
+      }
+    } else {
+      // No triage agent ID yet - triage was started but hasn't returned
+      // Check if any triage agent is running for this repo
+      const runningTriageAgent = allAgents?.find(
+        a => a.agent_type === 'triage' && (a.status === 'running' || a.status === 'pending')
+      );
+      if (runningTriageAgent) {
+        setIsTriaging(true);
+        setTriageAgentId(runningTriageAgent.id);
+        // Update stored state with the triage agent ID
+        setStoredTriageState(agentId, runningTriageAgent.id);
+      } else {
+        // No running triage found - still waiting for API response, keep spinner
+        setIsTriaging(true);
+      }
+    }
+  }, [agentId, allAgents]);
 
   const handleStartTriage = async (config: TriageConfig) => {
     if (!agentId) return;
@@ -203,8 +291,16 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
     setIsTriaging(true);
     setTriageMessage(null);
 
+    // Store triage state so we can recover if user navigates away
+    setStoredTriageState(agentId);
+
     try {
       const result = await agents.llmTriage(agentId, undefined, config);
+
+      // Update stored state with triage agent ID if provided
+      if (result.triage_agent_id) {
+        setTriageAgentId(result.triage_agent_id);
+      }
 
       // Count decisions
       const validCount = result.results.filter(r => r.decision === 'valid_security_issue').length;
@@ -220,6 +316,9 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
       if (onFindingsUpdated) {
         onFindingsUpdated(result.findings);
       }
+
+      // Clear stored state on success
+      clearStoredTriageState();
     } catch (error: unknown) {
       console.error('LLM Triage failed:', error);
       let errorMsg = 'Triage failed. ';
@@ -229,8 +328,12 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
         errorMsg += 'Check console for details.';
       }
       setTriageMessage(errorMsg);
+
+      // Clear stored state on failure
+      clearStoredTriageState();
     } finally {
       setIsTriaging(false);
+      setTriageAgentId(null);
     }
   };
 

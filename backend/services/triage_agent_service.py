@@ -267,6 +267,7 @@ After examining all findings, output your decisions as a JSON array."""
 
         response_parts: list[str] = []
         tool_calls: list[dict] = []
+        pending_tools: dict[str, tuple[str, dict, float]] = {}  # tool_id -> (name, input, start_time)
 
         async for message in client.receive_response():
             msg_type = message.__class__.__name__
@@ -280,29 +281,50 @@ After examining all findings, output your decisions as a JSON array."""
                         if text:
                             response_parts.append(text)
                     elif block_type == "ToolUseBlock":
+                        import time
                         tool_name = getattr(block, "name", "unknown")
                         tool_input = getattr(block, "input", {})
                         tool_id = getattr(block, "id", "")
 
-                        # Log tool use
-                        observability_service.log_tool_execution(
-                            agent_id=agent_id,
-                            tool_name=tool_name,
-                            tool_call_id=tool_id,
-                            arguments=tool_input,
-                            result=None,
-                            success=True,
-                            duration_ms=0,
-                        )
+                        # Track pending tool for when result comes back
+                        pending_tools[tool_id] = (tool_name, tool_input, time.time())
                         tool_calls.append({
                             "name": tool_name,
                             "input": tool_input,
+                            "id": tool_id,
                         })
                         print(f"[TriageAgent] Tool call: {tool_name}({tool_input.get('file_path', '')})")
 
             elif msg_type == "ToolResultMessage":
-                # Tool result received
-                pass
+                # Tool result received - log the execution with actual result
+                import time
+                content = getattr(message, "content", [])
+                for block in content:
+                    block_type = block.__class__.__name__
+                    if block_type == "ToolResultBlock":
+                        tool_use_id = getattr(block, "tool_use_id", "")
+                        is_error = getattr(block, "is_error", False)
+                        result_content = getattr(block, "content", "")
+
+                        # Get pending tool info
+                        if tool_use_id in pending_tools:
+                            tool_name, tool_input, start_time = pending_tools.pop(tool_use_id)
+                            duration_ms = int((time.time() - start_time) * 1000)
+
+                            # Truncate result for logging (keep first 500 chars)
+                            result_summary = str(result_content)[:500] if result_content else "No result"
+
+                            observability_service.log_tool_execution(
+                                agent_id=agent_id,
+                                tool_name=tool_name,
+                                tool_call_id=tool_use_id,
+                                arguments=tool_input,
+                                result=result_summary,
+                                success=not is_error,
+                                duration_ms=duration_ms,
+                                error_message=str(result_content) if is_error else None,
+                            )
+                            print(f"[TriageAgent] Tool result: {tool_name} ({'error' if is_error else 'success'}, {duration_ms}ms)")
 
         # Log final response
         full_response = "".join(response_parts)

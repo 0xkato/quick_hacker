@@ -469,3 +469,195 @@ class WaveDispatcher:
         else:
             task.constraints = f"FOUNDATION_CONTEXT:\n{context_text}"
         return task
+
+    # Devil's Advocate challenge templates
+    DEVILS_ADVOCATE_CHALLENGES = {
+        "quick_dismissal": [
+            "Is there ANY alternative path that could make this exploitable?",
+            "What would need to be true for this to BE vulnerable?",
+            "Did you consider what happens if the attacker controls a different input?",
+            "Think broader - what assumptions might not hold?",
+            "Try to prove yourself wrong before concluding.",
+        ],
+        "incomplete_analysis": [
+            "Did you check all entry points to this code?",
+            "Are there indirect paths through wrapper functions?",
+            "What about generated code or config files?",
+            "Did you trace ALL the way from user input to sink?",
+        ],
+        "missing_context": [
+            "How does this code fit into the larger system?",
+            "What are the trust boundaries around this component?",
+            "Is this code reachable by the attacker profile in our threat model?",
+        ],
+    }
+
+    def should_challenge_result(
+        self,
+        result: SubagentResult,
+        analysis_time_seconds: float,
+        signal_severity: str,
+    ) -> tuple[bool, str]:
+        """Determine if a specialist result should be challenged.
+
+        Args:
+            result: The result from the specialist agent
+            analysis_time_seconds: How long the analysis took
+            signal_severity: Severity of the signal being analyzed
+
+        Returns:
+            Tuple of (should_challenge, challenge_type)
+        """
+        # Quick dismissals of high-severity signals warrant challenge
+        if result.status == "completed" and analysis_time_seconds < 30:
+            if signal_severity in ("CRITICAL", "HIGH"):
+                return True, "quick_dismissal"
+
+        # Parse the output to check for "NOT_VULNERABLE" with low confidence
+        # This would need to read the actual output file
+
+        return False, ""
+
+    def generate_challenge_prompt(self, challenge_type: str, original_task: DispatchTask) -> str:
+        """Generate a Devil's Advocate challenge prompt.
+
+        Args:
+            challenge_type: Type of challenge (quick_dismissal, incomplete_analysis, etc.)
+            original_task: The original task that was challenged
+
+        Returns:
+            Challenge prompt string
+        """
+        challenges = self.DEVILS_ADVOCATE_CHALLENGES.get(challenge_type, [])
+        if not challenges:
+            challenges = self.DEVILS_ADVOCATE_CHALLENGES["quick_dismissal"]
+
+        challenge_questions = "\n".join(f"- {q}" for q in challenges)
+
+        return f"""## Devil's Advocate Challenge
+
+Your previous analysis concluded quickly. Before accepting that conclusion, consider:
+
+{challenge_questions}
+
+**Original Task:** {original_task.objective}
+**Scope:** {original_task.scope}
+
+Please re-examine with these questions in mind. If your conclusion remains the same after thorough consideration, explain why each challenge question doesn't change your assessment.
+
+Remember: False negatives (missing real bugs) are worse than false positives.
+"""
+
+    async def dispatch_with_challenge(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext] = None,
+        signal_severity: str = "MEDIUM",
+        max_challenges: int = 1,
+    ) -> tuple[SubagentResult, list[SubagentResult]]:
+        """Dispatch a task with potential Devil's Advocate challenge.
+
+        Args:
+            task: The task to dispatch
+            foundation_context: Optional Foundation Context
+            signal_severity: Severity of the signal being analyzed
+            max_challenges: Maximum number of challenge rounds
+
+        Returns:
+            Tuple of (final_result, challenge_results)
+        """
+        challenge_results = []
+
+        # Initial dispatch
+        start_time = datetime.utcnow()
+        result = await self._spawn_subagent(task, foundation_context)
+        analysis_time = (datetime.utcnow() - start_time).total_seconds()
+
+        # Check if we should challenge
+        challenges_issued = 0
+        while challenges_issued < max_challenges:
+            should_challenge, challenge_type = self.should_challenge_result(
+                result, analysis_time, signal_severity
+            )
+
+            if not should_challenge:
+                break
+
+            # Generate challenge task
+            challenge_prompt = self.generate_challenge_prompt(challenge_type, task)
+            challenge_task = DispatchTask(
+                task_id=f"{task.task_id}-challenge-{challenges_issued}",
+                agent_type=task.agent_type,
+                objective=f"Re-examine: {task.objective}",
+                scope=task.scope,
+                inputs=task.inputs,
+                deliverable=f"{task.deliverable}.challenge{challenges_issued}",
+                constraints=f"{challenge_prompt}\n\n{task.constraints}",
+                time_budget=task.time_budget,
+            )
+
+            # Dispatch challenge
+            start_time = datetime.utcnow()
+            challenge_result = await self._spawn_subagent(challenge_task, foundation_context)
+            analysis_time = (datetime.utcnow() - start_time).total_seconds()
+
+            challenge_results.append(challenge_result)
+            result = challenge_result
+            challenges_issued += 1
+
+        return result, challenge_results
+
+    async def dispatch_specialist_wave_with_challenges(
+        self,
+        wave_plan: WavePlan,
+        foundation_context: Optional[FoundationContext] = None,
+        signal_severities: Optional[dict[str, str]] = None,
+    ) -> WaveResult:
+        """Dispatch a wave of specialist tasks with Devil's Advocate challenges.
+
+        Args:
+            wave_plan: Wave of tasks to dispatch
+            foundation_context: Foundation Context
+            signal_severities: Map of task_id -> severity for challenge decisions
+
+        Returns:
+            WaveResult including any challenge iterations
+        """
+        signal_severities = signal_severities or {}
+        started_at = datetime.utcnow()
+
+        # Create coroutines for all tasks with potential challenges
+        async def dispatch_task_with_challenge(task: DispatchTask):
+            severity = signal_severities.get(task.task_id, "MEDIUM")
+            final_result, challenges = await self.dispatch_with_challenge(
+                task, foundation_context, severity
+            )
+            return final_result
+
+        tasks = [dispatch_task_with_challenge(task) for task in wave_plan.tasks]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        subagent_results = []
+        for i, result in enumerate(results):
+            task = wave_plan.tasks[i]
+            if isinstance(result, Exception):
+                subagent_results.append(SubagentResult(
+                    task_id=task.task_id,
+                    agent_type=task.agent_type,
+                    status="failed",
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    error=str(result),
+                ))
+            else:
+                subagent_results.append(result)
+
+        return WaveResult(
+            wave_id=wave_plan.wave_id,
+            tasks=wave_plan.tasks,
+            results=subagent_results,
+            started_at=started_at,
+            completed_at=datetime.utcnow(),
+            all_succeeded=all(r.status == "completed" for r in subagent_results),
+        )

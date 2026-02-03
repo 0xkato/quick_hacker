@@ -328,6 +328,10 @@ class AgentOrchestrator:
         # Store cache on agent for potential reuse in _run_sdk_agent
         agent._tool_cache = cache
 
+        # Mark if this agent should use Overseer mode (for _run_agent to check)
+        if use_overseer or scan_tier in OVERSEER_SCAN_TIERS:
+            agent.use_overseer = True
+
         async with self._lock:
             self._agents[agent.id] = agent
             self._findings[agent.id] = []

@@ -14,7 +14,7 @@ import {
   Filter,
   Loader2,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { agents } from '@/lib/api';
 import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
@@ -201,7 +201,7 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
     setTriageMessage(null);
 
     try {
-      const result = await api.agents.quickTriage(agentId);
+      const result = await agents.quickTriage(agentId);
       setTriageMessage(`Triaged ${result.triaged_count} findings, filtered ${result.filtered_count} as non-security`);
 
       // Update findings in parent

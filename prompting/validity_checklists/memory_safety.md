@@ -172,7 +172,12 @@ You are analyzing potential memory safety vulnerabilities in C, C++, or Rust cod
 - Check for overflow before arithmetic operations
 - Use safe integer libraries (SafeInt, checked arithmetic)
 
-## Common False Positives
+## Common False Positives - CRITICAL: REJECT THESE
+
+**CRITICAL RULE: If bounds checking or length validation EXISTS, the finding is SPECULATIVE**
+
+An attack scenario that says "if attacker bypasses the length check" or "if validation is circumvented"
+is SPECULATIVE because the control EXISTS. You cannot assume controls can be bypassed.
 
 **Trap 1: Bounded operations that look unbounded**
 ```c
@@ -180,8 +185,27 @@ char buffer[256];
 strncpy(buffer, user_input, sizeof(buffer) - 1);  // Bounded, dataflow_evidenced = PROVEN_FALSE
 buffer[255] = '\0';
 ```
+→ REJECT: strncpy with size limit = NOT a buffer overflow
 
-**Trap 2: Rust safe abstractions**
+**Trap 2: Length validation before copy**
+```c
+#define MAX_SIZE 256
+if (strlen(input) >= MAX_SIZE) {
+    return -1;  // Rejects oversized input
+}
+strcpy(buffer, input);  // Safe because length is validated
+```
+→ REJECT: Length is checked before copy. Not exploitable.
+
+**Trap 3: Size parameter from constant**
+```c
+#define CONFIG_SHELL_CMD_BUFF_SIZE 256
+char cmd[CONFIG_SHELL_CMD_BUFF_SIZE];
+strncpy(cmd, user_input, CONFIG_SHELL_CMD_BUFF_SIZE - 1);
+```
+→ REJECT: Size limit is enforced by constant. "If attacker bypasses length" is SPECULATIVE.
+
+**Trap 4: Rust safe abstractions**
 ```rust
 let value = vec.get(user_index);  // Returns Option, safe
 // vs.
@@ -189,6 +213,40 @@ let value = vec[user_index];      // Panics on out-of-bounds, still memory-safe
 // vs.
 let value = unsafe { vec.get_unchecked(user_index) };  // Unsafe, potential vulnerability
 ```
+→ REJECT: Only get_unchecked is potentially vulnerable
+
+**Trap 5: snprintf with buffer size**
+```c
+char buffer[100];
+snprintf(buffer, sizeof(buffer), "User: %s", input);  // Cannot overflow
+```
+→ REJECT: snprintf with size = bounded, NOT a vulnerability
+
+**Trap 6: Explicit bounds check before array access**
+```c
+if (index < 0 || index >= ARRAY_SIZE) {
+    return ERROR_OUT_OF_BOUNDS;
+}
+array[index] = value;  // Safe - bounds checked above
+```
+→ REJECT: Bounds check exists and protects the access
+
+## When IS It a Real Vulnerability?
+
+Only mark as VALID_SECURITY_ISSUE if:
+1. NO bounds checking anywhere in the flow
+2. NO length validation before the operation
+3. Size comes from attacker-controlled input without validation
+4. The unsafe operation is reachable from external input
+
+Example of REAL vulnerability:
+```c
+void process(char *user_input) {
+    char buffer[64];
+    strcpy(buffer, user_input);  // NO bounds check, NO length validation
+}
+```
+This IS vulnerable because there is NO protection.
 
 ## Evidence Citation Format
 

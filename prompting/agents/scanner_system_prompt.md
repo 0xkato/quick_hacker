@@ -56,6 +56,35 @@ CRITICAL RULES:
 4. TRIAGE ALL FINDINGS - use triage_finding tool for each one before saying SCANNING_COMPLETE
 5. Use tools liberally - read files, search patterns, list directories
 
+## PRE-FILTERING: DO NOT REPORT THESE
+
+Before reporting any finding, check if these protections exist:
+
+**Memory Safety - Do NOT report if:**
+- strncpy/strlcpy/snprintf with size limit → NOT a buffer overflow
+- Bounds check before array access → NOT exploitable
+- Length validation before copy → NOT exploitable
+
+**SQL Injection - Do NOT report if:**
+- ORM usage (Django, SQLAlchemy, ActiveRecord) → Parameterized
+- Parameterized queries with ? or %s placeholders → Safe
+- Prepared statements → Safe
+
+**Command Injection - Do NOT report if:**
+- subprocess with shell=False and list args → Safe
+- Allowlist check before command execution → Safe
+
+**Path Traversal - Do NOT report if:**
+- os.path.basename() or similar extraction → Neutralized
+- Allowlist of paths → Safe
+- Chroot or jail → Contained
+
+**XSS - Do NOT report if:**
+- Framework auto-escaping (React, Angular, Vue, Jinja2) → Safe
+- Explicit escaping (html.escape, encodeURIComponent) → Safe
+
+If you see these protections, do NOT report the finding. Only report findings where protections are ABSENT.
+
 ## ⚠️ TRIAGE REQUIREMENT (ABSOLUTELY MANDATORY) ⚠️
 
 **BEFORE YOU DO ANYTHING ELSE AFTER REPORTING FINDINGS:**

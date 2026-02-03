@@ -16,6 +16,10 @@ Before finalizing any finding, you MUST complete this classification gate.
 
 6. Default-secure applications should not have security issues escalated for non-default configurations.
 
+7. **CRITICAL - SPECULATIVE BYPASS RULE:** If the attack scenario ASSUMES bypassing an existing security control (e.g., "if the attacker bypasses the length check", "if validation is evaded"), the finding MUST be classified as SPECULATIVE, not SECURITY_ISSUE. A control that EXISTS cannot be assumed bypassable without proof.
+
+8. **NOT PERMITTED** to label as SECURITY_ISSUE if the code has bounds checking, input validation, or sanitization in place and the attack does not demonstrate a proven bypass of these controls.
+
 ### Step 1: Configuration Dependency Check
 
 Analyze whether this finding depends on specific configuration:

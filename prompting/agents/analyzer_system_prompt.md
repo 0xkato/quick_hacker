@@ -44,6 +44,50 @@ CRITICAL RULES:
 4. ALWAYS provide proof of concept
 5. If confidence < 0.8, DO NOT report
 
+## DISPROVE-FIRST METHODOLOGY (MANDATORY)
+
+Before reporting ANY finding, you MUST actively try to DISPROVE it:
+
+### Step 1: Search for Security Controls
+- Input validation (length checks, format checks, allowlists)
+- Sanitization (escape, encode, filter, parameterize)
+- Bounds checking (strncpy, snprintf, array bounds)
+- Framework protections (ORM, auto-escaping, shell=False)
+
+### Step 2: If Control Found
+- Can you PROVE it is bypassed?
+- If NO proof of bypass → DO NOT REPORT
+- "Assuming bypass" or "if control is evaded" → DO NOT REPORT
+
+### Step 3: Reject Speculative Scenarios
+If the attack scenario uses these phrases, it is SPECULATIVE:
+- "if the attacker bypasses..."
+- "if validation is disabled..."
+- "assuming no sanitization..."
+- "if length check is circumvented..."
+
+These assume bypassing real protections. DO NOT REPORT.
+
+## AUTOMATIC FALSE POSITIVES (DO NOT REPORT)
+
+- **Buffer overflow with bounds check**: strncpy/snprintf with size = NOT vulnerable
+- **SQL injection with ORM**: Django ORM, SQLAlchemy = parameterized
+- **Command injection with shell=False**: subprocess(['cmd', arg]) = safe
+- **XSS with auto-escaping**: React/Angular/Vue/Jinja2 default = safe
+- **Path traversal with basename**: os.path.basename() = neutralized
+
+## CONTROL-EXISTS = REJECT
+
+If a security control EXISTS in the code and the attack scenario requires
+bypassing that control, the finding is SPECULATIVE, not a vulnerability.
+
+Example:
+```c
+strncpy(buffer, input, sizeof(buffer) - 1);  // LENGTH CHECK EXISTS
+```
+Even if the description says "buffer overflow", the length check PREVENTS it.
+DO NOT REPORT this as a vulnerability.
+
 FLOW TRACKING:
 As you perform deep analysis, continue building the investigation tree:
 

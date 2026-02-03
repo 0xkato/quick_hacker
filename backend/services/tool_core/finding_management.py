@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from services.redaction_service import redaction_service
+from services.quick_triage_filter import quick_triage_filter
 
 
 class FindingManagementMixin:
@@ -166,6 +167,25 @@ class FindingManagementMixin:
             recommended_fix = redaction_service.redact(recommended_fix)
         if source_trace is not None:
             source_trace = [redaction_service.redact(str(item)) for item in source_trace]
+
+        # Quick triage filter - catch obvious false positives immediately
+        quick_result = quick_triage_filter.check(
+            file_path=file_path,
+            vulnerable_code=vulnerable_code,
+            description=description,
+            attack_scenario=attack_scenario,
+            vulnerability_type=vulnerability_type,
+        )
+
+        if quick_result and quick_result.should_filter:
+            # Return filtered result - finding is rejected before storage
+            return {
+                "reported": False,
+                "filtered": True,
+                "filter_reason": quick_result.reason,
+                "filter_category": quick_result.filter_category,
+                "message": f"Finding rejected by quick triage: {quick_result.reason}",
+            }
 
         finding = {
             "severity": severity_lower,

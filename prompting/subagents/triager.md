@@ -71,6 +71,18 @@ Signal is likely false positive:
 - Strong sanitization in place
 - Dead code / test code
 - Not reachable from user input
+- **Bounds checking or length validation exists**
+- **Framework provides automatic protection**
+- **Attack assumes bypassing existing control**
+
+### CRITICAL: Speculative Bypass = DISMISS
+If the signal's attack scenario says:
+- "if attacker bypasses the length check..."
+- "if validation is disabled..."
+- "if sanitization is evaded..."
+
+And the control ACTUALLY EXISTS in the code → DISMISS
+A control that exists cannot be assumed bypassable without proof.
 
 ## Output Format
 

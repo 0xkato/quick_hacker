@@ -63,12 +63,34 @@ All must be true:
 - [ ] Business impact is real
 
 ### Common False Positive Patterns
-Watch for these:
+Watch for these and DISMISS if found:
 - Sink is in dead/unreachable code
 - Input is from trusted internal source
 - Type coercion prevents exploitation
 - Sanitization happens but wasn't visible
 - Framework provides implicit protection
+
+### CRITICAL: Speculative Bypass Pattern (REJECT IMMEDIATELY)
+If the attack scenario ASSUMES bypassing an existing security control, DISMISS:
+- "if attacker bypasses the length check" but length check EXISTS → DISMISS
+- "if validation is disabled" but validation EXISTS → DISMISS
+- "if sanitization can be evaded" but sanitization EXISTS → DISMISS
+
+**RULE:** A control that EXISTS in the code cannot be assumed bypassable.
+You must PROVE a bypass, not assume one.
+
+Examples to DISMISS:
+```c
+// Length check exists - NOT a buffer overflow
+strncpy(buf, input, sizeof(buf) - 1);
+
+// Bounds check exists - NOT exploitable
+if (index >= ARRAY_SIZE) return ERROR;
+array[index] = value;
+
+// ORM exists - NOT SQL injection
+User.objects.filter(id=user_id)
+```
 
 ## Output Format
 

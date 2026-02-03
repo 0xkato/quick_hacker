@@ -57,6 +57,36 @@ Before finalizing ANY finding as VALIDATED_VULNERABILITY, you MUST attempt to di
 
 ---
 
+### 5.5 CRITICAL: Does the attack scenario ASSUME bypassing existing controls?
+
+**This is the #1 source of false positives.** If the attack says:
+- "if the attacker bypasses the length check..."
+- "if validation is disabled..."
+- "assuming sanitization can be evaded..."
+- "if the bounds check is circumvented..."
+
+Then the attack is SPECULATIVE because:
+1. The control EXISTS in the code
+2. You cannot ASSUME it can be bypassed
+3. You must PROVE it can be bypassed, not assume
+
+**EXAMPLE FALSE POSITIVE:**
+```c
+strncpy(buffer, input, BUFFER_SIZE - 1);  // LENGTH CHECK EXISTS
+```
+Finding says: "Buffer overflow if attacker provides input longer than buffer"
+WRONG: The strncpy with size limit PREVENTS overflow. This is NOT a vulnerability.
+
+**RULE:** If a security control exists in the code, you must either:
+1. PROVE the control can be bypassed (show the bypass technique), OR
+2. Mark the finding as SPECULATIVE or BY_DESIGN
+
+You CANNOT mark as VALID_SECURITY_ISSUE if you're assuming bypass of an existing control.
+
+**If attack assumes bypassing an existing control**: Downgrade to SPECULATIVE
+
+---
+
 ### 6. Is there a safer interpretation?
 - [ ] I have considered alternative interpretations of the code behavior
 - [ ] I have checked for:

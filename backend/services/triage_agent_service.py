@@ -165,10 +165,11 @@ START NOW: Call get_next_finding to begin."""
 
 @dataclass
 class TriageState:
-    """Mutable state for iterative triage."""
+    """Mutable state for iterative triage, persisted to file for subprocess access."""
     findings: list[Finding]
     current_index: int = 0
     decisions: list[TriageDecision] = field(default_factory=list)
+    state_file: str = ""  # Path to state file for subprocess communication
 
     def get_next(self) -> Finding | None:
         if self.current_index < len(self.findings):
@@ -179,6 +180,55 @@ class TriageState:
     def submit(self, decision: TriageDecision) -> None:
         self.decisions.append(decision)
         self.current_index += 1
+
+    def save_to_file(self) -> None:
+        """Save state to file for subprocess access."""
+        if not self.state_file:
+            return
+        state_data = {
+            "current_index": self.current_index,
+            "total_findings": len(self.findings),
+            "findings": [
+                {
+                    "id": f.id,
+                    "title": f.title,
+                    "severity": f.severity.value if hasattr(f.severity, 'value') else str(f.severity),
+                    "vulnerability_type": f.vulnerability_type,
+                    "file_path": f.file_path,
+                    "line_start": f.line_start,
+                    "line_end": f.line_end,
+                    "description": f.description,
+                    "code_snippet": (f.code_snippet[:500] if f.code_snippet else None),
+                }
+                for f in self.findings
+            ],
+            "decisions": [
+                {
+                    "finding_id": d.finding_id,
+                    "decision": d.decision,
+                    "confidence": d.confidence,
+                    "reasoning": d.reasoning,
+                }
+                for d in self.decisions
+            ],
+        }
+        Path(self.state_file).write_text(json.dumps(state_data, indent=2))
+
+    def load_decisions_from_file(self) -> None:
+        """Load decisions back from file after subprocess completes."""
+        if not self.state_file or not Path(self.state_file).exists():
+            return
+        state_data = json.loads(Path(self.state_file).read_text())
+        self.current_index = state_data.get("current_index", 0)
+        self.decisions = [
+            TriageDecision(
+                finding_id=d["finding_id"],
+                decision=d["decision"],
+                confidence=d["confidence"],
+                reasoning=d["reasoning"],
+            )
+            for d in state_data.get("decisions", [])
+        ]
 
 
 class TriageAgent:
@@ -232,148 +282,6 @@ class TriageAgent:
             self.on_message(WSMessage(type=msg_type, agent_id=self.id, data=data or {}))
 
 
-def _create_triage_tools(state: TriageState, repo_path: str):
-    """Create MCP-style tools for iterative triage."""
-
-    async def get_next_finding(args: dict) -> dict:
-        """Get the next finding to triage."""
-        finding = state.get_next()
-        if finding is None:
-            return {
-                "status": "complete",
-                "message": "No more findings to triage",
-                "triaged_count": len(state.decisions),
-            }
-
-        return {
-            "status": "pending",
-            "finding_number": state.current_index + 1,
-            "total_findings": len(state.findings),
-            "finding": {
-                "id": finding.id,
-                "title": finding.title,
-                "severity": finding.severity,
-                "vulnerability_type": finding.vulnerability_type,
-                "file_path": finding.file_path,
-                "line_start": finding.line_start,
-                "line_end": finding.line_end,
-                "description": finding.description,
-                "code_snippet": finding.code_snippet[:500] if finding.code_snippet else None,
-            }
-        }
-
-    async def read_file(args: dict) -> dict:
-        """Read file content for verification."""
-        file_path = args.get("file_path", "")
-
-        # Resolve relative to repo
-        if not file_path.startswith("/"):
-            full_path = Path(repo_path) / file_path
-        else:
-            full_path = Path(file_path)
-
-        try:
-            if not full_path.exists():
-                return {"error": f"File not found: {file_path}"}
-
-            content = full_path.read_text(errors="replace")
-
-            # Limit content size
-            if len(content) > 10000:
-                content = content[:10000] + "\n... [truncated]"
-
-            return {
-                "file_path": str(file_path),
-                "content": content,
-                "line_count": content.count("\n") + 1,
-            }
-        except Exception as e:
-            return {"error": f"Failed to read file: {e}"}
-
-    async def submit_decision(args: dict) -> dict:
-        """Submit triage decision for current finding."""
-        finding_id = args.get("finding_id", "")
-        decision = args.get("decision", "speculative")
-        confidence = args.get("confidence", 50)
-        reasoning = args.get("reasoning", [])
-
-        if isinstance(reasoning, str):
-            reasoning = [reasoning]
-
-        # Validate decision
-        valid_decisions = ["valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"]
-        if decision not in valid_decisions:
-            return {"error": f"Invalid decision: {decision}. Must be one of: {valid_decisions}"}
-
-        # Record decision
-        state.submit(TriageDecision(
-            finding_id=finding_id,
-            decision=decision,
-            confidence=confidence,
-            reasoning=reasoning,
-        ))
-
-        remaining = len(state.findings) - state.current_index
-        return {
-            "status": "recorded",
-            "finding_id": finding_id,
-            "decision": decision,
-            "remaining_findings": remaining,
-            "message": f"Decision recorded. {remaining} findings remaining." if remaining > 0 else "All findings triaged!",
-        }
-
-    # Return tools in MCP format
-    return {
-        "get_next_finding": {
-            "fn": get_next_finding,
-            "schema": {
-                "name": "get_next_finding",
-                "description": "Get the next finding to triage. Returns finding details or 'complete' status when done.",
-                "input_schema": {"type": "object", "properties": {}, "required": []},
-            }
-        },
-        "read_file": {
-            "fn": read_file,
-            "schema": {
-                "name": "read_file",
-                "description": "Read file content to verify the finding. Use the file_path from the finding.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to the file to read"}
-                    },
-                    "required": ["file_path"],
-                },
-            }
-        },
-        "submit_decision": {
-            "fn": submit_decision,
-            "schema": {
-                "name": "submit_decision",
-                "description": "Submit your triage decision for the current finding.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "finding_id": {"type": "string", "description": "The ID of the finding being triaged"},
-                        "decision": {
-                            "type": "string",
-                            "enum": ["valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"],
-                            "description": "Your triage decision"
-                        },
-                        "confidence": {"type": "integer", "minimum": 0, "maximum": 100, "description": "Confidence in decision (0-100)"},
-                        "reasoning": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of reasons for your decision"
-                        },
-                    },
-                    "required": ["finding_id", "decision", "reasoning"],
-                },
-            }
-        },
-    }
-
-
 async def run_triage_agent(
     findings: list[Finding],
     repo_id: str,
@@ -385,15 +293,18 @@ async def run_triage_agent(
 ) -> tuple[TriageAgent, TriageAgentResult]:
     """Run iterative triage agent that processes findings one at a time.
 
+    Uses Claude SDK with file-based state for subprocess communication.
+
     Returns:
         Tuple of (agent, result) - agent can be used for tracking in UI
     """
     import os
     import time
+    import tempfile
 
     # Check SDK availability
     try:
-        from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+        from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, tool, create_sdk_mcp_server
     except ImportError:
         raise RuntimeError("Claude SDK not installed")
 
@@ -411,14 +322,19 @@ async def run_triage_agent(
     agent.started_at = datetime.utcnow()
     agent.broadcast(WSMessageType.AGENT_STATUS, {"agent": agent.to_schema().model_dump()})
 
-    print(f"[TriageAgent] Created agent {agent_id} for {len(findings)} findings (iterative mode)")
+    print(f"[TriageAgent] Created agent {agent_id} for {len(findings)} findings (SDK mode)")
 
     # Set up observability
     observability_service.set_broadcast_callback(on_message)
 
-    # Create triage state and tools
-    state = TriageState(findings=findings)
-    tools = _create_triage_tools(state, repo_path)
+    # Create state file for subprocess communication
+    state_file = tempfile.mktemp(suffix=".json", prefix="triage_state_")
+    print(f"[TriageAgent] State file: {state_file}")
+
+    # Create initial state and write to file
+    state = TriageState(findings=findings, state_file=state_file)
+    state.save_to_file()
+    print(f"[TriageAgent] Saved {len(findings)} findings to state file")
 
     # Build auth
     env: dict[str, str] = {}
@@ -445,151 +361,163 @@ async def run_triage_agent(
             env["ANTHROPIC_API_KEY"] = resolved_key
         print(f"[TriageAgent] Using API key")
 
-    # Create MCP server using SDK's tool decorator pattern
-    from claude_agent_sdk import tool, create_sdk_mcp_server
+    # Create SDK tools that read/write state from file
+    # These need to be module-level or use file I/O (not closures to in-memory state)
+    # because they run in the SDK's MCP server process
 
-    # Build tool handlers from our tools dict
-    tool_handlers = {name: info["fn"] for name, info in tools.items()}
-
-    # Create SDK-compatible tools using @tool decorator
     @tool("get_next_finding", "Get the next finding to triage. Returns finding details or 'complete' status when done.", {})
     async def sdk_get_next_finding(args: dict) -> dict:
-        return await tool_handlers["get_next_finding"](args)
+        """Get the next finding from state file."""
+        try:
+            state_data = json.loads(Path(state_file).read_text())
+            current_index = state_data.get("current_index", 0)
+            findings_list = state_data.get("findings", [])
 
-    @tool("read_file", "Read file content to verify the finding. Use the file_path from the finding.", {
-        "file_path": str,
-    })
+            if current_index >= len(findings_list):
+                return {
+                    "status": "complete",
+                    "message": "No more findings to triage",
+                    "triaged_count": len(state_data.get("decisions", [])),
+                }
+
+            finding = findings_list[current_index]
+            return {
+                "status": "pending",
+                "finding_number": current_index + 1,
+                "total_findings": len(findings_list),
+                "finding": finding,
+            }
+        except Exception as e:
+            return {"error": f"Failed to read state: {e}"}
+
+    @tool("read_file", "Read file content to verify the finding.", {"file_path": str})
     async def sdk_read_file(args: dict) -> dict:
-        return await tool_handlers["read_file"](args)
+        """Read file content."""
+        file_path = args.get("file_path", "")
+        try:
+            if not file_path.startswith("/"):
+                full_path = Path(repo_path) / file_path
+            else:
+                full_path = Path(file_path)
 
-    @tool("submit_decision", "Submit your triage decision for the current finding.", {
-        "finding_id": str,
-        "decision": str,
-        "confidence": int,
-        "reasoning": list,
+            if not full_path.exists():
+                return {"error": f"File not found: {file_path}"}
+
+            content = full_path.read_text(errors="replace")
+            if len(content) > 10000:
+                content = content[:10000] + "\n... [truncated]"
+
+            return {"file_path": str(file_path), "content": content, "line_count": content.count("\n") + 1}
+        except Exception as e:
+            return {"error": f"Failed to read file: {e}"}
+
+    @tool("submit_decision", "Submit your triage decision.", {
+        "finding_id": str, "decision": str, "confidence": int, "reasoning": list
     })
     async def sdk_submit_decision(args: dict) -> dict:
-        return await tool_handlers["submit_decision"](args)
+        """Submit decision and advance to next finding."""
+        try:
+            finding_id = args.get("finding_id", "")
+            decision = args.get("decision", "speculative")
+            confidence = args.get("confidence", 50)
+            reasoning = args.get("reasoning", [])
+
+            if isinstance(reasoning, str):
+                reasoning = [reasoning]
+
+            valid_decisions = ["valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"]
+            if decision not in valid_decisions:
+                return {"error": f"Invalid decision: {decision}"}
+
+            # Read current state
+            state_data = json.loads(Path(state_file).read_text())
+
+            # Add decision
+            decisions = state_data.get("decisions", [])
+            decisions.append({
+                "finding_id": finding_id,
+                "decision": decision,
+                "confidence": confidence,
+                "reasoning": reasoning,
+            })
+            state_data["decisions"] = decisions
+            state_data["current_index"] = state_data.get("current_index", 0) + 1
+
+            # Write back
+            Path(state_file).write_text(json.dumps(state_data, indent=2))
+
+            remaining = len(state_data.get("findings", [])) - state_data["current_index"]
+            return {
+                "status": "recorded",
+                "finding_id": finding_id,
+                "decision": decision,
+                "remaining_findings": remaining,
+                "message": f"Decision recorded. {remaining} remaining." if remaining > 0 else "All triaged!",
+            }
+        except Exception as e:
+            return {"error": f"Failed to save decision: {e}"}
 
     # Create SDK MCP server
     sdk_tools = [sdk_get_next_finding, sdk_read_file, sdk_submit_decision]
-    mcp_server = create_sdk_mcp_server(
-        name="triage",
-        version="1.0.0",
-        tools=sdk_tools,
-    )
-
-    # Build allowed_tools list (MCP format: mcp__<server>__<tool>)
+    mcp_server = create_sdk_mcp_server(name="triage", version="1.0.0", tools=sdk_tools)
     allowed_tools = [f"mcp__triage__{t.name}" for t in sdk_tools]
+
+    print(f"[TriageAgent] Allowed tools: {allowed_tools}")
 
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=TRIAGE_SYSTEM_PROMPT,
         cwd=repo_path,
-        max_turns=len(findings) * 4 + 10,  # ~4 turns per finding (get, read, decide, next)
+        max_turns=len(findings) * 4 + 10,
         permission_mode="bypassPermissions",
         allowed_tools=allowed_tools,
         mcp_servers={"triage": mcp_server},
         env=env,
         setting_sources=setting_sources,
-        hooks={},  # Disable inherited hooks to prevent tool concurrency errors
+        hooks={},
     )
 
     client = ClaudeSDKClient(options)
 
     try:
         await client.connect()
-        print(f"[TriageAgent] SDK connected, starting iterative triage")
+        print(f"[TriageAgent] SDK connected, starting triage")
 
-        # Log initial request
-        request_id = observability_service.log_llm_request(
-            agent_id=agent_id,
-            messages=[{"role": "system", "content": TRIAGE_SYSTEM_PROMPT[:500] + "..."}],
-            tools_available=list(tools.keys()),
-            model=model,
-            provider="anthropic",
-        )
-
-        # Start the triage loop
-        print(f"[TriageAgent] Sending initial query...")
-        print(f"[TriageAgent] Allowed tools: {allowed_tools}")
         await client.query("Begin triaging findings. Call get_next_finding to start.")
         print(f"[TriageAgent] Query sent, receiving response stream...")
 
-        tool_calls: list[dict] = []
-        pending_tools: dict[str, tuple[str, dict, float]] = {}
         message_count = 0
-
         async for message in client.receive_response():
             message_count += 1
             msg_type = message.__class__.__name__
             print(f"[TriageAgent] Message #{message_count}: {msg_type}")
 
             if msg_type == "AssistantMessage":
-                content_blocks = getattr(message, "content", [])
-                print(f"[TriageAgent]   Content blocks: {len(content_blocks)}")
-                for block in content_blocks:
+                for block in getattr(message, "content", []):
                     block_type = block.__class__.__name__
-                    print(f"[TriageAgent]   Block type: {block_type}")
                     if block_type == "ToolUseBlock":
                         tool_name = getattr(block, "name", "unknown")
-                        tool_input = getattr(block, "input", {})
-                        tool_id = getattr(block, "id", "")
-                        print(f"[TriageAgent]   Tool call: {tool_name} (id={tool_id})")
-
-                        pending_tools[tool_id] = (tool_name, tool_input, time.time())
-
-                        # Broadcast progress
+                        print(f"[TriageAgent]   Tool call: {tool_name}")
                         if "get_next_finding" in tool_name:
+                            # Reload state to get current progress
+                            state.load_decisions_from_file()
                             agent.broadcast(WSMessageType.PROGRESS, {
                                 "current": state.current_index,
                                 "total": len(findings),
                                 "message": f"Triaging finding {state.current_index + 1}/{len(findings)}",
                             })
                     elif block_type == "TextBlock":
-                        text = getattr(block, "text", "")
-                        print(f"[TriageAgent]   Text: {text[:200]}...")
-
-            elif msg_type == "ToolResultMessage":
-                content = getattr(message, "content", [])
-                for block in content:
-                    block_type = block.__class__.__name__
-                    if block_type == "ToolResultBlock":
-                        tool_use_id = getattr(block, "tool_use_id", "")
-                        is_error = getattr(block, "is_error", False)
-                        result_content = getattr(block, "content", "")
-                        print(f"[TriageAgent]   Tool result: {tool_use_id[:20]}... error={is_error}")
-
-                        if tool_use_id in pending_tools:
-                            tool_name, tool_input, start_time = pending_tools.pop(tool_use_id)
-                            duration_ms = int((time.time() - start_time) * 1000)
-
-                            observability_service.log_tool_execution(
-                                agent_id=agent_id,
-                                tool_name=tool_name,
-                                tool_call_id=tool_use_id,
-                                arguments=tool_input,
-                                result=str(result_content)[:500],
-                                success=not is_error,
-                                duration_ms=duration_ms,
-                            )
+                        text = getattr(block, "text", "")[:200]
+                        print(f"[TriageAgent]   Text: {text}...")
 
             elif msg_type == "ResultMessage":
-                print(f"[TriageAgent] Got ResultMessage - conversation complete")
+                print(f"[TriageAgent] Conversation complete")
 
         print(f"[TriageAgent] Response stream ended after {message_count} messages")
 
-        # Log completion
-        if request_id:
-            observability_service.log_llm_response(
-                agent_id=agent_id,
-                request_id=request_id,
-                content=f"Triaged {len(state.decisions)} findings",
-                model=model,
-                provider="anthropic",
-            )
-
-        print(f"[TriageAgent] Triage complete: {len(state.decisions)} decisions")
+        # Load final decisions from state file
+        state.load_decisions_from_file()
+        print(f"[TriageAgent] Loaded {len(state.decisions)} decisions from state file")
 
     except Exception as e:
         print(f"[TriageAgent] Error: {e}")
@@ -601,6 +529,11 @@ async def run_triage_agent(
 
     finally:
         await client.disconnect()
+        try:
+            if Path(state_file).exists():
+                Path(state_file).unlink()
+        except Exception:
+            pass
 
     # Apply decisions to findings
     decision_map = {d.finding_id: d for d in state.decisions}

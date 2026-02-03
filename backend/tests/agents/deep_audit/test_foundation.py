@@ -188,3 +188,30 @@ class TestFoundationContext:
         # Non-matching paths should be in scope
         assert context.is_in_scope("handler.py") == True
         assert context.is_in_scope("src/main.py") == True
+
+    def test_glob_pattern_matching_nested(self):
+        """Foundation context matches glob patterns in nested directories."""
+        context = FoundationContext(
+            repo_profile=RepoProfile(languages=[], frameworks=[], build_system="", entry_point_files=[]),
+            scope_map=ScopeMap(
+                security_critical=[],
+                test_code=["*_test.py", "test_*.py"],
+                vendor_code=["vendor/"],
+                generated_code=[],
+            ),
+            threat_model=ThreatModel(
+                trust_boundaries=[],
+                attacker_capabilities=[],
+                in_scope_paths=[],
+                out_of_scope_paths=[],
+                out_of_scope_reasons={},
+            ),
+        )
+
+        # Glob patterns should match at any depth
+        assert context.is_in_scope("src/handler_test.py") == False
+        assert context.is_in_scope("src/test_handler.py") == False
+
+        # Directory patterns should match at any depth
+        assert context.is_in_scope("vendor/lib.py") == False
+        assert context.is_in_scope("internal/vendor/lib.py") == False

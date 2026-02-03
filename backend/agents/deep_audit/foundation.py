@@ -81,7 +81,12 @@ class FoundationContext:
         for pattern in patterns:
             # Handle glob patterns
             if "*" in pattern:
-                if fnmatch(path, pattern):
+                if fnmatch(path, pattern) or fnmatch(path.split("/")[-1], pattern):
+                    return True
+            # Handle directory patterns (ending with /)
+            elif pattern.endswith("/"):
+                # Directory pattern - match anywhere in path
+                if path.startswith(pattern) or f"/{pattern}" in f"/{path}":
                     return True
             # Handle prefix patterns (directory paths)
             elif path.startswith(pattern):

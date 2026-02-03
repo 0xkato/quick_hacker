@@ -117,6 +117,16 @@ class Overseer(BaseAgent):
             "use_claude_code_auth": use_claude_code_auth,  # Pass through for sub-agents
         }
         self.provider_config = provider_config  # Store for later use
+
+        # Create the actual LLM provider for Overseer's own LLM calls
+        overseer_provider_config = ProviderConfig(
+            provider=provider_config["provider"],
+            model=provider_config["model"],
+            api_key=provider_config.get("api_key"),
+            base_url=provider_config.get("base_url"),
+        )
+        self.provider = get_provider(overseer_provider_config)
+
         self.dispatcher = WaveDispatcher(
             repo_path=repo_path,
             filesystem=self.filesystem,

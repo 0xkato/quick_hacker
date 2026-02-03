@@ -887,12 +887,20 @@ async def llm_triage_findings(
     """
     from models.schemas import Disposition
 
-    # Get agent
+    # Get agent and repo path
     agent = await orchestrator.get_agent(agent_id)
-    if not agent:
+    repo_path = None
+    snapshot = None
+
+    if agent:
+        repo_path = getattr(agent, 'repo_path', None)
+    else:
         snapshot = persistence_service.load_agent_state(agent_id)
         if not snapshot:
             raise HTTPException(status_code=404, detail="Agent not found")
+        repo_path = snapshot.repo_path
+
+    print(f"[Triage] Agent repo_path: {repo_path}")
 
     # Get findings
     print(f"[LLM Triage] Looking for findings for agent {agent_id}")
@@ -900,7 +908,9 @@ async def llm_triage_findings(
     print(f"[LLM Triage] Found {len(findings) if findings else 0} findings from orchestrator")
 
     if not findings:
-        snapshot = persistence_service.load_agent_state(agent_id)
+        # Use existing snapshot or load it
+        if not snapshot:
+            snapshot = persistence_service.load_agent_state(agent_id)
         if snapshot and snapshot.findings:
             findings = [Finding(**f) for f in snapshot.findings]
             print(f"[LLM Triage] Loaded {len(findings)} findings from snapshot")
@@ -946,6 +956,7 @@ async def llm_triage_findings(
                     api_key=api_key,
                     model=request.model or "claude-sonnet-4-20250514",
                     use_claude_code_auth=request.use_claude_code_auth,
+                    repo_path=repo_path,
                 )
 
                 # Map decisions back to findings

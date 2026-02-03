@@ -96,8 +96,44 @@ JSON array only:
 BE AGGRESSIVE. When in doubt, REJECT. False positives waste security team time."""
 
 
-def _build_triage_prompt(findings: list[dict[str, Any]]) -> str:
-    """Build the triage prompt with finding details."""
+def _read_file_context(repo_path: str, file_path: str, line_start: int | None = None, context_lines: int = 50) -> str:
+    """Read file content with context around the vulnerable line."""
+    from pathlib import Path
+
+    try:
+        full_path = Path(repo_path) / file_path
+        if not full_path.exists():
+            return f"[File not found: {file_path}]"
+
+        if full_path.stat().st_size > 500000:  # 500KB limit
+            return f"[File too large: {file_path}]"
+
+        content = full_path.read_text(errors="replace")
+        lines = content.split("\n")
+
+        if line_start and line_start > 0:
+            # Get context around the vulnerable line
+            start = max(0, line_start - context_lines)
+            end = min(len(lines), line_start + context_lines)
+            context = lines[start:end]
+
+            # Add line numbers
+            numbered_lines = []
+            for i, line in enumerate(context, start=start + 1):
+                marker = ">>>" if i == line_start else "   "
+                numbered_lines.append(f"{marker} {i:4d} | {line}")
+
+            return "\n".join(numbered_lines)
+        else:
+            # Return first 100 lines with line numbers
+            return "\n".join(f"   {i:4d} | {line}" for i, line in enumerate(lines[:100], 1))
+
+    except Exception as e:
+        return f"[Error reading file: {e}]"
+
+
+def _build_triage_prompt(findings: list[dict[str, Any]], repo_path: str | None = None) -> str:
+    """Build the triage prompt with finding details and actual code."""
     findings_text = []
 
     for i, finding in enumerate(findings, 1):
@@ -105,6 +141,7 @@ def _build_triage_prompt(findings: list[dict[str, Any]]) -> str:
         title = finding.get("title", "Unknown")
         severity = finding.get("severity", "unknown")
         file_path = finding.get("file_path", "unknown")
+        line_start = finding.get("line_start")
         vuln_type = finding.get("vulnerability_type", "unknown")
         description = finding.get("description", "No description")
         code_snippet = finding.get("code_snippet", "")
@@ -115,22 +152,35 @@ def _build_triage_prompt(findings: list[dict[str, Any]]) -> str:
 - **ID**: {finding_id}
 - **Severity**: {severity}
 - **File**: {file_path}
+- **Line**: {line_start or "unknown"}
 - **Type**: {vuln_type}
 
 **Description**: {description}
 """
+        # Include original code snippet if available
         if code_snippet:
-            finding_text += f"\n**Code Snippet**:\n```\n{code_snippet}\n```\n"
+            finding_text += f"\n**Reported Code Snippet**:\n```\n{code_snippet}\n```\n"
+
+        # Read actual file content for verification
+        if repo_path and file_path:
+            actual_code = _read_file_context(repo_path, file_path, line_start)
+            finding_text += f"\n**Actual File Content (with context)**:\n```\n{actual_code}\n```\n"
+
         if attack_scenario:
             finding_text += f"\n**Attack Scenario**: {attack_scenario}\n"
 
         findings_text.append(finding_text)
 
-    prompt = f"""Please triage the following {len(findings)} security findings:
+    prompt = f"""Please triage the following {len(findings)} security findings.
+
+IMPORTANT: You have access to the ACTUAL FILE CONTENT. Use it to verify:
+1. Is this code actually vulnerable as described?
+2. Is there additional context (dev flags, test code, etc.) that invalidates this finding?
+3. Look for patterns like: disableAuth, debugMode, testMode, DEV_ONLY, etc.
 
 {''.join(findings_text)}
 
-Analyze each finding and provide your triage decisions as a JSON array."""
+Analyze each finding using the actual code and provide your triage decisions as a JSON array."""
 
     return prompt
 
@@ -192,6 +242,7 @@ async def run_llm_triage(
     api_key: str | None = None,
     model: str = "claude-sonnet-4-20250514",
     use_claude_code_auth: bool = False,
+    repo_path: str | None = None,
 ) -> TriageResult:
     """Run LLM-based triage on findings using Claude SDK.
 
@@ -263,9 +314,9 @@ async def run_llm_triage(
         await client.connect()
         print("[LLM Triage] SDK client connected")
 
-        # Build triage prompt
-        prompt = _build_triage_prompt(findings)
-        print(f"[LLM Triage] Sending {len(findings)} findings for triage")
+        # Build triage prompt with actual file content
+        prompt = _build_triage_prompt(findings, repo_path)
+        print(f"[LLM Triage] Sending {len(findings)} findings for triage (with file context)")
         print(f"[LLM Triage] Prompt preview: {prompt[:500]}...")
 
         # Send query and collect response

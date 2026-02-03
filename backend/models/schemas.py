@@ -31,6 +31,7 @@ class AgentType(str, Enum):
     """Simplified agent types - only deep_audit is actively used."""
     DEEP_AUDIT = "deep_audit"  # Long-running, coverage-oriented deep audit with diagramming support
     CUSTOM = "custom"  # Custom prompt-based investigation (uses same deep audit infrastructure)
+    TRIAGE = "triage"  # Triage agent that verifies findings with code access
 
 
 class ProviderType(str, Enum):

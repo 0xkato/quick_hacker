@@ -190,9 +190,9 @@ function LLMInteractionPanelComponent({
 
   // Memoize unique subagents from tool details and LLM interactions
   const subagents = useMemo(() => {
-    const toolSubagents = toolDetails.map(t => t.subagent).filter(Boolean);
-    const interactionSubagents = interactions.map(i => i.subagent).filter(Boolean);
-    return [...new Set([...toolSubagents, ...interactionSubagents])] as string[];
+    const toolSubagents = toolDetails.map(t => t.subagent).filter(Boolean) as string[];
+    const interactionSubagents = interactions.map(i => i.subagent).filter(Boolean) as string[];
+    return Array.from(new Set([...toolSubagents, ...interactionSubagents]));
   }, [toolDetails, interactions]);
   const hasSubagents = subagents.length > 0;
 

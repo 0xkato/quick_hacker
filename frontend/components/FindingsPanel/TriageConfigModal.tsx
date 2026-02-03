@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { X, Loader2, Zap, Settings } from 'lucide-react';
 import clsx from 'clsx';
-import { settings as settingsApi, type AppSettings, type ProviderType } from '@/lib/api';
+import { settings as settingsApi, type AppSettings } from '@/lib/api';
+import type { ProviderType } from '@/types';
 
 interface TriageConfigModalProps {
   findingsCount: number;

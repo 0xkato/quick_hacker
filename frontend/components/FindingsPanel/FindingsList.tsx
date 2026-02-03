@@ -194,23 +194,32 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
   const [isTriaging, setIsTriaging] = useState(false);
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
 
-  const handleQuickTriage = async () => {
+  const handleLLMTriage = async () => {
     if (!agentId) return;
 
     setIsTriaging(true);
     setTriageMessage(null);
 
     try {
-      const result = await agents.quickTriage(agentId);
-      setTriageMessage(`Triaged ${result.triaged_count} findings, filtered ${result.filtered_count} as non-security`);
+      const result = await agents.llmTriage(agentId);
+
+      // Count decisions
+      const validCount = result.results.filter(r => r.decision === 'valid_security_issue').length;
+      const filteredCount = result.results.filter(r =>
+        ['hardening', 'by_design', 'bug', 'misconfiguration'].includes(r.decision)
+      ).length;
+
+      setTriageMessage(
+        `Analyzed ${result.triaged_count} findings: ${validCount} confirmed, ${filteredCount} filtered`
+      );
 
       // Update findings in parent
       if (onFindingsUpdated) {
         onFindingsUpdated(result.findings);
       }
     } catch (error) {
-      console.error('Triage failed:', error);
-      setTriageMessage('Triage failed. Please try again.');
+      console.error('LLM Triage failed:', error);
+      setTriageMessage('LLM Triage failed. Make sure you\'re running via Claude Code.');
     } finally {
       setIsTriaging(false);
     }
@@ -270,10 +279,10 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
           </span>
           {/* Right side controls */}
           <div className="flex items-center gap-2">
-            {/* Triage Button */}
+            {/* LLM Triage Button */}
             {agentId && findings.length > 0 && (
               <button
-                onClick={handleQuickTriage}
+                onClick={handleLLMTriage}
                 disabled={isTriaging}
                 className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover disabled:opacity-50"
                 style={{
@@ -281,14 +290,14 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
                   border: '1px solid var(--vsc-border)',
                   color: isTriaging ? 'var(--vsc-accent)' : 'var(--vsc-text-muted)',
                 }}
-                title="Run quick triage to filter non-security findings"
+                title="Run LLM-based triage to analyze and confirm/reject findings"
               >
                 {isTriaging ? (
                   <Loader2 className="w-3 h-3 animate-spin" />
                 ) : (
                   <Filter className="w-3 h-3" />
                 )}
-                <span>{isTriaging ? 'Triaging...' : 'Triage'}</span>
+                <span>{isTriaging ? 'Analyzing...' : 'Triage'}</span>
               </button>
             )}
 

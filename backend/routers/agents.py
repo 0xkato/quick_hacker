@@ -841,6 +841,179 @@ def _rule_based_triage(finding: Finding) -> tuple[bool, str]:
     return False, ""
 
 
+class LLMTriageRequest(BaseModel):
+    """Request for LLM-based triage."""
+    finding_ids: Optional[list[str]] = None  # If None, triage all findings
+
+
+class LLMTriageResult(BaseModel):
+    """Result for a single finding triage."""
+    finding_id: str
+    decision: str  # "valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"
+    confidence: int  # 0-100
+    reasoning: list[str]
+
+
+class LLMTriageResponse(BaseModel):
+    """Response from LLM triage."""
+    triaged_count: int
+    results: list[LLMTriageResult]
+    findings: list[Finding]
+
+
+@router.post("/{agent_id}/llm-triage", response_model=LLMTriageResponse)
+async def llm_triage_findings(
+    agent_id: str,
+    request: LLMTriageRequest = LLMTriageRequest(),
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """
+    LLM-based triage of findings using Claude SDK.
+
+    This endpoint uses Claude to analyze each finding and determine:
+    - Is it a real security vulnerability?
+    - What is its disposition (valid_security_issue, bug, hardening, etc.)?
+    - What is the confidence level?
+
+    Uses Claude SDK auth (no separate API key needed).
+    """
+    import anthropic
+    from models.schemas import Disposition
+
+    # Get agent
+    agent = await orchestrator.get_agent(agent_id)
+    if not agent:
+        snapshot = persistence_service.load_agent_state(agent_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get findings
+    findings = await orchestrator.get_findings(agent_id=agent_id)
+    if not findings:
+        snapshot = persistence_service.load_agent_state(agent_id)
+        if snapshot and snapshot.findings:
+            findings = [Finding(**f) for f in snapshot.findings]
+        else:
+            return LLMTriageResponse(triaged_count=0, results=[], findings=[])
+
+    # Filter to specific IDs if requested
+    if request.finding_ids:
+        finding_id_set = set(request.finding_ids)
+        findings = [f for f in findings if f.id in finding_id_set]
+
+    # Initialize Claude SDK client
+    try:
+        client = anthropic.Anthropic()  # Uses Claude SDK auth
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Claude SDK not available: {str(e)}. Make sure you're running via Claude Code."
+        )
+
+    results = []
+    triaged_findings = []
+
+    for finding in findings:
+        # Build triage prompt
+        triage_prompt = f"""You are a security vulnerability triage expert. Analyze this finding and determine if it's a real security vulnerability.
+
+## Finding Details
+- **Title**: {finding.title}
+- **Severity**: {finding.severity}
+- **Type**: {finding.vulnerability_type}
+- **File**: {finding.file_path}:{finding.line_start}
+- **Description**: {finding.description}
+- **Code Snippet**:
+```
+{finding.code_snippet or 'N/A'}
+```
+
+## Your Task
+Analyze this finding and respond with a JSON object containing:
+1. `decision`: One of: "valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"
+   - valid_security_issue: Real exploitable vulnerability
+   - bug: Code bug but not security-relevant
+   - misconfiguration: Config issue, not code vulnerability
+   - hardening: Best practice suggestion, not actual vulnerability
+   - by_design: Intentional behavior, not a flaw
+   - speculative: Not enough evidence to determine
+2. `confidence`: 0-100 confidence in your decision
+3. `reasoning`: Array of reasons for your decision
+
+Consider:
+- Is the code actually reachable in production?
+- Can an attacker control the input?
+- Is there actual security impact?
+- Is this test/example code?
+
+Respond ONLY with valid JSON, no other text."""
+
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": triage_prompt}]
+            )
+
+            # Parse response
+            response_text = response.content[0].text.strip()
+            # Handle markdown code blocks
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.strip()
+
+            triage_result = json.loads(response_text)
+
+            decision = triage_result.get("decision", "speculative")
+            confidence = triage_result.get("confidence", 50)
+            reasoning = triage_result.get("reasoning", ["LLM triage completed"])
+
+            # Map decision to disposition
+            disposition_map = {
+                "valid_security_issue": Disposition.VALID_SECURITY_ISSUE,
+                "bug": Disposition.BUG,
+                "misconfiguration": Disposition.MISCONFIGURATION,
+                "hardening": Disposition.HARDENING,
+                "by_design": Disposition.BY_DESIGN,
+                "speculative": Disposition.SPECULATIVE,
+            }
+
+            finding.disposition = disposition_map.get(decision, Disposition.SPECULATIVE)
+            finding.classification_confidence = confidence
+            finding.reasoning = reasoning if isinstance(reasoning, list) else [reasoning]
+
+            results.append(LLMTriageResult(
+                finding_id=finding.id,
+                decision=decision,
+                confidence=confidence,
+                reasoning=finding.reasoning,
+            ))
+
+        except Exception as e:
+            # On error, mark as speculative
+            finding.disposition = Disposition.SPECULATIVE
+            finding.reasoning = [f"Triage error: {str(e)}"]
+            results.append(LLMTriageResult(
+                finding_id=finding.id,
+                decision="speculative",
+                confidence=0,
+                reasoning=[f"Triage error: {str(e)}"],
+            ))
+
+        triaged_findings.append(finding)
+
+    # Update findings in orchestrator
+    orchestrator._findings[agent_id] = triaged_findings
+
+    return LLMTriageResponse(
+        triaged_count=len(results),
+        results=results,
+        findings=triaged_findings,
+    )
+
+
 @router.get("/{agent_id}/triaged-findings/batch/{batch_id}")
 async def get_triaged_findings_batch(
     agent_id: str,

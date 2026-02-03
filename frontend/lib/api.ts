@@ -315,6 +315,22 @@ export const agents = {
     });
   },
 
+  async llmTriage(agentId: string, findingIds?: string[]): Promise<{
+    triaged_count: number;
+    results: Array<{
+      finding_id: string;
+      decision: string;
+      confidence: number;
+      reasoning: string[];
+    }>;
+    findings: Finding[];
+  }> {
+    return request(`/api/agents/${agentId}/llm-triage`, {
+      method: 'POST',
+      body: JSON.stringify({ finding_ids: findingIds }),
+    });
+  },
+
   async loadAgentState(agentId: string): Promise<{
     status: string;
     agent_id: string;

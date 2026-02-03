@@ -22,6 +22,7 @@ import { FileTree } from '@/components/FileExplorer/FileTree';
 import { AgentManager } from '@/components/AgentPanel/AgentManager';
 import { FindingsList } from '@/components/FindingsPanel/FindingsList';
 import { FindingDrawer } from '@/components/FindingsPanel/FindingDrawer';
+import { FindingFullView } from '@/components/FindingsPanel/FindingFullView';
 import { ChatPanel } from '@/components/ChatPanel/ChatPanel';
 import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
 import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
@@ -583,11 +584,20 @@ export default function Home() {
           </button>
           <button
             onClick={() => {
-              panels.setActiveView('findings');
-              panels.setShowSidebar(true);
+              if (panels.activeView === 'findings' && panels.showSidebar) {
+                // Already in sidebar mode - switch to full-screen
+                panels.setShowSidebar(false);
+              } else if (panels.activeView === 'findings' && !panels.showSidebar) {
+                // Already in full-screen - switch to sidebar
+                panels.setShowSidebar(true);
+              } else {
+                // Not in findings view - go to full-screen findings
+                panels.setActiveView('findings');
+                panels.setShowSidebar(false);
+              }
             }}
-            className={`activity-icon ${panels.activeView === 'findings' && panels.showSidebar ? 'active' : ''}`}
-            title="Findings"
+            className={`activity-icon ${panels.activeView === 'findings' ? 'active' : ''}`}
+            title="Findings (click again to toggle view)"
           >
             <Search className="w-6 h-6" />
             {(criticalFindings > 0 || highFindings > 0) && (
@@ -806,8 +816,73 @@ export default function Home() {
             </div>
           )}
 
+          {/* Full-screen Findings view */}
+          {panels.activeView === 'findings' && panels.showSidebar === false && (
+            <div className="flex-1 flex overflow-hidden">
+              {/* Findings list on left */}
+              <div className="w-80 border-r border-border-subtle flex flex-col bg-bg-secondary">
+                <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
+                  <Shield className="w-4 h-4 text-text-muted" />
+                  <span className="text-sm text-text-muted">Findings</span>
+                  <select
+                    value={findingsMgmt.selectedFindingsAgentId || ''}
+                    onChange={(e) => {
+                      findingsMgmt.setUserSelectedFindingsAgentId(true);
+                      findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
+                    }}
+                    className="ml-auto px-2 py-1 bg-bg-tertiary border border-border-default rounded text-xs"
+                  >
+                    <option value="">All agents ({findingsMgmt.findings.length})</option>
+                    {agentMgmt.agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name} ({findingsMgmt.findings.filter(f => f.agent_id === agent.id).length})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1 overflow-auto">
+                  <FindingsList
+                    key={findingsMgmt.selectedFindingsAgentId || 'all'}
+                    agentId={findingsMgmt.selectedFindingsAgentId}
+                    findings={
+                      findingsMgmt.selectedFindingsAgentId
+                        ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
+                        : findingsMgmt.findings
+                    }
+                    onFindingClick={(finding) => findingsMgmt.setSelectedFindingForDrawer(finding)}
+                    onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
+                    onFindingsUpdated={(triaged) => {
+                      findingsMgmt.setFindings((prev) => {
+                        const otherFindings = prev.filter(f => f.agent_id !== findingsMgmt.selectedFindingsAgentId);
+                        return [...otherFindings, ...triaged];
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+              {/* Finding details on right */}
+              <div className="flex-1 bg-bg-primary overflow-auto">
+                {findingsMgmt.selectedFindingForDrawer ? (
+                  <div className="p-6 max-w-4xl mx-auto">
+                    <FindingFullView
+                      finding={findingsMgmt.selectedFindingForDrawer}
+                      onNavigateToFile={handleNavigateToFile}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full text-text-muted">
+                    <div className="text-center">
+                      <Shield className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                      <p>Select a finding to view details</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Tab bar */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && workspace.currentFile && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
             <div className="h-9 bg-bg-secondary flex items-end border-b border-border-subtle">
               <div className="tab active">
                 <span className="truncate max-w-[200px]">
@@ -824,7 +899,7 @@ export default function Home() {
           )}
 
           {/* Breadcrumb */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && workspace.currentFile && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
             <div className="breadcrumb border-b border-border-subtle">
               {workspace.currentFile.path.split('/').map((part, idx, arr) => (
                 <span key={idx} className="flex items-center">
@@ -838,7 +913,7 @@ export default function Home() {
           )}
 
           {/* Editor */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (panels.activeView !== 'findings' || panels.showSidebar) && (
             <div className="flex-1 overflow-hidden">
               <MonacoEditor
                 file={workspace.currentFile}

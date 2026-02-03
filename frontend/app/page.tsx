@@ -16,6 +16,7 @@ import {
   FolderGit2,
   Network,
   Brain,
+  Shield,
 } from 'lucide-react';
 import { MonacoEditor } from '@/components/Editor/MonacoEditor';
 import { FileTree } from '@/components/FileExplorer/FileTree';

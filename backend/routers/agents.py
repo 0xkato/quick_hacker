@@ -844,6 +844,7 @@ def _rule_based_triage(finding: Finding) -> tuple[bool, str]:
 class LLMTriageRequest(BaseModel):
     """Request for LLM-based triage."""
     finding_ids: Optional[list[str]] = None  # If None, triage all findings
+    max_findings: int = 20  # Maximum findings to process per request (rate limit protection)
 
 
 class LLMTriageResult(BaseModel):
@@ -901,6 +902,10 @@ async def llm_triage_findings(
         finding_id_set = set(request.finding_ids)
         findings = [f for f in findings if f.id in finding_id_set]
 
+    # Apply batch size limit to prevent rate limiting
+    if len(findings) > request.max_findings:
+        findings = findings[:request.max_findings]
+
     # Initialize Claude SDK client
     try:
         client = anthropic.Anthropic()  # Uses Claude SDK auth
@@ -952,6 +957,7 @@ Respond ONLY with valid JSON, no other text."""
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=1024,
+                timeout=60.0,  # 60 second timeout per finding
                 messages=[{"role": "user", "content": triage_prompt}]
             )
 

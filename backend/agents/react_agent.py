@@ -1931,9 +1931,43 @@ class ReActSecurityAgent:
             return "Report finding"
         return tool_name
 
+    def _is_duplicate_finding(self, file_path: str, vuln_type: str, line_start: int, line_end: int | None) -> bool:
+        """Check if a finding with the same file, type, and overlapping lines already exists."""
+        norm_path = (file_path or "").lower().lstrip("./").replace("\\", "/")
+        norm_type = (vuln_type or "").lower().strip()
+        new_start = line_start or 0
+        new_end = line_end if (line_end and line_end >= new_start) else new_start
+
+        for existing in self.findings:
+            existing_path = (existing.file_path or "").lower().lstrip("./").replace("\\", "/")
+            existing_type = (existing.vulnerability_type or "").lower().strip()
+
+            if existing_path != norm_path or existing_type != norm_type:
+                continue
+
+            # Check for overlapping line ranges
+            ex_start = existing.line_start or 0
+            ex_end = existing.line_end if (existing.line_end and existing.line_end >= ex_start) else ex_start
+
+            # Ranges overlap if max(start1, start2) <= min(end1, end2)
+            if max(new_start, ex_start) <= min(new_end, ex_end):
+                return True
+
+        return False
+
     async def _create_finding(self, data: dict):
         """Create a Finding from reported data and save to database."""
         try:
+            # Check for duplicates before creating
+            file_path = data.get("file_path", "")
+            vuln_type = data.get("vulnerability_type", "Unknown")
+            line_start = data.get("line_start", 0)
+            line_end = data.get("line_end")
+
+            if self._is_duplicate_finding(file_path, vuln_type, line_start, line_end):
+                self._log(f"Skipping duplicate finding: {data.get('title', 'Untitled')} at {file_path}:{line_start}")
+                return None
+
             finding = Finding(
                 id=str(uuid.uuid4())[:8],
                 agent_id=self.id,
@@ -1941,12 +1975,12 @@ class ReActSecurityAgent:
                 severity=Severity(data.get("severity", "medium")),
                 title=data.get("title", "Untitled Finding"),
                 description=data.get("description", ""),
-                file_path=data.get("file_path", ""),
-                line_start=data.get("line_start", 0),
-                line_end=data.get("line_end"),
+                file_path=file_path,
+                line_start=line_start,
+                line_end=line_end,
                 code_snippet=data.get("vulnerable_code"),
                 vulnerable_code=data.get("vulnerable_code"),
-                vulnerability_type=data.get("vulnerability_type", "Unknown"),
+                vulnerability_type=vuln_type,
                 cwe_id=data.get("cwe_id"),
                 attack_scenario=data.get("attack_scenario"),
                 proof_of_concept=data.get("proof_of_concept"),

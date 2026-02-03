@@ -254,14 +254,49 @@ class BaseAgent(ABC):
             flow_service.update_node_status(self.id, scan_node.id, "failed")
             await self.emit_flow_update()
 
-    def add_finding(self, finding_create: FindingCreate) -> Finding:
-        """Add a finding."""
+    def _is_duplicate_finding(self, file_path: str, vuln_type: str, line_start: int, line_end: int | None) -> bool:
+        """Check if a finding with the same file, type, and overlapping lines already exists."""
+        norm_path = (file_path or "").lower().lstrip("./").replace("\\", "/")
+        norm_type = (vuln_type or "").lower().strip()
+        new_start = line_start or 0
+        new_end = line_end if (line_end and line_end >= new_start) else new_start
+
+        for existing in self.findings:
+            existing_path = (existing.file_path or "").lower().lstrip("./").replace("\\", "/")
+            existing_type = (existing.vulnerability_type or "").lower().strip()
+
+            if existing_path != norm_path or existing_type != norm_type:
+                continue
+
+            # Check for overlapping line ranges
+            ex_start = existing.line_start or 0
+            ex_end = existing.line_end if (existing.line_end and existing.line_end >= ex_start) else ex_start
+
+            # Ranges overlap if max(start1, start2) <= min(end1, end2)
+            if max(new_start, ex_start) <= min(new_end, ex_end):
+                return True
+
+        return False
+
+    def add_finding(self, finding_create: FindingCreate) -> Finding | None:
+        """Add a finding (with deduplication check)."""
+        data = finding_create.model_dump()
+
+        # Check for duplicates before creating
+        if self._is_duplicate_finding(
+            data.get("file_path", ""),
+            data.get("vulnerability_type", "Unknown"),
+            data.get("line_start", 0),
+            data.get("line_end"),
+        ):
+            return None
+
         finding = Finding(
             id=str(uuid.uuid4())[:12],
             agent_id=self.id,
             repo_id=self.repo_id,
             created_at=datetime.utcnow(),
-            **finding_create.model_dump(),
+            **data,
         )
         self.findings.append(finding)
         return finding

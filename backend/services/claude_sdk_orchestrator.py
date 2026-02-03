@@ -103,6 +103,32 @@ class ClaudeSDKOrchestrator:
         self._consecutive_no_tool_turns: int = 0
         self._last_turn_time: float = 0.0
 
+    def _is_duplicate_finding(self, finding: Dict[str, Any]) -> bool:
+        """Check if a finding with the same file, type, and overlapping lines already exists."""
+        norm_path = (finding.get("file_path") or "").lower().lstrip("./").replace("\\", "/")
+        norm_type = (finding.get("vulnerability_type") or "").lower().strip()
+        new_start = finding.get("line_start") or 0
+        new_end = finding.get("line_end")
+        new_end = new_end if (new_end and new_end >= new_start) else new_start
+
+        for existing in self._findings:
+            existing_path = (existing.get("file_path") or "").lower().lstrip("./").replace("\\", "/")
+            existing_type = (existing.get("vulnerability_type") or "").lower().strip()
+
+            if existing_path != norm_path or existing_type != norm_type:
+                continue
+
+            # Check for overlapping line ranges
+            ex_start = existing.get("line_start") or 0
+            ex_end = existing.get("line_end")
+            ex_end = ex_end if (ex_end and ex_end >= ex_start) else ex_start
+
+            # Ranges overlap if max(start1, start2) <= min(end1, end2)
+            if max(new_start, ex_start) <= min(new_end, ex_end):
+                return True
+
+        return False
+
     def remaining_s(self) -> float:
         """Get remaining time budget in seconds."""
         elapsed = time.monotonic() - self.start_time
@@ -381,10 +407,14 @@ class ClaudeSDKOrchestrator:
                 # Recognize our ToolCore.report_finding output.
                 if isinstance(parsed, dict) and isinstance(parsed.get("finding"), dict):
                     finding = parsed["finding"]
-                    self._findings.append(finding)
-                    print(f"[SDK Orchestrator] ✓ Extracted finding: {finding.get('title', 'unknown')}")
-                    # Broadcast finding in real-time
-                    self._emit_event("finding", finding)
+                    # Check for duplicates before adding
+                    if self._is_duplicate_finding(finding):
+                        print(f"[SDK Orchestrator] Skipping duplicate finding: {finding.get('title', 'unknown')} at {finding.get('file_path')}:{finding.get('line_start')}")
+                    else:
+                        self._findings.append(finding)
+                        print(f"[SDK Orchestrator] ✓ Extracted finding: {finding.get('title', 'unknown')}")
+                        # Broadcast finding in real-time
+                        self._emit_event("finding", finding)
                 else:
                     if isinstance(parsed, dict):
                         print(f"[SDK Orchestrator] No finding extracted. parsed keys: {list(parsed.keys())}, has 'finding': {'finding' in parsed}")

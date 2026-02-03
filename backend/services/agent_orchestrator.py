@@ -597,6 +597,30 @@ class AgentOrchestrator:
         # Track findings as they're reported (for real-time broadcast)
         sdk_findings: list[Finding] = []
         finding_counter = [0]  # Use list to allow mutation in nested function
+
+        def is_duplicate_finding(new_finding: Finding) -> bool:
+            """Check if a finding with the same file, type, and overlapping lines already exists."""
+            norm_path = (new_finding.file_path or "").lower().lstrip("./").replace("\\", "/")
+            norm_type = (new_finding.vulnerability_type or "").lower().strip()
+            new_start = new_finding.line_start or 0
+            new_end = new_finding.line_end if (new_finding.line_end and new_finding.line_end >= new_start) else new_start
+
+            for existing in sdk_findings:
+                existing_path = (existing.file_path or "").lower().lstrip("./").replace("\\", "/")
+                existing_type = (existing.vulnerability_type or "").lower().strip()
+
+                if existing_path != norm_path or existing_type != norm_type:
+                    continue
+
+                # Check for overlapping line ranges
+                ex_start = existing.line_start or 0
+                ex_end = existing.line_end if (existing.line_end and existing.line_end >= ex_start) else ex_start
+
+                # Ranges overlap if max(start1, start2) <= min(end1, end2)
+                if max(new_start, ex_start) <= min(new_end, ex_end):
+                    return True
+
+            return False
         # Capture overseer mode for policy selection
         _use_overseer = use_overseer
         # Track current sub-agent phase for nameplating (Overseer mode)
@@ -996,20 +1020,24 @@ class AgentOrchestrator:
                                         created_at=datetime.utcnow(),
                                         metadata={"source": "sdk_audit", "subagent": subagent},
                                     )
-                                    sdk_findings.append(finding_obj)
-                                    agent.findings = sdk_findings
-                                    try:
-                                        flow_service.update_node_data(agent_id, finding_node.id, {"finding_id": finding_obj.id})
-                                    except Exception:
-                                        pass
+                                    # Check for duplicates before adding
+                                    if is_duplicate_finding(finding_obj):
+                                        print(f"[Orchestrator] Skipping duplicate finding: {title} at {finding_obj.file_path}:{finding_obj.line_start}")
+                                    else:
+                                        sdk_findings.append(finding_obj)
+                                        agent.findings = sdk_findings
+                                        try:
+                                            flow_service.update_node_data(agent_id, finding_node.id, {"finding_id": finding_obj.id})
+                                        except Exception:
+                                            pass
 
-                                    # Broadcast finding to frontend
-                                    self._broadcast_message(WSMessage(
-                                        type=WSMessageType.FINDING,
-                                        agent_id=agent_id,
-                                        data=finding_obj.model_dump(mode='json'),
-                                    ))
-                                    print(f"[Orchestrator] ✓ Successfully broadcast finding to UI: {title} ({severity_str})")
+                                        # Broadcast finding to frontend
+                                        self._broadcast_message(WSMessage(
+                                            type=WSMessageType.FINDING,
+                                            agent_id=agent_id,
+                                            data=finding_obj.model_dump(mode='json'),
+                                        ))
+                                        print(f"[Orchestrator] ✓ Successfully broadcast finding to UI: {title} ({severity_str})")
                                 except Exception as finding_err:
                                     print(f"[Orchestrator] ✗ Failed to create/broadcast finding: {finding_err}")
                                     import traceback
@@ -1102,16 +1130,20 @@ class AgentOrchestrator:
                         created_at=datetime.utcnow(),
                         metadata={"source": "sdk_audit"},
                     )
-                    sdk_findings.append(finding_obj)
-                    agent.findings = sdk_findings
+                    # Check for duplicates before adding
+                    if is_duplicate_finding(finding_obj):
+                        print(f"[Orchestrator] Skipping duplicate finding from event: {title} at {finding_obj.file_path}:{finding_obj.line_start}")
+                    else:
+                        sdk_findings.append(finding_obj)
+                        agent.findings = sdk_findings
 
-                    # Broadcast finding to frontend
-                    self._broadcast_message(WSMessage(
-                        type=WSMessageType.FINDING,
-                        agent_id=agent_id,
-                        data=finding_obj.model_dump(mode='json'),
-                    ))
-                    print(f"[Orchestrator] ✓ Successfully broadcast finding from event: {title} ({severity_str})")
+                        # Broadcast finding to frontend
+                        self._broadcast_message(WSMessage(
+                            type=WSMessageType.FINDING,
+                            agent_id=agent_id,
+                            data=finding_obj.model_dump(mode='json'),
+                        ))
+                        print(f"[Orchestrator] ✓ Successfully broadcast finding from event: {title} ({severity_str})")
                 except Exception as e:
                     print(f"[Orchestrator] ✗ Failed to process finding event: {e}")
                     import traceback

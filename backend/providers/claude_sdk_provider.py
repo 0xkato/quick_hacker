@@ -210,6 +210,11 @@ class ClaudeSDKProvider:
             permission_mode=permission_mode,
             env=env,
             setting_sources=setting_sources,
+            # Disable inherited hooks to prevent "tool use concurrency" errors
+            # This is a known Claude Code bug where hooks interfere with parallel
+            # tool execution. Plugins (like superpowers) still work, just not hooks.
+            # See: https://github.com/anthropics/claude-agent-sdk-python/issues/265
+            hooks={},
         )
 
         # Create ClaudeSDKClient

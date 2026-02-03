@@ -511,22 +511,31 @@ async def run_triage_agent(
         )
 
         # Start the triage loop
+        print(f"[TriageAgent] Sending initial query...")
+        print(f"[TriageAgent] Allowed tools: {allowed_tools}")
         await client.query("Begin triaging findings. Call get_next_finding to start.")
+        print(f"[TriageAgent] Query sent, receiving response stream...")
 
         tool_calls: list[dict] = []
         pending_tools: dict[str, tuple[str, dict, float]] = {}
+        message_count = 0
 
         async for message in client.receive_response():
+            message_count += 1
             msg_type = message.__class__.__name__
+            print(f"[TriageAgent] Message #{message_count}: {msg_type}")
 
             if msg_type == "AssistantMessage":
                 content_blocks = getattr(message, "content", [])
+                print(f"[TriageAgent]   Content blocks: {len(content_blocks)}")
                 for block in content_blocks:
                     block_type = block.__class__.__name__
+                    print(f"[TriageAgent]   Block type: {block_type}")
                     if block_type == "ToolUseBlock":
                         tool_name = getattr(block, "name", "unknown")
                         tool_input = getattr(block, "input", {})
                         tool_id = getattr(block, "id", "")
+                        print(f"[TriageAgent]   Tool call: {tool_name} (id={tool_id})")
 
                         pending_tools[tool_id] = (tool_name, tool_input, time.time())
 
@@ -537,6 +546,9 @@ async def run_triage_agent(
                                 "total": len(findings),
                                 "message": f"Triaging finding {state.current_index + 1}/{len(findings)}",
                             })
+                    elif block_type == "TextBlock":
+                        text = getattr(block, "text", "")
+                        print(f"[TriageAgent]   Text: {text[:200]}...")
 
             elif msg_type == "ToolResultMessage":
                 content = getattr(message, "content", [])
@@ -546,6 +558,7 @@ async def run_triage_agent(
                         tool_use_id = getattr(block, "tool_use_id", "")
                         is_error = getattr(block, "is_error", False)
                         result_content = getattr(block, "content", "")
+                        print(f"[TriageAgent]   Tool result: {tool_use_id[:20]}... error={is_error}")
 
                         if tool_use_id in pending_tools:
                             tool_name, tool_input, start_time = pending_tools.pop(tool_use_id)
@@ -560,6 +573,11 @@ async def run_triage_agent(
                                 success=not is_error,
                                 duration_ms=duration_ms,
                             )
+
+            elif msg_type == "ResultMessage":
+                print(f"[TriageAgent] Got ResultMessage - conversation complete")
+
+        print(f"[TriageAgent] Response stream ended after {message_count} messages")
 
         # Log completion
         if request_id:

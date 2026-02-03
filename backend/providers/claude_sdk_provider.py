@@ -168,8 +168,10 @@ class ClaudeSDKProvider:
         if use_claude_code_auth:
             # Claude Code mode: use subscription auth from user settings
             # Set setting_sources to ["user"] so SDK loads user's Claude Code auth
+            # BUT we explicitly set plugins=[] to prevent loading user plugins
+            # that might conflict with our MCP tools (e.g., superpowers)
             setting_sources = ["user"]
-            print(f"[ClaudeSDKProvider] Using Claude Code auth mode, setting_sources={setting_sources}")
+            print(f"[ClaudeSDKProvider] Using Claude Code auth mode, setting_sources={setting_sources}, plugins disabled")
         else:
             # API Key mode: pass credentials via environment variables
             # Don't set setting_sources (SDK defaults to empty, skipping user settings)
@@ -199,18 +201,26 @@ class ClaudeSDKProvider:
                 print(f"[ClaudeSDKProvider] Set ANTHROPIC_API_KEY environment variable or configure in Settings > Providers")
             print(f"[ClaudeSDKProvider] Using API key mode, env keys: {list(env.keys())}")
 
-        options = ClaudeAgentOptions(
-            model=model,
-            system_prompt=system_prompt,
-            mcp_servers={"quickhack": self._mcp_server},
-            allowed_tools=allowed_tools,
-            cwd=self.repo_path,
-            max_turns=max_turns,
-            max_budget_usd=max_budget,
-            permission_mode=permission_mode,
-            env=env,
-            setting_sources=setting_sources,
-        )
+        # Build options - when using Claude Code auth, explicitly disable plugins
+        # to prevent user plugins (like superpowers) from conflicting with our MCP tools
+        options_kwargs = {
+            "model": model,
+            "system_prompt": system_prompt,
+            "mcp_servers": {"quickhack": self._mcp_server},
+            "allowed_tools": allowed_tools,
+            "cwd": self.repo_path,
+            "max_turns": max_turns,
+            "max_budget_usd": max_budget,
+            "permission_mode": permission_mode,
+            "env": env,
+            "setting_sources": setting_sources,
+        }
+
+        # Disable user plugins when using Claude Code auth to prevent tool conflicts
+        if use_claude_code_auth:
+            options_kwargs["plugins"] = []  # Explicitly no plugins
+
+        options = ClaudeAgentOptions(**options_kwargs)
 
         # Create ClaudeSDKClient
         print(f"[ClaudeSDKProvider] Creating ClaudeSDKClient...")

@@ -273,6 +273,7 @@ class ClaudeSDKProvider:
         events: list[dict[str, Any]] = []
 
         try:
+            import asyncio
             import time as time_module
             # SDK pattern:
             # 1. query() sends the prompt (async, returns None)
@@ -283,11 +284,34 @@ class ClaudeSDKProvider:
             query_time = time_module.monotonic() - query_start
             print(f"[ClaudeSDKProvider] query() completed in {query_time:.3f}s")
 
-            # Iterate over the async iterator (NOT await it)
+            # Iterate over the async iterator with per-message timeout
+            # This prevents hanging indefinitely if the SDK subprocess gets stuck
             print("[ClaudeSDKProvider] Receiving response stream...")
             receive_start = time_module.monotonic()
             message_count = 0
-            async for message in self.client.receive_response():
+            MESSAGE_TIMEOUT = 300  # 5 minutes max between messages
+
+            response_iter = self.client.receive_response()
+            while True:
+                try:
+                    # Get next message with timeout
+                    message = await asyncio.wait_for(
+                        anext(response_iter),
+                        timeout=MESSAGE_TIMEOUT
+                    )
+                except StopAsyncIteration:
+                    # Normal end of stream
+                    break
+                except asyncio.TimeoutError:
+                    elapsed = time_module.monotonic() - receive_start
+                    print(f"[ClaudeSDKProvider] TIMEOUT: No message received for {MESSAGE_TIMEOUT}s (total elapsed: {elapsed:.1f}s)")
+                    # Try to interrupt the stuck subprocess
+                    try:
+                        await self.interrupt()
+                    except Exception as int_err:
+                        print(f"[ClaudeSDKProvider] Failed to interrupt: {int_err}")
+                    raise RuntimeError(f"SDK subprocess appears stuck - no response for {MESSAGE_TIMEOUT} seconds")
+
                 message_count += 1
                 msg_type = type(message).__name__
                 print(f"[ClaudeSDKProvider] Message {message_count}: {msg_type}")

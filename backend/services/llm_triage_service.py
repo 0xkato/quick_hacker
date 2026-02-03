@@ -228,40 +228,56 @@ async def run_llm_triage(
         system_prompt=TRIAGE_SYSTEM_PROMPT,
         mcp_servers={},  # No MCP tools needed
         allowed_tools=[],  # No tools needed
+        cwd=os.getcwd(),  # Required by SDK
         max_turns=1,  # Single turn for triage
+        permission_mode="bypassPermissions",  # No permissions needed for triage
         env=env,
         setting_sources=setting_sources,
     )
+    print(f"[LLM Triage] SDK options: model={options.model}, cwd={options.cwd}")
 
     # Create and connect client
     client = ClaudeSDKClient(options)
 
     try:
         await client.connect()
-        logger.info("LLM Triage: SDK client connected")
+        print("[LLM Triage] SDK client connected")
 
         # Build triage prompt
         prompt = _build_triage_prompt(findings)
-        logger.info(f"LLM Triage: Sending {len(findings)} findings for triage")
+        print(f"[LLM Triage] Sending {len(findings)} findings for triage")
+        print(f"[LLM Triage] Prompt preview: {prompt[:500]}...")
 
         # Send query and collect response
         await client.query(prompt)
 
         response_parts: list[str] = []
+        message_count = 0
         async for message in client.receive_response():
+            message_count += 1
             msg_type = message.__class__.__name__
+            print(f"[LLM Triage] Message {message_count}: {msg_type}")
 
             if msg_type == "AssistantMessage":
                 content_blocks = getattr(message, "content", [])
+                print(f"[LLM Triage] AssistantMessage has {len(content_blocks)} blocks")
                 for block in content_blocks:
                     block_type = block.__class__.__name__
+                    print(f"[LLM Triage] Block type: {block_type}")
                     if block_type == "TextBlock":
                         text = getattr(block, "text", "")
                         if text:
+                            print(f"[LLM Triage] TextBlock content: {text[:200]}...")
                             response_parts.append(text)
+            elif msg_type == "ResultMessage":
+                is_error = getattr(message, "is_error", False)
+                result = getattr(message, "result", None)
+                print(f"[LLM Triage] ResultMessage: is_error={is_error}, result={result}")
 
         raw_response = "".join(response_parts)
-        logger.info(f"LLM Triage: Received response ({len(raw_response)} chars)")
+        print(f"[LLM Triage] Total response: {len(raw_response)} chars")
+        if raw_response:
+            print(f"[LLM Triage] Response preview: {raw_response[:500]}...")
 
         # Parse response
         finding_ids = [f.get("id", f"unknown-{i}") for i, f in enumerate(findings)]

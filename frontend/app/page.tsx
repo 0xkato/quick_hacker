@@ -1051,8 +1051,8 @@ export default function Home() {
         />
       )}
 
-      {/* Finding Drawer */}
-      {findingsMgmt.selectedFindingForDrawer && (
+      {/* Finding Drawer - only show when NOT in full-screen findings mode */}
+      {findingsMgmt.selectedFindingForDrawer && !(panels.activeView === 'findings' && !panels.showSidebar) && (
         <FindingDrawer
           finding={findingsMgmt.selectedFindingForDrawer}
           onClose={() => findingsMgmt.setSelectedFindingForDrawer(null)}

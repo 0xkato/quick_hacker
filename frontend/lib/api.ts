@@ -335,7 +335,7 @@ export const agents = {
     }>;
     findings: Finding[];
   }> {
-    // LLM triage can take time - use 2 minute timeout
+    // LLM triage can take time - use 10 minute timeout
     return request(`/api/agents/${agentId}/llm-triage`, {
       method: 'POST',
       body: JSON.stringify({
@@ -346,7 +346,7 @@ export const agents = {
         use_claude_sdk: config?.useClaudeSDK,
         use_claude_code_auth: config?.useClaudeCodeAuth,
       }),
-    }, 120000);
+    }, 600000);
   },
 
   async loadAgentState(agentId: string): Promise<{

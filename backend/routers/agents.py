@@ -845,7 +845,7 @@ def _rule_based_triage(finding: Finding) -> tuple[bool, str]:
 class LLMTriageRequest(BaseModel):
     """Request for LLM-based triage."""
     finding_ids: Optional[list[str]] = None  # If None, triage all findings
-    max_findings: int = 500  # Maximum findings to process per request (increased from 20)
+    max_findings: Optional[int] = None  # No limit by default - user controls via UI slider
     # Provider configuration (same as scan)
     provider: Optional[str] = "anthropic"
     model: Optional[str] = "claude-sonnet-4-20250514"
@@ -936,16 +936,20 @@ async def llm_triage_findings(
             return LLMTriageResponse(triaged_count=0, results=[], findings=[])
 
     # Select findings to triage (subset of all findings)
-    findings_to_triage = all_findings
+    findings_to_triage = list(all_findings)  # Copy to avoid modifying original
 
     # Filter to specific IDs if requested
     if request.finding_ids:
         finding_id_set = set(request.finding_ids)
         findings_to_triage = [f for f in findings_to_triage if f.id in finding_id_set]
 
-    # Apply batch size limit (but warn if truncating)
-    if len(findings_to_triage) > request.max_findings:
-        print(f"[Triage] WARNING: Truncating {len(findings_to_triage)} findings to {request.max_findings}")
+    # Sort by severity (most severe first: critical > high > medium > low > info)
+    severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, None: 5}
+    findings_to_triage.sort(key=lambda f: severity_order.get(f.severity, 5))
+
+    # Apply limit if specified (user-controlled via UI slider)
+    if request.max_findings is not None and len(findings_to_triage) > request.max_findings:
+        print(f"[Triage] User limited to {request.max_findings} of {len(findings_to_triage)} findings (sorted by severity)")
         findings_to_triage = findings_to_triage[:request.max_findings]
 
     findings = findings_to_triage  # Alias for compatibility with rest of code

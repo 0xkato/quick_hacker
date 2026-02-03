@@ -18,6 +18,7 @@ export interface TriageConfig {
   apiKey?: string;
   useClaudeSDK: boolean;
   useClaudeCodeAuth: boolean;
+  maxFindings?: number;  // undefined = no limit (triage all)
 }
 
 const PROVIDERS: { value: ProviderType; label: string }[] = [
@@ -47,6 +48,9 @@ export function TriageConfigModal({ findingsCount, onClose, onStartTriage }: Tri
   const [isLoading, setIsLoading] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  // Slider for max findings - default to all findings
+  const [maxFindings, setMaxFindings] = useState<number>(findingsCount);
+  const [triageAll, setTriageAll] = useState(true);  // Toggle for "all" vs slider
 
   // Load settings on mount
   useEffect(() => {
@@ -98,6 +102,7 @@ export function TriageConfigModal({ findingsCount, onClose, onStartTriage }: Tri
       apiKey: apiKey || undefined,
       useClaudeSDK,
       useClaudeCodeAuth,
+      maxFindings: triageAll ? undefined : maxFindings,  // undefined = no limit
     });
   };
 
@@ -128,8 +133,47 @@ export function TriageConfigModal({ findingsCount, onClose, onStartTriage }: Tri
         {/* Content */}
         <div className="p-4 space-y-4">
           <p className="text-sm text-text-muted">
-            Analyze {findingsCount} finding{findingsCount !== 1 ? 's' : ''} to determine validity and disposition.
+            Analyze findings to determine validity and disposition (sorted by severity).
           </p>
+
+          {/* Findings Count Selector */}
+          <div>
+            <label className="block text-xs text-text-muted mb-2 uppercase tracking-wider">
+              Findings to Triage
+            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={triageAll}
+                  onChange={(e) => setTriageAll(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-sm text-text-primary">
+                  Triage all {findingsCount} findings
+                </span>
+              </label>
+              {!triageAll && (
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min={1}
+                    max={findingsCount}
+                    value={maxFindings}
+                    onChange={(e) => setMaxFindings(parseInt(e.target.value))}
+                    className="w-full accent-accent"
+                  />
+                  <div className="flex justify-between text-xs text-text-muted">
+                    <span>1</span>
+                    <span className="text-text-primary font-medium">
+                      {maxFindings} finding{maxFindings !== 1 ? 's' : ''} (most severe first)
+                    </span>
+                    <span>{findingsCount}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Provider Selection */}
           <div>

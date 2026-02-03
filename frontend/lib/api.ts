@@ -327,6 +327,7 @@ export const agents = {
       apiKey?: string;
       useClaudeSDK: boolean;
       useClaudeCodeAuth: boolean;
+      maxFindings?: number;  // undefined = no limit
     }
   ): Promise<{
     triaged_count: number;
@@ -349,6 +350,7 @@ export const agents = {
         api_key: config?.apiKey,
         use_claude_sdk: config?.useClaudeSDK,
         use_claude_code_auth: config?.useClaudeCodeAuth,
+        max_findings: config?.maxFindings,  // undefined = no limit (triage all)
       }),
     }, 3600000);
   },

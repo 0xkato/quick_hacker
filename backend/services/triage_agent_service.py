@@ -121,12 +121,14 @@ class TriageAgent:
 
     def to_schema(self) -> Agent:
         """Convert to API schema."""
+        from models.schemas import ProviderConfig, ProviderType
         return Agent(
             id=self.id,
             repo_id=self.repo_id,
             name=self.name,
             agent_type=self.agent_type,
             status=self.status,
+            provider_config=ProviderConfig(provider=ProviderType.ANTHROPIC, model="claude-sonnet-4-20250514"),
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,

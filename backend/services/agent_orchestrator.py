@@ -426,11 +426,14 @@ class AgentOrchestrator:
 
             if use_codex:
                 findings = await self._run_codex_cli_agent(agent)
+            elif use_overseer:
+                # Overseer mode - Use native Overseer.run() which spawns real sub-agents
+                # This enables Foundation-first flow with 64 specialists
+                print("[Orchestrator] Running NATIVE Overseer with Foundation-first sub-agents...")
+                findings = await agent.run()
             elif use_sdk:
-                # SDK mode - Overseer runs through SDK with enhanced prompt
-                if use_overseer:
-                    print("[Orchestrator] Running Overseer-enhanced SDK audit (systematic deep analysis)...")
-                findings = await self._run_sdk_agent(agent, use_overseer=use_overseer)
+                # SDK mode - Single agent with enhanced prompt
+                findings = await self._run_sdk_agent(agent, use_overseer=False)
             else:
                 findings = await agent.run()
             print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")

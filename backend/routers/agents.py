@@ -846,6 +846,12 @@ class LLMTriageRequest(BaseModel):
     """Request for LLM-based triage."""
     finding_ids: Optional[list[str]] = None  # If None, triage all findings
     max_findings: int = 20  # Maximum findings to process per request (rate limit protection)
+    # Provider configuration (same as scan)
+    provider: Optional[str] = "anthropic"
+    model: Optional[str] = "claude-sonnet-4-20250514"
+    api_key: Optional[str] = None
+    use_claude_sdk: bool = True
+    use_claude_code_auth: bool = False
 
 
 class LLMTriageResult(BaseModel):
@@ -880,7 +886,6 @@ async def llm_triage_findings(
     Falls back to rule-based triage if SDK is unavailable.
     """
     from models.schemas import Disposition
-    from services.llm_triage_service import run_llm_triage, SDK_AVAILABLE as TRIAGE_SDK_AVAILABLE
 
     # Get agent
     agent = await orchestrator.get_agent(agent_id)
@@ -912,88 +917,93 @@ async def llm_triage_findings(
     if len(findings) > request.max_findings:
         findings = findings[:request.max_findings]
 
-    print(f"[LLM Triage] Processing {len(findings)} findings")
+    print(f"[Triage] Processing {len(findings)} findings")
+    print(f"[Triage] Config: provider={request.provider}, model={request.model}, use_claude_sdk={request.use_claude_sdk}, use_claude_code_auth={request.use_claude_code_auth}")
 
-    # Get API key from settings if available
-    api_key = None
-    try:
-        app_settings = await settings_service.get_settings()
-        provider_settings = app_settings.providers.get("anthropic")
-        if provider_settings and provider_settings.api_key:
-            api_key = provider_settings.api_key
-    except Exception as e:
-        print(f"[LLM Triage] Could not get API key from settings: {e}")
-
-    # Try LLM triage if SDK is available
-    if TRIAGE_SDK_AVAILABLE:
+    # Get API key from settings if not provided
+    api_key = request.api_key
+    if not api_key and request.provider == "anthropic" and not request.use_claude_code_auth:
         try:
-            # Convert findings to dicts for the triage service
-            findings_dicts = [f.model_dump() for f in findings]
+            app_settings = await settings_service.get_settings()
+            provider_settings = app_settings.providers.get("anthropic")
+            if provider_settings and provider_settings.api_key:
+                api_key = provider_settings.api_key
+                print(f"[Triage] Using API key from settings")
+        except Exception as e:
+            print(f"[Triage] Could not get API key from settings: {e}")
 
-            print(f"[LLM Triage] Running LLM triage with Claude SDK...")
-            triage_result = await run_llm_triage(findings_dicts, api_key=api_key)
+    # Try LLM triage if using Claude SDK
+    if request.use_claude_sdk and request.provider == "anthropic":
+        try:
+            from services.llm_triage_service import run_llm_triage, SDK_AVAILABLE as TRIAGE_SDK_AVAILABLE
 
-            # Map decisions back to findings
-            decision_map = {d.finding_id: d for d in triage_result.decisions}
+            if TRIAGE_SDK_AVAILABLE:
+                findings_dicts = [f.model_dump() for f in findings]
+                print(f"[Triage] Running LLM triage with model={request.model}")
 
-            triaged_findings = []
-            results = []
+                triage_result = await run_llm_triage(
+                    findings_dicts,
+                    api_key=api_key,
+                    model=request.model or "claude-sonnet-4-20250514",
+                    use_claude_code_auth=request.use_claude_code_auth,
+                )
 
-            for finding in findings:
-                decision = decision_map.get(finding.id)
+                # Map decisions back to findings
+                decision_map = {d.finding_id: d for d in triage_result.decisions}
 
-                if decision:
-                    # Map decision string to Disposition enum
-                    disposition_map = {
-                        "valid_security_issue": Disposition.VALID_SECURITY_ISSUE,
-                        "bug": Disposition.BUG,
-                        "misconfiguration": Disposition.MISCONFIGURATION,
-                        "hardening": Disposition.HARDENING,
-                        "by_design": Disposition.BY_DESIGN,
-                        "speculative": Disposition.SPECULATIVE,
-                    }
-                    finding.disposition = disposition_map.get(decision.decision, Disposition.SPECULATIVE)
-                    finding.classification_confidence = decision.confidence
-                    finding.reasoning = decision.reasoning
+                triaged_findings = []
+                results = []
 
-                    results.append(LLMTriageResult(
-                        finding_id=finding.id,
-                        decision=decision.decision,
-                        confidence=decision.confidence,
-                        reasoning=decision.reasoning,
-                    ))
-                else:
-                    # No decision from LLM, mark as speculative
-                    finding.disposition = Disposition.SPECULATIVE
-                    finding.classification_confidence = 30
-                    finding.reasoning = ["No LLM triage decision received"]
+                disposition_map = {
+                    "valid_security_issue": Disposition.VALID_SECURITY_ISSUE,
+                    "bug": Disposition.BUG,
+                    "misconfiguration": Disposition.MISCONFIGURATION,
+                    "hardening": Disposition.HARDENING,
+                    "by_design": Disposition.BY_DESIGN,
+                    "speculative": Disposition.SPECULATIVE,
+                }
 
-                    results.append(LLMTriageResult(
-                        finding_id=finding.id,
-                        decision="speculative",
-                        confidence=30,
-                        reasoning=["No LLM triage decision received"],
-                    ))
+                for finding in findings:
+                    decision = decision_map.get(finding.id)
+                    if decision:
+                        finding.disposition = disposition_map.get(decision.decision, Disposition.SPECULATIVE)
+                        finding.classification_confidence = decision.confidence
+                        finding.reasoning = decision.reasoning
+                        results.append(LLMTriageResult(
+                            finding_id=finding.id,
+                            decision=decision.decision,
+                            confidence=decision.confidence,
+                            reasoning=decision.reasoning,
+                        ))
+                    else:
+                        finding.disposition = Disposition.SPECULATIVE
+                        finding.classification_confidence = 30
+                        finding.reasoning = ["No triage decision received"]
+                        results.append(LLMTriageResult(
+                            finding_id=finding.id,
+                            decision="speculative",
+                            confidence=30,
+                            reasoning=["No triage decision received"],
+                        ))
+                    triaged_findings.append(finding)
 
-                triaged_findings.append(finding)
+                orchestrator._findings[agent_id] = triaged_findings
+                print(f"[Triage] LLM triage completed: {len(results)} findings processed")
 
-            # Update findings in orchestrator
-            orchestrator._findings[agent_id] = triaged_findings
-            print(f"[LLM Triage] Completed: {len(triaged_findings)} findings processed with LLM")
-
-            return LLMTriageResponse(
-                triaged_count=len(results),
-                results=results,
-                findings=triaged_findings,
-            )
+                return LLMTriageResponse(
+                    triaged_count=len(results),
+                    results=results,
+                    findings=triaged_findings,
+                )
 
         except Exception as e:
-            print(f"[LLM Triage] LLM triage failed, falling back to rule-based: {e}")
+            print(f"[Triage] LLM triage failed: {e}")
             import traceback
             traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Triage failed: {str(e)}")
 
     # Fallback to rule-based triage
-    print(f"[LLM Triage] Using rule-based triage (SDK unavailable or LLM call failed)")
+    print(f"[Triage] Using rule-based triage")
 
     triaged_findings = []
     results = []

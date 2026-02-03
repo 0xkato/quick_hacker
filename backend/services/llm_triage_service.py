@@ -179,12 +179,16 @@ def _parse_triage_response(response_text: str, finding_ids: list[str]) -> list[T
 async def run_llm_triage(
     findings: list[dict[str, Any]],
     api_key: str | None = None,
+    model: str = "claude-sonnet-4-20250514",
+    use_claude_code_auth: bool = False,
 ) -> TriageResult:
     """Run LLM-based triage on findings using Claude SDK.
 
     Args:
         findings: List of finding dicts to triage
         api_key: Optional API key (falls back to environment variable)
+        model: Model to use for triage
+        use_claude_code_auth: If True, use Claude Code subscription auth
 
     Returns:
         TriageResult with decisions for each finding
@@ -200,31 +204,36 @@ async def run_llm_triage(
     if not findings:
         return TriageResult(decisions=[], raw_response="")
 
-    # Get API key
-    resolved_key = (api_key or "").strip()
-    if not resolved_key:
-        resolved_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not resolved_key:
-        resolved_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
-
-    # Build environment for SDK
+    # Build environment and auth settings based on mode
     env: dict[str, str] = {}
     setting_sources: list[str] | None = None
 
-    if resolved_key:
+    if use_claude_code_auth:
+        # Use Claude Code subscription auth (loads user settings)
+        setting_sources = ["user"]
+        print("[LLM Triage] Using Claude Code auth mode")
+    else:
+        # Use API key auth
+        resolved_key = (api_key or "").strip()
+        if not resolved_key:
+            resolved_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not resolved_key:
+            resolved_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+
+        if not resolved_key:
+            raise RuntimeError(
+                "No API key provided. Configure in Settings or use Claude Code auth."
+            )
+
         if resolved_key.lower().startswith("sk-ant-oat"):
             env["ANTHROPIC_AUTH_TOKEN"] = resolved_key
         else:
             env["ANTHROPIC_API_KEY"] = resolved_key
-        logger.info(f"LLM Triage: Using API key (prefix: {resolved_key[:10]}...)")
-    else:
-        # Fall back to Claude Code auth
-        setting_sources = ["user"]
-        logger.info("LLM Triage: Using Claude Code auth")
+        print(f"[LLM Triage] Using API key (prefix: {resolved_key[:15]}...)")
 
     # Create SDK options (no tools needed for triage)
     options = ClaudeAgentOptions(
-        model="claude-sonnet-4-20250514",
+        model=model,
         system_prompt=TRIAGE_SYSTEM_PROMPT,
         mcp_servers={},  # No MCP tools needed
         allowed_tools=[],  # No tools needed
@@ -234,7 +243,7 @@ async def run_llm_triage(
         env=env,
         setting_sources=setting_sources,
     )
-    print(f"[LLM Triage] SDK options: model={options.model}, cwd={options.cwd}")
+    print(f"[LLM Triage] SDK options: model={model}, auth_mode={'claude_code' if use_claude_code_auth else 'api_key'}")
 
     # Create and connect client
     client = ClaudeSDKClient(options)

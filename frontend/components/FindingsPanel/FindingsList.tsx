@@ -19,6 +19,7 @@ import clsx from 'clsx';
 import type { Finding, Severity, FindingClassification, Disposition } from '@/types';
 import ProofChecklistView from './ProofChecklistView';
 import { FindingsReportView } from './FindingsReportView';
+import { TriageConfigModal, type TriageConfig } from './TriageConfigModal';
 
 // Classification badge colors and labels
 const CLASSIFICATION_COLORS: Record<FindingClassification, string> = {
@@ -193,15 +194,17 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
   const [showReportView, setShowReportView] = useState(false);
   const [isTriaging, setIsTriaging] = useState(false);
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
+  const [showTriageModal, setShowTriageModal] = useState(false);
 
-  const handleLLMTriage = async () => {
+  const handleStartTriage = async (config: TriageConfig) => {
     if (!agentId) return;
 
+    setShowTriageModal(false);
     setIsTriaging(true);
     setTriageMessage(null);
 
     try {
-      const result = await agents.llmTriage(agentId);
+      const result = await agents.llmTriage(agentId, undefined, config);
 
       // Count decisions
       const validCount = result.results.filter(r => r.decision === 'valid_security_issue').length;
@@ -217,9 +220,15 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
       if (onFindingsUpdated) {
         onFindingsUpdated(result.findings);
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('LLM Triage failed:', error);
-      setTriageMessage('LLM Triage failed. Make sure you\'re running via Claude Code.');
+      let errorMsg = 'Triage failed. ';
+      if (error instanceof Error) {
+        errorMsg += error.message;
+      } else {
+        errorMsg += 'Check console for details.';
+      }
+      setTriageMessage(errorMsg);
     } finally {
       setIsTriaging(false);
     }
@@ -282,7 +291,7 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
             {/* LLM Triage Button */}
             {agentId && findings.length > 0 && (
               <button
-                onClick={handleLLMTriage}
+                onClick={() => setShowTriageModal(true)}
                 disabled={isTriaging}
                 className="flex items-center gap-1.5 px-2 py-1 text-vsc-xs transition-all hover:bg-vsc-hover disabled:opacity-50"
                 style={{
@@ -423,6 +432,15 @@ export function FindingsList({ findings, agentId, onFindingClick, onNavigateToFi
           findings={filteredFindings}
           onClose={() => setShowReportView(false)}
           onNavigateToFile={onNavigateToFile}
+        />
+      )}
+
+      {/* Triage Config Modal */}
+      {showTriageModal && (
+        <TriageConfigModal
+          findingsCount={findings.length}
+          onClose={() => setShowTriageModal(false)}
+          onStartTriage={handleStartTriage}
         />
       )}
     </div>

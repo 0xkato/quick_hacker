@@ -315,7 +315,17 @@ export const agents = {
     });
   },
 
-  async llmTriage(agentId: string, findingIds?: string[]): Promise<{
+  async llmTriage(
+    agentId: string,
+    findingIds?: string[],
+    config?: {
+      provider: string;
+      model: string;
+      apiKey?: string;
+      useClaudeSDK: boolean;
+      useClaudeCodeAuth: boolean;
+    }
+  ): Promise<{
     triaged_count: number;
     results: Array<{
       finding_id: string;
@@ -327,7 +337,14 @@ export const agents = {
   }> {
     return request(`/api/agents/${agentId}/llm-triage`, {
       method: 'POST',
-      body: JSON.stringify({ finding_ids: findingIds }),
+      body: JSON.stringify({
+        finding_ids: findingIds,
+        provider: config?.provider,
+        model: config?.model,
+        api_key: config?.apiKey,
+        use_claude_sdk: config?.useClaudeSDK,
+        use_claude_code_auth: config?.useClaudeCodeAuth,
+      }),
     });
   },
 

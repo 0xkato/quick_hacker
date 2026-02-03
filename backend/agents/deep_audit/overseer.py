@@ -119,10 +119,20 @@ class Overseer(BaseAgent):
         self.provider_config = provider_config  # Store for later use
 
         # Create the actual LLM provider for Overseer's own LLM calls
+        # Note: The Overseer needs an API key for orchestration even when sub-agents
+        # use Claude Code auth. The sub-agents use `claude -p` CLI, but Overseer
+        # needs direct API access for its orchestration loop.
+        import os
+        api_key = provider_config.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key and use_claude_code_auth:
+            # Warn that Overseer still needs an API key for orchestration
+            print("[Overseer] WARNING: Claude Code auth is for sub-agents only.")
+            print("[Overseer] The Overseer orchestrator still needs ANTHROPIC_API_KEY env var for its LLM calls.")
+
         overseer_provider_config = ProviderConfig(
             provider=provider_config["provider"],
             model=provider_config["model"],
-            api_key=provider_config.get("api_key"),
+            api_key=api_key,
             base_url=provider_config.get("base_url"),
         )
         self.provider = get_provider(overseer_provider_config)

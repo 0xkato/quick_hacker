@@ -397,7 +397,7 @@ Begin your analysis now."""
             # Write output to deliverable path if we have content
             if output and not error_message:
                 try:
-                    await self.filesystem.write_file(task.deliverable, output)
+                    self.filesystem.write_file(task.deliverable, output)
                 except Exception as e:
                     print(f"[Dispatcher] Failed to write deliverable: {e}")
 
@@ -751,10 +751,10 @@ Begin your analysis now."""
 
     async def _build_foundation_context(self) -> FoundationContext:
         """Build FoundationContext from foundation phase outputs."""
-        # Read outputs from filesystem
-        repo_profile_json = await self.filesystem.read_file("/memories/foundation/repo_profile.json")
-        scope_map_json = await self.filesystem.read_file("/memories/foundation/scope_map.json")
-        threat_model_json = await self.filesystem.read_file("/memories/foundation/threat_model.json")
+        # Read outputs from filesystem (sync methods, no await needed)
+        repo_profile_json = self.filesystem.read_file("/memories/foundation/repo_profile.json")
+        scope_map_json = self.filesystem.read_file("/memories/foundation/scope_map.json")
+        threat_model_json = self.filesystem.read_file("/memories/foundation/threat_model.json")
 
         # Parse and build context
         return FoundationContext.from_dict({

@@ -62,7 +62,22 @@ export function useAgentManagement({
     else localStorage.removeItem(key);
   }, [projectId, selectedAgentId]);
 
-  // Load flow when agent is selected
+  // Track if the selected agent is running (use ref to avoid recreating interval on every agents update)
+  const isAgentRunningRef = useRef(false);
+
+  // Update the ref when agents change, but don't recreate the interval
+  useEffect(() => {
+    const selectedAgent = agents.find(a => a.id === selectedAgentId);
+    isAgentRunningRef.current = selectedAgent?.status === 'running' || selectedAgent?.status === 'pending';
+
+    // Clear selection if agent doesn't exist
+    if (agents.length > 0 && selectedAgentId && !selectedAgent) {
+      console.log('Selected agent not found, clearing selection');
+      setSelectedAgentId(null);
+    }
+  }, [agents, selectedAgentId]);
+
+  // Load flow when agent is selected (separate from polling to avoid recreating interval)
   useEffect(() => {
     if (!isAuthenticated || !selectedAgentId) {
       setAgentFlow(null);
@@ -72,16 +87,20 @@ export function useAgentManagement({
     let errorCount = 0;
     const maxErrors = 3;
     let intervalId: NodeJS.Timeout | null = null;
-
     let isFirstLoad = true;
+    let isMounted = true;
 
     const loadFlow = async () => {
+      if (!isMounted) return;
+
       try {
         // Only show loading indicator on first load to avoid UI flicker during polling
         if (isFirstLoad) {
           setIsLoadingFlow(true);
         }
         const flow = await agentsApi.getFlow(selectedAgentId);
+        if (!isMounted) return;
+
         setAgentFlow(flow);
         if (isFirstLoad) {
           setIsLoadingFlow(false);
@@ -89,6 +108,8 @@ export function useAgentManagement({
         }
         errorCount = 0;
       } catch (err) {
+        if (!isMounted) return;
+
         console.error('Failed to load flow:', err);
         if (isFirstLoad) {
           setIsLoadingFlow(false);
@@ -103,31 +124,24 @@ export function useAgentManagement({
       }
     };
 
+    // Initial load
     loadFlow();
 
-    // Check if selected agent exists and get its status
-    const selectedAgent = agents.find(a => a.id === selectedAgentId);
-
-    // If agents are loaded but selected agent doesn't exist, clear selection
-    if (agents.length > 0 && !selectedAgent) {
-      console.log('Selected agent not found, clearing selection');
-      setSelectedAgentId(null);
-      return;
-    }
-
-    // Only poll if the selected agent is running (10 second interval to reduce load on long scans)
-    const isRunning = selectedAgent?.status === 'running' || selectedAgent?.status === 'pending';
-
-    if (isRunning) {
-      intervalId = setInterval(loadFlow, 10000);
-    }
+    // Start polling - check ref on each tick to decide if we should continue
+    // Poll every 10 seconds while agent is running
+    intervalId = setInterval(() => {
+      if (isAgentRunningRef.current) {
+        loadFlow();
+      }
+    }, 10000);
 
     return () => {
+      isMounted = false;
       if (intervalId) {
         clearInterval(intervalId);
       }
     };
-  }, [selectedAgentId, agents, isAuthenticated]);
+  }, [selectedAgentId, isAuthenticated]); // Note: removed 'agents' from deps
 
   const selectAgent = useCallback((agentId: string | null) => {
     setSelectedAgentId(agentId);

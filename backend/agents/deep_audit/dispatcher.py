@@ -1,13 +1,22 @@
 """Wave dispatcher for Deep Agents parallel execution.
 
 Handles dispatching sub-agents in waves and collecting results.
+
+Sub-agent execution modes:
+1. Claude CLI (default when use_claude_code_auth=True): Spawns `claude` CLI processes
+   directly, using the user's Claude Code subscription. This is the Gas Town approach.
+2. ReactAgent (fallback when use_claude_code_auth=False): Uses API key authentication
+   with the Anthropic SDK.
 """
 
 import asyncio
 import json
+import os
+import shutil
+import subprocess
 import uuid
 from datetime import datetime
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 from pydantic import BaseModel, Field
 
 from agents.deep_audit.filesystem import MemoriesFilesystem
@@ -19,6 +28,11 @@ from agents.deep_audit.foundation import (
 )
 from agents.deep_audit.state import WaveTask
 from models.schemas import WSMessage, WSMessageType
+
+
+def _claude_cli_available() -> bool:
+    """Check if the claude CLI is available on PATH."""
+    return shutil.which("claude") is not None
 
 
 class DispatchTask(BaseModel):
@@ -196,7 +210,7 @@ class WaveDispatcher:
         task: DispatchTask,
         foundation_context: Optional[FoundationContext] = None,
     ) -> SubagentResult:
-        """Spawn a single sub-agent as a ReactAgent instance.
+        """Spawn a single sub-agent using Claude CLI or ReactAgent.
 
         Args:
             task: The task to execute
@@ -211,6 +225,247 @@ class WaveDispatcher:
         if self.on_agent_start:
             self.on_agent_start(task.task_id, task.agent_type)
 
+        # Check if Claude Code auth is requested (use Claude CLI)
+        use_claude_code_auth = self.provider_config.get("use_claude_code_auth", False)
+
+        if use_claude_code_auth:
+            if _claude_cli_available():
+                # Use Claude CLI directly (Gas Town approach)
+                # Uses user's Claude Code subscription automatically
+                return await self._spawn_subagent_cli(task, foundation_context, started_at)
+            else:
+                # Claude CLI not available - warn and fall back
+                print(f"[Dispatcher] WARNING: Claude CLI not found, falling back to ReactAgent with API key")
+                print(f"[Dispatcher] Install Claude Code CLI: https://claude.ai/code")
+                self._broadcast(
+                    WSMessageType.AGENT_STATUS,
+                    task.task_id,
+                    {
+                        "agent_id": task.task_id,
+                        "agent_type": task.agent_type,
+                        "status": "warning",
+                        "message": "Claude CLI not found, using API key fallback",
+                    }
+                )
+
+        # Use ReactAgent with API key auth
+        return await self._spawn_subagent_react(task, foundation_context, started_at)
+
+    async def _spawn_subagent_cli(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext],
+        started_at: datetime,
+    ) -> SubagentResult:
+        """Spawn sub-agent using Claude CLI directly (Gas Town approach).
+
+        Runs `claude -p` with the task prompt, using the user's Claude Code
+        subscription for authentication. This is the same approach Gas Town uses.
+        """
+        agent_id = f"{task.agent_type}_{task.task_id}"
+
+        try:
+            # Get prompt for this agent type (with foundation context if available)
+            system_prompt = self._get_subagent_prompt(task, foundation_context)
+
+            # Get tool subset for this agent type
+            allowed_tools = get_tools_for_agent_type(task.agent_type)
+
+            # Map our tool names to Claude CLI tool names
+            # Claude CLI has built-in tools: Read, Write, Edit, Glob, Grep, Bash, Task, etc.
+            claude_tool_mapping = {
+                # File operations
+                "read_file": "Read",
+                "write_file": "Write",
+                "list_directory": "Glob",
+                "get_repo_tree": "Glob",
+                "get_file_structure": "Glob",
+                # Search operations
+                "search_code": "Grep",
+                "grep_semantic": "Grep",
+                "find_usages": "Grep",
+                # Custom operations via Bash (for tools without direct mapping)
+                "trace_data_flow": "Bash",  # Agent can use grep/ast tools via bash
+                "trace_path_verdict": "Bash",
+                "triage_finding": "Bash",
+                "report_finding": "Bash",
+                "upsert_sink_signal": "Bash",
+                "read_memories": "Read",  # Can read from memories directory
+                "list_memories": "Glob",
+                "get_entry_points": "Grep",
+            }
+
+            # Convert our tool names to Claude CLI tool names
+            claude_tools = set()
+            for tool in allowed_tools:
+                if tool in claude_tool_mapping:
+                    claude_tools.add(claude_tool_mapping[tool])
+
+            # Ensure we have basic tools (Read, Glob, Grep always available)
+            claude_tools.update(["Read", "Glob", "Grep"])
+
+            # Add Write for agents that need to output results
+            if any(t in allowed_tools for t in ["write_file", "report_finding", "upsert_sink_signal"]):
+                claude_tools.add("Write")
+
+            claude_tools = sorted(claude_tools)  # Consistent ordering
+
+            # Broadcast sub-agent started
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": agent_id,
+                    "agent_type": task.agent_type,
+                    "status": "running",
+                    "task_id": task.task_id,
+                    "objective": task.objective,
+                }
+            )
+
+            # Build the user prompt for the task
+            user_prompt = f"""Execute this task:
+
+**Objective:** {task.objective}
+**Scope:** {task.scope}
+**Deliverable:** {task.deliverable}
+**Success Criteria:** {task.success_criteria or 'Complete the objective thoroughly'}
+
+{f'**Constraints:** {task.constraints}' if task.constraints else ''}
+
+Begin your analysis now."""
+
+            # Get model from config - use full model name for precise version control
+            model = self.provider_config.get("model", "claude-sonnet-4-20250514")
+            # Claude CLI accepts both aliases (sonnet, opus, haiku) and full names
+            # We prefer full names for version control, but fall back to alias if needed
+            model_arg = model  # Use exact model name from config
+
+            # Build claude CLI command
+            cmd = [
+                "claude",
+                "-p",  # Print mode (non-interactive)
+                "--model", model_arg,
+                "--permission-mode", "bypassPermissions",
+                "--tools", ",".join(claude_tools),
+                "--system-prompt", system_prompt,
+                "--output-format", "text",
+                "--no-session-persistence",  # Don't save session to disk
+                user_prompt,
+            ]
+
+            print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
+            print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
+
+            # Run claude CLI as subprocess
+            # Use asyncio.create_subprocess_exec for async execution
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.repo_path,
+                env={**os.environ, "NO_COLOR": "1"},  # Disable color codes in output
+            )
+
+            # Wait for completion with timeout
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=task.time_budget,
+                )
+                output = stdout.decode("utf-8", errors="replace")
+                error_output = stderr.decode("utf-8", errors="replace")
+
+                if process.returncode != 0:
+                    error_message = f"Claude CLI exited with code {process.returncode}: {error_output}"
+                    print(f"[Dispatcher] {agent_id} failed: {error_message}")
+                else:
+                    error_message = None
+                    print(f"[Dispatcher] {agent_id} completed successfully")
+
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                error_message = f"Task exceeded time budget of {task.time_budget}s"
+                output = ""
+                print(f"[Dispatcher] {agent_id} timed out")
+
+            completed_at = datetime.utcnow()
+            status = "completed" if not error_message else "failed"
+
+            # Write output to deliverable path if we have content
+            if output and not error_message:
+                try:
+                    await self.filesystem.write_file(task.deliverable, output)
+                except Exception as e:
+                    print(f"[Dispatcher] Failed to write deliverable: {e}")
+
+            # Broadcast sub-agent completed
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": agent_id,
+                    "agent_type": task.agent_type,
+                    "status": status,
+                    "task_id": task.task_id,
+                    "findings_count": 0,
+                    "error": error_message,
+                }
+            )
+
+            # Notify completion (legacy callback)
+            if self.on_agent_complete:
+                self.on_agent_complete(task.task_id, task.agent_type, status)
+
+            return SubagentResult(
+                task_id=task.task_id,
+                agent_type=task.agent_type,
+                status=status,
+                output_path=task.deliverable,
+                started_at=started_at,
+                completed_at=completed_at,
+                error=error_message,
+                tokens_used=0,
+            )
+
+        except Exception as e:
+            completed_at = datetime.utcnow()
+            error_msg = str(e)
+            print(f"[Dispatcher] {agent_id} exception: {error_msg}")
+            # Broadcast failure
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": agent_id,
+                    "agent_type": task.agent_type,
+                    "status": "failed",
+                    "task_id": task.task_id,
+                    "error": error_msg,
+                }
+            )
+            if self.on_agent_complete:
+                self.on_agent_complete(task.task_id, task.agent_type, "failed")
+            return SubagentResult(
+                task_id=task.task_id,
+                agent_type=task.agent_type,
+                status="failed",
+                started_at=started_at,
+                completed_at=completed_at,
+                error=error_msg,
+            )
+
+    async def _spawn_subagent_react(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext],
+        started_at: datetime,
+    ) -> SubagentResult:
+        """Spawn sub-agent using ReactAgent with API key auth."""
         try:
             # Get prompt for this agent type (with foundation context if available)
             prompt = self._get_subagent_prompt(task, foundation_context)
@@ -222,13 +477,15 @@ class WaveDispatcher:
             from agents.react_agent import ReActSecurityAgent as ReactAgent
             from models.schemas import AgentCreateRequest, ProviderConfig, ProviderType
 
-            # Create a minimal request for the sub-agent
+            # Create a minimal request for the sub-agent with full provider config
             request = AgentCreateRequest(
                 repo_id=self.filesystem.project_id,
                 name=f"{task.agent_type}_{task.task_id}",
                 provider_config=ProviderConfig(
                     provider=self.provider_config.get("provider", ProviderType.ANTHROPIC),
                     model=self.provider_config.get("model", "claude-sonnet-4-20250514"),
+                    api_key=self.provider_config.get("api_key"),
+                    base_url=self.provider_config.get("base_url"),
                 ),
                 time_budget_seconds=task.time_budget,
                 custom_prompt=prompt,
@@ -411,23 +668,10 @@ class WaveDispatcher:
         Returns:
             Prompt string
         """
-        from agents.deep_audit.subagents import (
-            REPO_PROFILER_PROMPT,
-            SCOPE_MAPPER_PROMPT_TEMPLATE,
-            SINK_HUNTER_PROMPT_TEMPLATE,
-            ENTRYPOINT_HUNTER_PROMPT_TEMPLATE,
-            AUDITOR_PROMPT_TEMPLATE,
-        )
+        from agents.deep_audit.subagents import get_prompt_for_agent_type
 
-        prompts = {
-            "RepoProfiler": REPO_PROFILER_PROMPT,
-            "ScopeMapper": SCOPE_MAPPER_PROMPT_TEMPLATE,
-            "SinkHunter": SINK_HUNTER_PROMPT_TEMPLATE,
-            "EntrypointHunter": ENTRYPOINT_HUNTER_PROMPT_TEMPLATE,
-            "Auditor": AUDITOR_PROMPT_TEMPLATE,
-        }
-
-        base = prompts.get(agent_type, f"You are a {agent_type} agent. Complete the assigned task.")
+        # Get base prompt for agent type
+        base = get_prompt_for_agent_type(agent_type)
 
         if task:
             # Simple string replacement for templates

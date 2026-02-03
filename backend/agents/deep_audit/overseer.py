@@ -106,11 +106,17 @@ class Overseer(BaseAgent):
             repo_path=repo_path,
         )
 
-        # Initialize dispatcher
+        # Initialize dispatcher with full provider config
+        # Support both API key and Claude Code auth modes
+        use_claude_code_auth = getattr(request, 'use_claude_code_auth', False)
         provider_config = {
             "provider": request.provider_config.provider if request.provider_config else ProviderType.ANTHROPIC,
             "model": request.provider_config.model if request.provider_config else "claude-sonnet-4-20250514",
+            "api_key": request.provider_config.api_key if request.provider_config and request.provider_config.api_key else None,
+            "base_url": request.provider_config.base_url if request.provider_config and request.provider_config.base_url else None,
+            "use_claude_code_auth": use_claude_code_auth,  # Pass through for sub-agents
         }
+        self.provider_config = provider_config  # Store for later use
         self.dispatcher = WaveDispatcher(
             repo_path=repo_path,
             filesystem=self.filesystem,

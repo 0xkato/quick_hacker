@@ -28,6 +28,7 @@ class TestAgentOrchestratorProviderRouting:
         agent.id = "test-agent-id"
         agent.repo_id = "test-repo"
         agent.status = AgentStatus.PENDING
+        agent.use_overseer = False  # Explicitly disable Overseer for SDK tests
         agent.request = Mock()
         agent.request.provider_config = Mock()
         agent.request.provider_config.provider = "claude_sdk"
@@ -62,6 +63,7 @@ class TestAgentOrchestratorProviderRouting:
         agent.repo_id = "test-repo"
         agent.repo_path = "/tmp/test-repo"
         agent.status = AgentStatus.PENDING
+        agent.use_overseer = False  # Explicitly disable Overseer for SDK tests
         agent.request = Mock()
         agent.request.provider_config = Mock()
         agent.request.provider_config.provider = "anthropic"
@@ -93,7 +95,7 @@ class TestAgentOrchestratorProviderRouting:
             await orchestrator._run_agent(mock_agent)
 
             # Verify _run_sdk_agent was called for claude_sdk provider
-            orchestrator._run_sdk_agent.assert_called_once_with(mock_agent)
+            orchestrator._run_sdk_agent.assert_called_once_with(mock_agent, use_overseer=False)
 
     @pytest.mark.asyncio
     async def test_routes_anthropic_to_react(self, mock_react_agent):
@@ -130,7 +132,7 @@ class TestAgentOrchestratorProviderRouting:
             await orchestrator._run_agent(mock_anthropic_sdk_agent)
 
             # Verify _run_sdk_agent was called for anthropic provider with SDK flag
-            orchestrator._run_sdk_agent.assert_called_once_with(mock_anthropic_sdk_agent)
+            orchestrator._run_sdk_agent.assert_called_once_with(mock_anthropic_sdk_agent, use_overseer=False)
 
     @pytest.mark.asyncio
     async def test_sdk_agent_cancel_calls_interrupt(self, mock_agent):

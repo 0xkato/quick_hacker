@@ -286,10 +286,12 @@ class ClaudeSDKProvider:
 
             # Iterate over the async iterator with per-message timeout
             # This prevents hanging indefinitely if the SDK subprocess gets stuck
+            # Note: Large repos like Chromium can cause the SDK subprocess to hang
+            # in an infinite CPU loop. 2 minutes is enough for normal operations.
             print("[ClaudeSDKProvider] Receiving response stream...")
             receive_start = time_module.monotonic()
             message_count = 0
-            MESSAGE_TIMEOUT = 300  # 5 minutes max between messages
+            MESSAGE_TIMEOUT = 120  # 2 minutes max between messages (reduced from 5)
 
             response_iter = self.client.receive_response()
             while True:

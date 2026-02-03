@@ -376,6 +376,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
                       <div>
                         <span className="text-vsc-sm font-medium text-vsc-text">Claude Code (subscription)</span>
                         <p className="text-vsc-xs text-vsc-text-muted">Uses your Claude Code login - no API key needed</p>
+                        <p className="text-vsc-xs text-yellow-500">May conflict with custom tools/hooks</p>
                       </div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -387,8 +388,8 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
                         className="rounded"
                       />
                       <div>
-                        <span className="text-vsc-sm font-medium text-vsc-text">API Key</span>
-                        <p className="text-vsc-xs text-vsc-text-muted">Uses Anthropic API key from settings or entered below</p>
+                        <span className="text-vsc-sm font-medium text-vsc-text">API Key (Recommended)</span>
+                        <p className="text-vsc-xs text-vsc-text-muted">Uses Anthropic API key - avoids tool conflicts</p>
                       </div>
                     </label>
                   </div>

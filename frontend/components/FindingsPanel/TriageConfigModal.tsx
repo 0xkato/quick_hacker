@@ -199,6 +199,7 @@ export function TriageConfigModal({ findingsCount, onClose, onStartTriage }: Tri
                       <div>
                         <span className="text-sm font-medium text-text-primary">Claude Code (subscription)</span>
                         <p className="text-xs text-text-muted">Uses your Claude Code login - no API key needed</p>
+                        <p className="text-xs text-yellow-500">May conflict with custom tools/hooks</p>
                       </div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -210,8 +211,8 @@ export function TriageConfigModal({ findingsCount, onClose, onStartTriage }: Tri
                         className="rounded"
                       />
                       <div>
-                        <span className="text-sm font-medium text-text-primary">API Key</span>
-                        <p className="text-xs text-text-muted">Uses Anthropic API key from settings or entered below</p>
+                        <span className="text-sm font-medium text-text-primary">API Key (Recommended)</span>
+                        <p className="text-xs text-text-muted">Uses Anthropic API key - avoids tool conflicts</p>
                       </div>
                     </label>
                   </div>

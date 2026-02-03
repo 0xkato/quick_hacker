@@ -12,6 +12,9 @@ from agents.deep_audit.foundation import (
     ThreatModel,
     TrustBoundary,
     AttackerCapability,
+    SignalCategory,
+    SignalSeverity,
+    SuspiciousSignal,
 )
 
 __all__ = [
@@ -28,4 +31,7 @@ __all__ = [
     "ThreatModel",
     "TrustBoundary",
     "AttackerCapability",
+    "SignalCategory",
+    "SignalSeverity",
+    "SuspiciousSignal",
 ]

@@ -253,3 +253,157 @@ class FoundationContext:
             scope_map=scope_map,
             threat_model=threat_model,
         )
+
+
+class SignalCategory(Enum):
+    """Categories of suspicious signals."""
+    # Memory Safety
+    BUFFER_OVERFLOW = "buffer_overflow"
+    USE_AFTER_FREE = "use_after_free"
+    DOUBLE_FREE = "double_free"
+    UNINITIALIZED_MEMORY = "uninitialized_memory"
+    INTEGER_OVERFLOW = "integer_overflow"
+    FORMAT_STRING = "format_string"
+    TYPE_CONFUSION = "type_confusion"
+    UNSAFE_FFI = "unsafe_ffi"
+
+    # Injection
+    SQL_INJECTION = "sql_injection"
+    NOSQL_INJECTION = "nosql_injection"
+    COMMAND_INJECTION = "command_injection"
+    TEMPLATE_INJECTION = "template_injection"
+    EXPRESSION_INJECTION = "expression_injection"
+    LDAP_INJECTION = "ldap_injection"
+    XPATH_INJECTION = "xpath_injection"
+    CRLF_INJECTION = "crlf_injection"
+    LOG_INJECTION = "log_injection"
+    EMAIL_INJECTION = "email_injection"
+
+    # Web
+    SSRF = "ssrf"
+    REQUEST_SMUGGLING = "request_smuggling"
+    CACHE_POISONING = "cache_poisoning"
+    HOST_HEADER_INJECTION = "host_header_injection"
+    XSS = "xss"
+    PROTOTYPE_POLLUTION = "prototype_pollution"
+    CLICKJACKING = "clickjacking"
+
+    # Deserialization/Parsing
+    UNSAFE_DESERIALIZATION = "unsafe_deserialization"
+    XXE = "xxe"
+    ZIP_SLIP = "zip_slip"
+    REDOS = "redos"
+    PATH_TRAVERSAL = "path_traversal"
+
+    # Auth
+    AUTH_BYPASS = "auth_bypass"
+    SESSION_FIXATION = "session_fixation"
+    CSRF = "csrf"
+    IDOR = "idor"
+    PRIVILEGE_ESCALATION = "privilege_escalation"
+
+    # Crypto
+    CRYPTO_MISUSE = "crypto_misuse"
+    WEAK_RANDOMNESS = "weak_randomness"
+    SECRETS_EXPOSURE = "secrets_exposure"
+
+    # Other
+    RACE_CONDITION = "race_condition"
+    RESOURCE_EXHAUSTION = "resource_exhaustion"
+    SENSITIVE_DATA_EXPOSURE = "sensitive_data_exposure"
+    MASS_ASSIGNMENT = "mass_assignment"
+
+    # Generic
+    UNKNOWN = "unknown"
+
+
+class SignalSeverity(Enum):
+    """Severity of suspicious signal."""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+@dataclass
+class SuspiciousSignal:
+    """A suspicious pattern identified by Hunters, not yet verified."""
+    signal_id: str
+    category: SignalCategory
+    severity: SignalSeverity
+    file_path: str
+    line_start: int
+    code_snippet: str
+    why_suspicious: str
+    entry_point_trace: list[str]
+
+    line_end: int | None = None
+    sink_function: str | None = None
+    related_signals: list[str] = field(default_factory=list)
+    hunter_notes: str | None = None
+    foundation_context_summary: str | None = None
+
+    def to_specialist_context(self) -> str:
+        """Format signal for specialist agent consumption."""
+        lines = [
+            f"## Signal: {self.signal_id}",
+            "",
+            f"**Category:** {self.category.value.upper()}",
+            f"**Severity:** {self.severity.value.upper()}",
+            f"**Location:** {self.file_path}:{self.line_start}",
+            "",
+            "**Code:**",
+            "```",
+            self.code_snippet,
+            "```",
+            "",
+            f"**Why Suspicious:** {self.why_suspicious}",
+            "",
+            "**Entry Point Trace:**",
+        ]
+        for i, step in enumerate(self.entry_point_trace):
+            lines.append(f"  {i + 1}. {step}")
+
+        if self.sink_function:
+            lines.append(f"\n**Sink Function:** {self.sink_function}")
+
+        if self.hunter_notes:
+            lines.append(f"\n**Hunter Notes:** {self.hunter_notes}")
+
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "signal_id": self.signal_id,
+            "category": self.category.value,
+            "severity": self.severity.value,
+            "file_path": self.file_path,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "code_snippet": self.code_snippet,
+            "why_suspicious": self.why_suspicious,
+            "entry_point_trace": self.entry_point_trace,
+            "sink_function": self.sink_function,
+            "related_signals": self.related_signals,
+            "hunter_notes": self.hunter_notes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SuspiciousSignal":
+        """Deserialize from dictionary."""
+        return cls(
+            signal_id=data["signal_id"],
+            category=SignalCategory(data["category"]),
+            severity=SignalSeverity(data["severity"]),
+            file_path=data["file_path"],
+            line_start=data["line_start"],
+            line_end=data.get("line_end"),
+            code_snippet=data["code_snippet"],
+            why_suspicious=data["why_suspicious"],
+            entry_point_trace=data["entry_point_trace"],
+            sink_function=data.get("sink_function"),
+            related_signals=data.get("related_signals", []),
+            hunter_notes=data.get("hunter_notes"),
+        )

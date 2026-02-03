@@ -7,6 +7,9 @@ from agents.deep_audit.foundation import (
     ThreatModel,
     TrustBoundary,
     AttackerCapability,
+    SuspiciousSignal,
+    SignalCategory,
+    SignalSeverity,
 )
 
 
@@ -215,3 +218,43 @@ class TestFoundationContext:
         # Directory patterns should match at any depth
         assert context.is_in_scope("vendor/lib.py") == False
         assert context.is_in_scope("internal/vendor/lib.py") == False
+
+
+class TestSuspiciousSignal:
+    def test_signal_creation(self):
+        """Suspicious signal can be created with required fields."""
+        signal = SuspiciousSignal(
+            signal_id="sig-001",
+            category=SignalCategory.COMMAND_INJECTION,
+            severity=SignalSeverity.HIGH,
+            file_path="src/api/execute.py",
+            line_start=45,
+            code_snippet="os.system(user_input)",
+            why_suspicious="User-controlled string flows to os.system()",
+            entry_point_trace=["POST /api/run", "handle_run()", "os.system()"],
+        )
+
+        assert signal.signal_id == "sig-001"
+        assert signal.category == SignalCategory.COMMAND_INJECTION
+        assert signal.severity == SignalSeverity.HIGH
+        assert len(signal.entry_point_trace) == 3
+
+    def test_signal_to_specialist_context(self):
+        """Signal can be formatted for specialist consumption."""
+        signal = SuspiciousSignal(
+            signal_id="sig-001",
+            category=SignalCategory.SQL_INJECTION,
+            severity=SignalSeverity.CRITICAL,
+            file_path="src/db/query.py",
+            line_start=100,
+            code_snippet="cursor.execute(f'SELECT * FROM {table}')",
+            why_suspicious="String interpolation in SQL query",
+            entry_point_trace=["GET /api/data", "get_data()", "execute()"],
+        )
+
+        context = signal.to_specialist_context()
+
+        assert "sig-001" in context
+        assert "SQL_INJECTION" in context
+        assert "src/db/query.py:100" in context
+        assert "String interpolation" in context

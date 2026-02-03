@@ -135,7 +135,9 @@ class ClaudeSDKProvider:
 
         # Create ClaudeAgentOptions with SDK-compatible parameters
         model = self.config.get("model", "claude-sonnet-4-20250514")
-        max_turns = self.config.get("max_turns")
+        # Default max_turns to prevent indefinite runs on large repos
+        # Can be overridden by config (e.g., for longer scans)
+        max_turns = self.config.get("max_turns", 200)  # Default 200 turns max
         max_budget = self.config.get("max_budget_usd")
         permission_mode = self.config.get("permission_mode", "bypassPermissions")
         api_key = self.config.get("api_key")

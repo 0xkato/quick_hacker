@@ -115,11 +115,11 @@ export function useAgentManagement({
       return;
     }
 
-    // Only poll if the selected agent is running (5 second interval to reduce load)
+    // Only poll if the selected agent is running (10 second interval to reduce load on long scans)
     const isRunning = selectedAgent?.status === 'running' || selectedAgent?.status === 'pending';
 
     if (isRunning) {
-      intervalId = setInterval(loadFlow, 5000);
+      intervalId = setInterval(loadFlow, 10000);
     }
 
     return () => {

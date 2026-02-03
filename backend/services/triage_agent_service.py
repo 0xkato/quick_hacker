@@ -365,13 +365,28 @@ async def run_triage_agent(
     # These need to be module-level or use file I/O (not closures to in-memory state)
     # because they run in the SDK's MCP server process
 
+    # Debug file to check if tools are actually executing
+    debug_file = state_file.replace(".json", "_debug.log")
+
     @tool("get_next_finding", "Get the next finding to triage. Returns finding details or 'complete' status when done.", {})
     async def sdk_get_next_finding(args: dict) -> dict:
         """Get the next finding from state file."""
         try:
+            # Debug: log that we're executing
+            with open(debug_file, "a") as f:
+                f.write(f"get_next_finding called, state_file={state_file}\n")
+
+            if not Path(state_file).exists():
+                with open(debug_file, "a") as f:
+                    f.write(f"ERROR: state_file does not exist!\n")
+                return {"error": f"State file not found: {state_file}"}
+
             state_data = json.loads(Path(state_file).read_text())
             current_index = state_data.get("current_index", 0)
             findings_list = state_data.get("findings", [])
+
+            with open(debug_file, "a") as f:
+                f.write(f"current_index={current_index}, total_findings={len(findings_list)}\n")
 
             if current_index >= len(findings_list):
                 return {
@@ -388,6 +403,8 @@ async def run_triage_agent(
                 "finding": finding,
             }
         except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"ERROR: {e}\n")
             return {"error": f"Failed to read state: {e}"}
 
     @tool("read_file", "Read file content to verify the finding.", {"file_path": str})
@@ -518,6 +535,15 @@ async def run_triage_agent(
         # Load final decisions from state file
         state.load_decisions_from_file()
         print(f"[TriageAgent] Loaded {len(state.decisions)} decisions from state file")
+
+        # Check if debug file was created (indicates tools actually executed)
+        debug_file = state_file.replace(".json", "_debug.log")
+        if Path(debug_file).exists():
+            debug_content = Path(debug_file).read_text()
+            print(f"[TriageAgent] DEBUG LOG:\n{debug_content}")
+            Path(debug_file).unlink()
+        else:
+            print(f"[TriageAgent] WARNING: Debug file not created - tools may not have executed!")
 
     except Exception as e:
         print(f"[TriageAgent] Error: {e}")

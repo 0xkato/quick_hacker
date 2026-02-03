@@ -104,10 +104,8 @@ class AgentLifecycleManager:
                 f"Please wait for current scans to complete or free up system resources."
             )
 
-        # Check repository size (file count)
-        repo_ok, repo_message = resource_monitor.check_repo_size(repo_path)
-        if not repo_ok:
-            raise ValueError(repo_message)
+        # Check repository size (file count) - warns but doesn't block
+        _, repo_message = resource_monitor.check_repo_size(repo_path)
         if "Warning" in repo_message:
             print(f"[LifecycleManager] {repo_message}")
 

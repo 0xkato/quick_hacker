@@ -113,36 +113,79 @@ class ResourceMonitor:
         )
 
     def count_repo_files(self, repo_path: str) -> int:
-        """Count files in a repository (fast, doesn't read content)."""
+        """Count files in a repository (fast, doesn't read content).
+
+        Args:
+            repo_path: Absolute path to the repository (must exist)
+
+        Returns:
+            Number of source files (excluding common non-source directories)
+        """
+        from pathlib import Path
+
         count = 0
         try:
-            for root, dirs, files in os.walk(repo_path):
-                # Skip common non-source directories
-                dirs[:] = [d for d in dirs if d not in {
-                    '.git', 'node_modules', 'vendor', '__pycache__',
-                    '.venv', 'venv', 'dist', 'build', '.next',
-                    'target', 'out', 'coverage', '.cache'
-                }]
+            # Validate and resolve path
+            path = Path(repo_path).resolve()
+            if not path.exists():
+                print(f"[ResourceMonitor] Path does not exist: {repo_path}")
+                return 0
+            if not path.is_dir():
+                print(f"[ResourceMonitor] Path is not a directory: {repo_path}")
+                return 0
+
+            # Directories to skip (non-source, dependencies, build artifacts)
+            skip_dirs = {
+                '.git', 'node_modules', 'vendor', '__pycache__',
+                '.venv', 'venv', 'dist', 'build', '.next',
+                'target', 'out', 'coverage', '.cache', '.tox',
+                'eggs', '*.egg-info', '.mypy_cache', '.pytest_cache',
+                'bower_components', 'jspm_packages', '.nuxt', '.output',
+            }
+
+            for root, dirs, files in os.walk(str(path)):
+                # Skip non-source directories (modifies dirs in-place)
+                dirs[:] = [d for d in dirs if d not in skip_dirs and not d.endswith('.egg-info')]
+
+                # Ensure we stay within the original path (prevent symlink escapes)
+                current = Path(root).resolve()
+                try:
+                    current.relative_to(path)
+                except ValueError:
+                    # Path escaped the repo directory (via symlink)
+                    dirs.clear()
+                    continue
+
                 count += len(files)
-                # Early exit if way over limit
+                # Early exit if way over limit (just for performance)
                 if count > self.limits.max_files_critical * 2:
                     break
+        except PermissionError as e:
+            print(f"[ResourceMonitor] Permission denied: {e}")
         except Exception as e:
             print(f"[ResourceMonitor] Error counting files: {e}")
         return count
 
     def check_repo_size(self, repo_path: str) -> tuple[bool, str]:
-        """Check if repo is within acceptable size limits.
+        """Check repository size and return info message.
+
+        Args:
+            repo_path: Absolute path to the repository
 
         Returns:
-            (is_ok, message) - is_ok is False if repo is too large
+            (is_ok, message) - is_ok is always True (we don't block large repos),
+            but message contains warnings for very large repos.
         """
+        if not repo_path:
+            return True, "No repository path provided"
+
         file_count = self.count_repo_files(repo_path)
 
         if file_count > self.limits.max_files_critical:
-            return False, (
-                f"Repository has {file_count:,} files (limit: {self.limits.max_files_critical:,}). "
-                f"Consider targeting specific directories instead of scanning the entire repo."
+            return True, (
+                f"Warning: Repository has {file_count:,} files. "
+                f"This is a very large codebase - scan may take significant time and resources. "
+                f"Consider targeting specific directories for faster results."
             )
         elif file_count > self.limits.max_files_warning:
             return True, (

@@ -176,7 +176,7 @@ async def run_triage_agent(
 
     agent.status = AgentStatus.RUNNING
     agent.started_at = datetime.utcnow()
-    agent.broadcast(WSMessageType.AGENT_STARTED, {"agent": agent.to_schema().model_dump()})
+    agent.broadcast(WSMessageType.AGENT_STATUS, {"agent": agent.to_schema().model_dump()})
 
     print(f"[TriageAgent] Created agent {agent_id} for {len(findings)} findings")
 
@@ -357,7 +357,7 @@ After examining all findings, output your decisions as a JSON array."""
     agent.status = AgentStatus.COMPLETED
     agent.completed_at = datetime.utcnow()
     agent.findings_count = len([f for f in triaged_findings if f.disposition == Disposition.VALID_SECURITY_ISSUE])
-    agent.broadcast(WSMessageType.AGENT_COMPLETED, {"agent": agent.to_schema().model_dump()})
+    agent.broadcast(WSMessageType.AGENT_STATUS, {"agent": agent.to_schema().model_dump()})
 
     print(f"[TriageAgent] Completed: {agent.findings_count} valid issues found")
 

@@ -892,14 +892,30 @@ async def llm_triage_findings(
     agent = await orchestrator.get_agent(agent_id)
     repo_path = None
     snapshot = None
+    repo_id = None
 
     if agent:
         repo_path = getattr(agent, 'repo_path', None)
-    else:
+        repo_id = getattr(agent, 'repo_id', None)
+
+    # If no repo_path from agent, try snapshot
+    if not repo_path:
         snapshot = persistence_service.load_agent_state(agent_id)
-        if not snapshot:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        repo_path = snapshot.repo_path
+        if snapshot:
+            repo_path = snapshot.repo_path
+            repo_id = snapshot.repo_id
+
+    # If still no repo_path, try to get from project
+    if not repo_path and repo_id:
+        try:
+            project = await project_service.get_project(repo_id)
+            if project and project.local_path:
+                repo_path = project.local_path
+        except Exception as e:
+            print(f"[Triage] Could not get project path: {e}")
+
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Could not determine repository path for triage")
 
     print(f"[Triage] Agent repo_path: {repo_path}")
 

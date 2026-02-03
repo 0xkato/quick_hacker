@@ -867,6 +867,7 @@ class LLMTriageResponse(BaseModel):
     triaged_count: int
     results: list[LLMTriageResult]
     findings: list[Finding]
+    triage_agent_id: Optional[str] = None  # ID of triage agent for tracking in UI
 
 
 @router.post("/{agent_id}/llm-triage", response_model=LLMTriageResponse)
@@ -942,73 +943,55 @@ async def llm_triage_findings(
         except Exception as e:
             print(f"[Triage] Could not get API key from settings: {e}")
 
-    # Try LLM triage if using Claude SDK
+    # Try triage agent if using Claude SDK
     if request.use_claude_sdk and request.provider == "anthropic":
         try:
-            from services.llm_triage_service import run_llm_triage, SDK_AVAILABLE as TRIAGE_SDK_AVAILABLE
+            from services.triage_agent_service import run_triage_agent
 
-            if TRIAGE_SDK_AVAILABLE:
-                findings_dicts = [f.model_dump() for f in findings]
-                print(f"[Triage] Running LLM triage with model={request.model}")
+            print(f"[Triage] Running triage agent with model={request.model}")
 
-                triage_result = await run_llm_triage(
-                    findings_dicts,
-                    api_key=api_key,
-                    model=request.model or "claude-sonnet-4-20250514",
-                    use_claude_code_auth=request.use_claude_code_auth,
-                    repo_path=repo_path,
-                )
+            # Create broadcast callback
+            def broadcast_msg(msg):
+                orchestrator._broadcast_message(msg)
 
-                # Map decisions back to findings
-                decision_map = {d.finding_id: d for d in triage_result.decisions}
+            # Run triage agent
+            triage_agent, triage_result = await run_triage_agent(
+                findings=findings,
+                repo_id=agent.repo_id if agent else snapshot.repo_id,
+                repo_path=repo_path,
+                api_key=api_key,
+                model=request.model or "claude-sonnet-4-20250514",
+                use_claude_code_auth=request.use_claude_code_auth,
+                on_message=broadcast_msg,
+            )
 
-                triaged_findings = []
-                results = []
+            # Register triage agent with orchestrator so it shows in dropdown
+            async with orchestrator._lock:
+                orchestrator._agents[triage_agent.id] = triage_agent
 
-                disposition_map = {
-                    "valid_security_issue": Disposition.VALID_SECURITY_ISSUE,
-                    "bug": Disposition.BUG,
-                    "misconfiguration": Disposition.MISCONFIGURATION,
-                    "hardening": Disposition.HARDENING,
-                    "by_design": Disposition.BY_DESIGN,
-                    "speculative": Disposition.SPECULATIVE,
-                }
+            # Build results
+            results = []
+            for decision in triage_result.decisions:
+                results.append(LLMTriageResult(
+                    finding_id=decision.finding_id,
+                    decision=decision.decision,
+                    confidence=decision.confidence,
+                    reasoning=decision.reasoning,
+                ))
 
-                for finding in findings:
-                    decision = decision_map.get(finding.id)
-                    if decision:
-                        finding.disposition = disposition_map.get(decision.decision, Disposition.SPECULATIVE)
-                        finding.classification_confidence = decision.confidence
-                        finding.reasoning = decision.reasoning
-                        results.append(LLMTriageResult(
-                            finding_id=finding.id,
-                            decision=decision.decision,
-                            confidence=decision.confidence,
-                            reasoning=decision.reasoning,
-                        ))
-                    else:
-                        finding.disposition = Disposition.SPECULATIVE
-                        finding.classification_confidence = 30
-                        finding.reasoning = ["No triage decision received"]
-                        results.append(LLMTriageResult(
-                            finding_id=finding.id,
-                            decision="speculative",
-                            confidence=30,
-                            reasoning=["No triage decision received"],
-                        ))
-                    triaged_findings.append(finding)
+            # Update original agent's findings
+            orchestrator._findings[agent_id] = triage_result.triaged_findings
+            print(f"[Triage] Triage agent {triage_agent.id} completed: {len(results)} findings processed")
 
-                orchestrator._findings[agent_id] = triaged_findings
-                print(f"[Triage] LLM triage completed: {len(results)} findings processed")
-
-                return LLMTriageResponse(
-                    triaged_count=len(results),
-                    results=results,
-                    findings=triaged_findings,
-                )
+            return LLMTriageResponse(
+                triaged_count=len(results),
+                results=results,
+                findings=triage_result.triaged_findings,
+                triage_agent_id=triage_agent.id,
+            )
 
         except Exception as e:
-            print(f"[Triage] LLM triage failed: {e}")
+            print(f"[Triage] Triage agent failed: {e}")
             import traceback
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Triage failed: {str(e)}")

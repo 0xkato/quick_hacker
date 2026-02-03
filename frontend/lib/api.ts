@@ -334,6 +334,7 @@ export const agents = {
       reasoning: string[];
     }>;
     findings: Finding[];
+    triage_agent_id?: string;  // ID of triage agent for viewing LLM interactions
   }> {
     // LLM triage can take time with many findings - use 1 hour timeout
     return request(`/api/agents/${agentId}/llm-triage`, {

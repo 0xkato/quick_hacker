@@ -355,6 +355,46 @@ class AgentOrchestrator:
     async def _run_agent(self, agent: BaseAgent):
         """Run agent and handle completion."""
         print(f"[Orchestrator] _run_agent started for {agent.id}")
+
+        # Start resource monitoring for this agent
+        resource_monitor = get_resource_monitor()
+        resource_cancelled = False
+
+        def on_resource_critical(status):
+            nonlocal resource_cancelled
+            if not resource_cancelled:
+                resource_cancelled = True
+                print(f"[Orchestrator] CRITICAL RESOURCES for agent {agent.id}: {status.message}")
+                print(f"[Orchestrator] Auto-cancelling agent {agent.id} to prevent system overload")
+                # Cancel the agent's task
+                task = self._tasks.get(agent.id)
+                if task and not task.done():
+                    task.cancel()
+                # Broadcast warning to UI
+                self._broadcast_message(
+                    WSMessage(
+                        type=WSMessageType.ERROR,
+                        agent_id=agent.id,
+                        data={"error": f"Scan cancelled due to resource constraints: {status.message}"}
+                    )
+                )
+
+        def on_resource_warning(status):
+            print(f"[Orchestrator] Resource warning for agent {agent.id}: {status.message}")
+            # Just log warnings, don't cancel
+            self._broadcast_message(
+                WSMessage(
+                    type=WSMessageType.LOG,
+                    agent_id=agent.id,
+                    data={"level": "warning", "message": f"Resource warning: {status.message}"}
+                )
+            )
+
+        await resource_monitor.start_monitoring(
+            on_warning=on_resource_warning,
+            on_critical=on_resource_critical,
+        )
+
         try:
             # Check if this agent should use Claude SDK provider
             config = getattr(agent.request, 'provider_config', None)
@@ -412,12 +452,20 @@ class AgentOrchestrator:
                 except Exception as e:
                     print(f"[Orchestrator] Failed to generate report: {e}")
         except asyncio.CancelledError:
-            print(f"[Orchestrator] Agent {agent.id} cancelled")
-            agent.status = AgentStatus.CANCELLED
-            # Broadcast cancellation status so UI updates
-            self._broadcast_message(
-                WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "cancelled"})
-            )
+            if resource_cancelled:
+                print(f"[Orchestrator] Agent {agent.id} cancelled due to resource constraints")
+                agent.status = AgentStatus.FAILED
+                agent.error_message = "Scan cancelled: system resources critical (memory/CPU). Try again when resources are available."
+                self._broadcast_message(
+                    WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "failed", "error": agent.error_message})
+                )
+            else:
+                print(f"[Orchestrator] Agent {agent.id} cancelled")
+                agent.status = AgentStatus.CANCELLED
+                # Broadcast cancellation status so UI updates
+                self._broadcast_message(
+                    WSMessage(type=WSMessageType.AGENT_STATUS, agent_id=agent.id, data={"status": "cancelled"})
+                )
             # Save state on cancellation
             if hasattr(agent, 'get_state_snapshot'):
                 try:
@@ -444,6 +492,9 @@ class AgentOrchestrator:
                     print(f"[Orchestrator] Failed to save state on failure: {save_err}")
         finally:
             print(f"[Orchestrator] _run_agent cleanup for {agent.id}")
+            # Stop resource monitoring
+            await resource_monitor.stop_monitoring()
+
             # Cleanup task reference
             if agent.id in self._tasks:
                 del self._tasks[agent.id]

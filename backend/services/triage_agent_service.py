@@ -289,10 +289,10 @@ After examining all findings, output your decisions as a JSON array."""
                             agent_id=agent_id,
                             tool_name=tool_name,
                             tool_call_id=tool_id,
-                            input_data=tool_input,
-                            output_data=None,
+                            arguments=tool_input,
+                            result=None,
+                            success=True,
                             duration_ms=0,
-                            is_error=False,
                         )
                         tool_calls.append({
                             "name": tool_name,

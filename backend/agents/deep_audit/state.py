@@ -6,6 +6,51 @@ from enum import Enum
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
+from agents.deep_audit.foundation import (
+    FoundationContext,
+    SuspiciousSignal,
+    SignalCategory,
+    SignalSeverity,
+)
+
+
+class CampaignPhase(str, Enum):
+    """Current phase of the campaign."""
+    FOUNDATION = "foundation"  # Building context
+    HUNTING = "hunting"        # Finding signals
+    ROUTING = "routing"        # Assigning to specialists
+    VERIFICATION = "verification"  # Specialists analyzing
+    RESOLUTION = "resolution"  # Final triage
+
+
+class SignalStatus(str, Enum):
+    """Status of a suspicious signal in the pipeline."""
+    NEW = "new"                    # Just discovered by Hunter
+    ROUTED = "routed"              # Assigned to family by Decider
+    ASSIGNED = "assigned"          # Assigned to specialist by Family Coordinator
+    ANALYZING = "analyzing"        # Specialist working on it
+    DISPUTED = "disputed"          # Specialists disagree, needs Arbiter
+    VERIFIED = "verified"          # Confirmed by specialist
+    DISMISSED = "dismissed"        # Not a vulnerability
+    TRIAGED = "triaged"           # Final classification made
+
+
+class SignalState(BaseModel):
+    """Tracking state for a suspicious signal through the pipeline."""
+    signal: SuspiciousSignal
+    status: SignalStatus = SignalStatus.NEW
+    assigned_family: Optional[str] = None
+    assigned_specialists: list[str] = Field(default_factory=list)
+    specialist_reports: dict[str, dict] = Field(default_factory=dict)  # specialist_id -> report
+    arbiter_verdict: Optional[dict] = None
+    final_disposition: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        """Pydantic config to allow arbitrary types for SuspiciousSignal."""
+        arbitrary_types_allowed = True
+
 
 class HypothesisStatus(str, Enum):
     """Status of a hypothesis in the investigation lifecycle."""
@@ -137,6 +182,10 @@ class CampaignState(BaseModel):
     deadline: float  # Unix timestamp when budget expires
     started_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # Foundation Context (NEW)
+    foundation_context: Optional[FoundationContext] = None
+    phase: CampaignPhase = CampaignPhase.FOUNDATION
+
     # From repo profiling
     repo_profile: Optional[dict] = None
     repo_profile_path: str = "/memories/repo_profile.json"
@@ -149,6 +198,9 @@ class CampaignState(BaseModel):
 
     # Hypotheses (the core tracking structure)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
+
+    # Signals tracking (NEW - replaces hypotheses for new flow)
+    signals: dict[str, SignalState] = Field(default_factory=dict)  # signal_id -> SignalState
 
     # Results
     confirmed_findings: list[dict] = Field(default_factory=list)  # Finding dicts
@@ -174,6 +226,7 @@ class CampaignState(BaseModel):
     class Config:
         """Pydantic config."""
         use_enum_values = True
+        arbitrary_types_allowed = True
 
     # Helper methods
 

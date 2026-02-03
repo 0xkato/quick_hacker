@@ -4,12 +4,19 @@ Handles dispatching sub-agents in waves and collecting results.
 """
 
 import asyncio
+import json
 import uuid
 from datetime import datetime
 from typing import Optional, Callable
 from pydantic import BaseModel, Field
 
 from agents.deep_audit.filesystem import MemoriesFilesystem
+from agents.deep_audit.foundation import (
+    FoundationContext,
+    RepoProfile,
+    ScopeMap,
+    ThreatModel,
+)
 from agents.deep_audit.state import WaveTask
 
 
@@ -69,6 +76,16 @@ AGENT_TOOL_SUBSETS = {
     "Triager": ["read_file", "get_file_structure", "trace_data_flow", "triage_finding", "write_file", "read_memories"],
     "Auditor": ["read_file", "get_file_structure", "trace_data_flow", "trace_path_verdict", "report_finding", "find_usages", "write_file", "read_memories", "list_memories"],
     "Reproducer": ["read_file", "trace_data_flow", "trace_path_verdict", "write_file", "read_memories"],
+
+    # New Foundation Phase agents
+    "Decider": ["read_file", "read_memories", "write_file"],
+    "FamilyCoordinator": ["read_file", "read_memories", "write_file", "list_memories"],
+
+    # Specialist agents (generic - can read/write)
+    "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow", "write_file", "read_memories"],
+
+    # Resolution agents
+    "Arbiter": ["read_file", "search_code", "trace_data_flow", "find_usages", "write_file", "read_memories", "list_memories"],
 }
 
 
@@ -110,11 +127,16 @@ class WaveDispatcher:
         self.on_agent_start = on_agent_start
         self.on_agent_complete = on_agent_complete
 
-    async def dispatch_wave(self, wave_plan: WavePlan) -> WaveResult:
+    async def dispatch_wave(
+        self,
+        wave_plan: WavePlan,
+        foundation_context: Optional[FoundationContext] = None,
+    ) -> WaveResult:
         """Execute a wave of parallel sub-agents.
 
         Args:
             wave_plan: Contains list of tasks to dispatch
+            foundation_context: Optional Foundation Context to inject into all agents
 
         Returns:
             WaveResult with all agent outputs
@@ -123,7 +145,7 @@ class WaveDispatcher:
 
         # Create coroutines for all tasks
         tasks = [
-            self._spawn_subagent(task)
+            self._spawn_subagent(task, foundation_context)
             for task in wave_plan.tasks
         ]
 
@@ -160,11 +182,16 @@ class WaveDispatcher:
             all_succeeded=all_succeeded,
         )
 
-    async def _spawn_subagent(self, task: DispatchTask) -> SubagentResult:
+    async def _spawn_subagent(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext] = None,
+    ) -> SubagentResult:
         """Spawn a single sub-agent as a ReactAgent instance.
 
         Args:
             task: The task to execute
+            foundation_context: Optional Foundation Context to inject into prompt
 
         Returns:
             SubagentResult with execution details
@@ -176,8 +203,8 @@ class WaveDispatcher:
             self.on_agent_start(task.task_id, task.agent_type)
 
         try:
-            # Get prompt for this agent type
-            prompt = self._get_subagent_prompt(task)
+            # Get prompt for this agent type (with foundation context if available)
+            prompt = self._get_subagent_prompt(task, foundation_context)
 
             # Get tool subset for this agent type
             allowed_tools = get_tools_for_agent_type(task.agent_type)
@@ -255,15 +282,25 @@ class WaveDispatcher:
                 error=str(e),
             )
 
-    def _get_subagent_prompt(self, task: DispatchTask) -> str:
+    def _get_subagent_prompt(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext] = None,
+    ) -> str:
         """Build the prompt for a sub-agent.
 
         Args:
             task: The task containing agent type and context
+            foundation_context: Optional Foundation Context to inject
 
         Returns:
             Complete prompt string for the sub-agent
         """
+        # Prepare foundation context text if available
+        foundation_context_text = ""
+        if foundation_context:
+            foundation_context_text = foundation_context.to_prompt_context()
+
         try:
             # Try to load from prompting system
             from prompting_loader import load_prompt, render_prompt
@@ -272,27 +309,38 @@ class WaveDispatcher:
             prompt_path = f"subagents/{task.agent_type.lower()}.md"
             try:
                 # render_prompt loads the file and replaces {{placeholders}}
-                return render_prompt(
+                prompt = render_prompt(
                     prompt_path,
                     objective=task.objective,
                     scope=task.scope,
                     inputs=", ".join(task.inputs) if task.inputs else "None",
                     deliverable=task.deliverable,
                     constraints=task.constraints or "None",
+                    FOUNDATION_CONTEXT=foundation_context_text,
                 )
+                # Also replace {{FOUNDATION_CONTEXT}} if not handled by render_prompt
+                if "{{FOUNDATION_CONTEXT}}" in prompt:
+                    prompt = prompt.replace("{{FOUNDATION_CONTEXT}}", foundation_context_text)
+                return prompt
             except FileNotFoundError:
                 # Fall back to Python prompts
-                return self._get_fallback_prompt(task.agent_type, task)
+                return self._get_fallback_prompt(task.agent_type, task, foundation_context)
         except ImportError:
             # prompting_loader not available, use fallback
-            return self._get_fallback_prompt(task.agent_type, task)
+            return self._get_fallback_prompt(task.agent_type, task, foundation_context)
 
-    def _get_fallback_prompt(self, agent_type: str, task: Optional[DispatchTask] = None) -> str:
+    def _get_fallback_prompt(
+        self,
+        agent_type: str,
+        task: Optional[DispatchTask] = None,
+        foundation_context: Optional[FoundationContext] = None,
+    ) -> str:
         """Get fallback prompt from Python templates.
 
         Args:
             agent_type: Type of agent
             task: Optional task for context injection
+            foundation_context: Optional Foundation Context to inject
 
         Returns:
             Prompt string
@@ -321,15 +369,103 @@ class WaveDispatcher:
             base = base.replace("{scope_path}", task.scope)
             base = base.replace("{case_file_path}", task.deliverable)
 
+        # Inject Foundation Context if available
+        if foundation_context:
+            context_text = foundation_context.to_prompt_context()
+            base = base.replace("{{FOUNDATION_CONTEXT}}", context_text)
+            # If no placeholder, prepend to the prompt
+            if "{{FOUNDATION_CONTEXT}}" not in base and context_text:
+                base = f"## Foundation Context\n{context_text}\n\n{base}"
+
         return base
 
-    async def dispatch_single(self, task: DispatchTask) -> SubagentResult:
+    async def dispatch_single(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext] = None,
+    ) -> SubagentResult:
         """Dispatch a single sub-agent (convenience method).
 
         Args:
             task: The task to execute
+            foundation_context: Optional Foundation Context to inject into prompt
 
         Returns:
             SubagentResult
         """
-        return await self._spawn_subagent(task)
+        return await self._spawn_subagent(task, foundation_context)
+
+    async def dispatch_foundation_phase(self) -> tuple[WaveResult, Optional[FoundationContext]]:
+        """Run Foundation Phase: RepoProfiler, ScopeMapper, ThreatModeler in parallel.
+
+        Returns:
+            Tuple of (WaveResult, FoundationContext or None if failed)
+        """
+        wave_plan = WavePlan(
+            wave_id=0,
+            tasks=[
+                DispatchTask(
+                    agent_type="RepoProfiler",
+                    objective="Profile the repository",
+                    scope=self.repo_path,
+                    deliverable="/memories/foundation/repo_profile.json",
+                ),
+                DispatchTask(
+                    agent_type="ScopeMapper",
+                    objective="Map repository scope and security-critical areas",
+                    scope=self.repo_path,
+                    deliverable="/memories/foundation/scope_map.json",
+                ),
+                DispatchTask(
+                    agent_type="ThreatModeler",
+                    objective="Build threat model with trust boundaries and attacker capabilities",
+                    scope=self.repo_path,
+                    deliverable="/memories/foundation/threat_model.json",
+                ),
+            ],
+            rationale="Foundation Phase: Build context before hunting",
+        )
+
+        result = await self.dispatch_wave(wave_plan)
+
+        # Try to build FoundationContext from outputs
+        if result.all_succeeded:
+            try:
+                context = await self._build_foundation_context()
+                return result, context
+            except Exception as e:
+                print(f"Failed to build Foundation Context: {e}")
+                return result, None
+
+        return result, None
+
+    async def _build_foundation_context(self) -> FoundationContext:
+        """Build FoundationContext from foundation phase outputs."""
+        # Read outputs from filesystem
+        repo_profile_json = await self.filesystem.read_file("/memories/foundation/repo_profile.json")
+        scope_map_json = await self.filesystem.read_file("/memories/foundation/scope_map.json")
+        threat_model_json = await self.filesystem.read_file("/memories/foundation/threat_model.json")
+
+        # Parse and build context
+        return FoundationContext.from_dict({
+            "repo_profile": json.loads(repo_profile_json),
+            "scope_map": json.loads(scope_map_json),
+            "threat_model": json.loads(threat_model_json),
+        })
+
+    def inject_foundation_context(self, task: DispatchTask, foundation_context: FoundationContext) -> DispatchTask:
+        """Inject Foundation Context into a task's prompt context.
+
+        Args:
+            task: The task to inject context into
+            foundation_context: The Foundation Context to inject
+
+        Returns:
+            Modified task with Foundation Context in constraints
+        """
+        context_text = foundation_context.to_prompt_context()
+        if task.constraints:
+            task.constraints = f"FOUNDATION_CONTEXT:\n{context_text}\n\n{task.constraints}"
+        else:
+            task.constraints = f"FOUNDATION_CONTEXT:\n{context_text}"
+        return task

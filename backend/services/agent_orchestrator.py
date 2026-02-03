@@ -93,11 +93,11 @@ def _codex_text_signals_done(text: str) -> bool:
 
 
 # Agent type to class mapping
-# DeepAuditSupervisor: LangGraph-based supervisor (default)
-# Overseer: LLM-powered orchestrator for hypothesis-driven audits
+# Overseer: Foundation-first orchestrator with 64 specialists (NEW)
+# DeepAuditSupervisor: Legacy LangGraph-based supervisor (deprecated)
 AGENT_CLASSES = {
-    AgentType.DEEP_AUDIT: DeepAuditSupervisor,  # Deep audit with diagramming support
-    AgentType.CUSTOM: DeepAuditSupervisor,      # Custom investigation (uses same infrastructure)
+    AgentType.DEEP_AUDIT: Overseer,             # Foundation-first with specialists
+    AgentType.CUSTOM: Overseer,                 # Custom investigation (uses same infrastructure)
 }
 
 # Scan tiers that use the Overseer (LLM-powered orchestrator) by default

@@ -845,7 +845,7 @@ def _rule_based_triage(finding: Finding) -> tuple[bool, str]:
 class LLMTriageRequest(BaseModel):
     """Request for LLM-based triage."""
     finding_ids: Optional[list[str]] = None  # If None, triage all findings
-    max_findings: int = 20  # Maximum findings to process per request (rate limit protection)
+    max_findings: int = 500  # Maximum findings to process per request (increased from 20)
     # Provider configuration (same as scan)
     provider: Optional[str] = "anthropic"
     model: Optional[str] = "claude-sonnet-4-20250514"
@@ -919,30 +919,36 @@ async def llm_triage_findings(
 
     print(f"[Triage] Agent repo_path: {repo_path}")
 
-    # Get findings
+    # Get findings - keep ALL findings for later merging
     print(f"[LLM Triage] Looking for findings for agent {agent_id}")
-    findings = await orchestrator.get_findings(agent_id=agent_id)
-    print(f"[LLM Triage] Found {len(findings) if findings else 0} findings from orchestrator")
+    all_findings = await orchestrator.get_findings(agent_id=agent_id)
+    print(f"[LLM Triage] Found {len(all_findings) if all_findings else 0} findings from orchestrator")
 
-    if not findings:
+    if not all_findings:
         # Use existing snapshot or load it
         if not snapshot:
             snapshot = persistence_service.load_agent_state(agent_id)
         if snapshot and snapshot.findings:
-            findings = [Finding(**f) for f in snapshot.findings]
-            print(f"[LLM Triage] Loaded {len(findings)} findings from snapshot")
+            all_findings = [Finding(**f) for f in snapshot.findings]
+            print(f"[LLM Triage] Loaded {len(all_findings)} findings from snapshot")
         else:
             print(f"[LLM Triage] No findings found for agent {agent_id}")
             return LLMTriageResponse(triaged_count=0, results=[], findings=[])
 
+    # Select findings to triage (subset of all findings)
+    findings_to_triage = all_findings
+
     # Filter to specific IDs if requested
     if request.finding_ids:
         finding_id_set = set(request.finding_ids)
-        findings = [f for f in findings if f.id in finding_id_set]
+        findings_to_triage = [f for f in findings_to_triage if f.id in finding_id_set]
 
-    # Apply batch size limit
-    if len(findings) > request.max_findings:
-        findings = findings[:request.max_findings]
+    # Apply batch size limit (but warn if truncating)
+    if len(findings_to_triage) > request.max_findings:
+        print(f"[Triage] WARNING: Truncating {len(findings_to_triage)} findings to {request.max_findings}")
+        findings_to_triage = findings_to_triage[:request.max_findings]
+
+    findings = findings_to_triage  # Alias for compatibility with rest of code
 
     print(f"[Triage] Processing {len(findings)} findings")
     print(f"[Triage] Config: provider={request.provider}, model={request.model}, use_claude_sdk={request.use_claude_sdk}, use_claude_code_auth={request.use_claude_code_auth}")
@@ -995,14 +1001,23 @@ async def llm_triage_findings(
                     reasoning=decision.reasoning,
                 ))
 
-            # Update original agent's findings
-            orchestrator._findings[agent_id] = triage_result.triaged_findings
-            print(f"[Triage] Triage agent {triage_agent.id} completed: {len(results)} findings processed")
+            # CRITICAL: Merge triaged findings back into ALL findings (don't replace!)
+            # This preserves findings that weren't triaged in this batch
+            triaged_by_id = {f.id: f for f in triage_result.triaged_findings}
+            merged_findings = []
+            for f in all_findings:
+                if f.id in triaged_by_id:
+                    merged_findings.append(triaged_by_id[f.id])  # Use triaged version
+                else:
+                    merged_findings.append(f)  # Keep original
+
+            orchestrator._findings[agent_id] = merged_findings
+            print(f"[Triage] Triage agent {triage_agent.id} completed: {len(results)} findings triaged, {len(merged_findings)} total preserved")
 
             return LLMTriageResponse(
                 triaged_count=len(results),
                 results=results,
-                findings=triage_result.triaged_findings,
+                findings=merged_findings,  # Return all findings, not just triaged subset
                 triage_agent_id=triage_agent.id,
             )
 
@@ -1067,14 +1082,22 @@ async def llm_triage_findings(
         ))
         triaged_findings.append(finding)
 
-    # Update findings in orchestrator
-    orchestrator._findings[agent_id] = triaged_findings
-    print(f"[LLM Triage] Completed: {len(triaged_findings)} findings processed (rule-based fallback)")
+    # CRITICAL: Merge triaged findings back into ALL findings (don't replace!)
+    triaged_by_id = {f.id: f for f in triaged_findings}
+    merged_findings = []
+    for f in all_findings:
+        if f.id in triaged_by_id:
+            merged_findings.append(triaged_by_id[f.id])
+        else:
+            merged_findings.append(f)
+
+    orchestrator._findings[agent_id] = merged_findings
+    print(f"[LLM Triage] Completed: {len(triaged_findings)} findings triaged, {len(merged_findings)} total preserved (rule-based fallback)")
 
     return LLMTriageResponse(
         triaged_count=len(results),
         results=results,
-        findings=triaged_findings,
+        findings=merged_findings,  # Return all findings, not just triaged subset
     )
 
 

@@ -47,42 +47,53 @@ class TriageResult:
     raw_response: str
 
 
-TRIAGE_SYSTEM_PROMPT = """You are an expert security auditor reviewing vulnerability findings from an automated security scan.
+TRIAGE_SYSTEM_PROMPT = """You are an extremely strict security auditor. Your job is to AGGRESSIVELY FILTER OUT false positives.
 
-Your task is to triage each finding and determine:
-1. Is it a real security vulnerability, or a false positive?
-2. What is the correct disposition?
+## CRITICAL RULE: We prefer ZERO valid issues over ANY false positives.
+
+Only mark something as "valid_security_issue" if you are 95%+ confident it is a REAL, EXPLOITABLE vulnerability that an attacker could actually use in production.
+
+## ALWAYS REJECT (mark as by_design, hardening, or speculative):
+
+1. **Intentional Features**: Auth bypass flags like `disableAuthentication`, `skipAuth`, `devMode`, `debugMode`, `testMode`
+2. **Dev/Test Code**: ANYTHING in test files, seeders, fixtures, factories, examples, demos, mocks, stubs
+3. **Development Vulnerabilities**: Issues that only exist in dev/debug builds or require debug flags
+4. **No Direct Security Impact**: Information disclosure without sensitive data, missing headers, etc.
+5. **Speculative Attacks**: Issues requiring unlikely conditions, specific timing, or attacker-controlled servers
+6. **Hardening Suggestions**: "Should use X instead of Y" without actual vulnerability
+7. **Configuration Templates**: .env.example, config.sample, settings.template files
+8. **Vendor/Third-Party Code**: Issues in node_modules, vendor, third_party directories
+9. **Obvious Placeholders**: "changeme", "password123", "secret" in example configs
+10. **Feature Flags**: Intentional toggles that disable security for testing/development
+
+## ONLY ACCEPT as valid_security_issue:
+
+- SQL injection with clear user input → query path
+- Command injection with clear user input → shell execution
+- Authentication bypass in PRODUCTION code (not dev flags)
+- Remote code execution with clear exploitation path
+- SSRF with internal network access potential
+- Path traversal with file read/write capability
+- Hardcoded PRODUCTION credentials (not test/example)
+- Privilege escalation between real user roles
 
 ## Dispositions
 
-- **valid_security_issue**: A genuine exploitable security vulnerability that could be used by an attacker
-- **bug**: A code defect that could cause issues but is not directly exploitable as a security issue
-- **misconfiguration**: Insecure configuration that should be fixed but may not be directly exploitable
-- **hardening**: A defensive improvement suggestion, not an actual vulnerability
-- **by_design**: The behavior is intentional and acceptable given the context
-- **speculative**: Theoretical issue that would require specific conditions to exploit; needs more investigation
-
-## Key Considerations
-
-1. **Test/Demo Code**: Findings in test files, seeders, fixtures, examples, or demo code are usually NOT real vulnerabilities
-2. **Context Matters**: A hardcoded password in a seeder file is NOT the same as one in production code
-3. **Exploitability**: Can an attacker actually exploit this? What would they need?
-4. **Impact**: If exploited, what's the actual impact?
-5. **False Positives**: Be skeptical of generic findings without specific exploitation paths
+- **valid_security_issue**: ONLY for clearly exploitable production vulnerabilities (use sparingly!)
+- **by_design**: Intentional features, dev flags, test configurations
+- **hardening**: Suggestions without actual vulnerability
+- **speculative**: Theoretical issues, unlikely conditions required
+- **bug**: Code defects without security impact
+- **misconfiguration**: Config issues without direct exploit path
 
 ## Response Format
 
-Respond with a JSON array where each element has:
+JSON array only:
 ```json
-{
-  "finding_id": "the finding ID",
-  "decision": "one of: valid_security_issue, bug, misconfiguration, hardening, by_design, speculative",
-  "confidence": 0-100,
-  "reasoning": ["reason 1", "reason 2", ...]
-}
+[{"finding_id": "id", "decision": "disposition", "confidence": 0-100, "reasoning": ["reason1", "reason2"]}]
 ```
 
-Only output the JSON array, nothing else."""
+BE AGGRESSIVE. When in doubt, REJECT. False positives waste security team time."""
 
 
 def _build_triage_prompt(findings: list[dict[str, Any]]) -> str:

@@ -18,6 +18,7 @@ from agents.deep_audit.foundation import (
     ThreatModel,
 )
 from agents.deep_audit.state import WaveTask
+from models.schemas import WSMessage, WSMessageType
 
 
 class DispatchTask(BaseModel):
@@ -111,6 +112,7 @@ class WaveDispatcher:
         provider_config: Optional[dict] = None,
         on_agent_start: Optional[Callable[[str, str], None]] = None,
         on_agent_complete: Optional[Callable[[str, str, str], None]] = None,
+        on_message: Optional[Callable[[WSMessage], None]] = None,
     ):
         """Initialize the wave dispatcher.
 
@@ -120,12 +122,19 @@ class WaveDispatcher:
             provider_config: LLM provider configuration
             on_agent_start: Callback(task_id, agent_type) when agent starts
             on_agent_complete: Callback(task_id, agent_type, status) when agent completes
+            on_message: WebSocket broadcast callback for UI updates
         """
         self.repo_path = repo_path
         self.filesystem = filesystem
         self.provider_config = provider_config or {}
         self.on_agent_start = on_agent_start
         self.on_agent_complete = on_agent_complete
+        self.on_message = on_message
+
+    def _broadcast(self, msg_type: WSMessageType, agent_id: str, data: dict):
+        """Broadcast a message to UI if callback is set."""
+        if self.on_message:
+            self.on_message(WSMessage(type=msg_type, agent_id=agent_id, data=data))
 
     async def dispatch_wave(
         self,
@@ -226,10 +235,26 @@ class WaveDispatcher:
             )
 
             # Create ReactAgent instance with filtered tools
+            # Pass on_message callback for UI visibility of sub-agent activity
             agent = ReactAgent(
                 request=request,
                 repo_path=self.repo_path,
                 allowed_tools=allowed_tools,
+                on_message=self.on_message,
+            )
+
+            # Broadcast sub-agent started
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent.id,
+                {
+                    "agent_id": agent.id,
+                    "name": agent.name,
+                    "agent_type": task.agent_type,
+                    "status": "running",
+                    "task_id": task.task_id,
+                    "objective": task.objective,
+                }
             )
 
             # Override the system prompt with our task-specific prompt
@@ -241,7 +266,22 @@ class WaveDispatcher:
             completed_at = datetime.utcnow()
             status = "completed" if not agent.error_message else "failed"
 
-            # Notify completion
+            # Broadcast sub-agent completed
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent.id,
+                {
+                    "agent_id": agent.id,
+                    "name": agent.name,
+                    "agent_type": task.agent_type,
+                    "status": status,
+                    "task_id": task.task_id,
+                    "findings_count": len(agent.findings) if hasattr(agent, 'findings') else 0,
+                    "error": agent.error_message,
+                }
+            )
+
+            # Notify completion (legacy callback)
             if self.on_agent_complete:
                 self.on_agent_complete(task.task_id, task.agent_type, status)
 
@@ -258,6 +298,19 @@ class WaveDispatcher:
 
         except asyncio.TimeoutError:
             completed_at = datetime.utcnow()
+            # Broadcast timeout
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                task.task_id,
+                {
+                    "agent_id": task.task_id,
+                    "name": f"{task.agent_type}_{task.task_id}",
+                    "agent_type": task.agent_type,
+                    "status": "timeout",
+                    "task_id": task.task_id,
+                    "error": f"Task exceeded time budget of {task.time_budget}s",
+                }
+            )
             if self.on_agent_complete:
                 self.on_agent_complete(task.task_id, task.agent_type, "timeout")
             return SubagentResult(
@@ -271,6 +324,19 @@ class WaveDispatcher:
 
         except Exception as e:
             completed_at = datetime.utcnow()
+            # Broadcast failure
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                task.task_id,
+                {
+                    "agent_id": task.task_id,
+                    "name": f"{task.agent_type}_{task.task_id}",
+                    "agent_type": task.agent_type,
+                    "status": "failed",
+                    "task_id": task.task_id,
+                    "error": str(e),
+                }
+            )
             if self.on_agent_complete:
                 self.on_agent_complete(task.task_id, task.agent_type, "failed")
             return SubagentResult(
@@ -661,3 +727,121 @@ Remember: False negatives (missing real bugs) are worse than false positives.
             completed_at=datetime.utcnow(),
             all_succeeded=all(r.status == "completed" for r in subagent_results),
         )
+
+    def detect_specialist_disagreement(
+        self,
+        signal_id: str,
+        specialist_reports: dict[str, dict],
+    ) -> bool:
+        """Detect if specialists disagree on a signal's exploitability.
+
+        Args:
+            signal_id: The signal being analyzed
+            specialist_reports: Map of specialist_id -> report dict
+
+        Returns:
+            True if there's disagreement that needs Arbiter
+        """
+        if len(specialist_reports) < 2:
+            return False
+
+        verdicts = set()
+        for report in specialist_reports.values():
+            verdict = report.get("verdict", "").lower()
+            if verdict in ("vulnerable", "exploitable", "valid"):
+                verdicts.add("vulnerable")
+            elif verdict in ("not_vulnerable", "not_exploitable", "invalid", "speculative"):
+                verdicts.add("not_vulnerable")
+            elif verdict in ("needs_more_analysis", "uncertain"):
+                verdicts.add("uncertain")
+
+        # Disagreement exists if we have both "vulnerable" and "not_vulnerable"
+        return "vulnerable" in verdicts and "not_vulnerable" in verdicts
+
+    async def dispatch_arbiter(
+        self,
+        signal_id: str,
+        signal_context: str,
+        specialist_reports: dict[str, dict],
+        foundation_context: Optional[FoundationContext] = None,
+    ) -> SubagentResult:
+        """Dispatch Arbiter to resolve specialist disagreement.
+
+        The Arbiter follows "expand first, then analyze" principle:
+        1. Find all related sinks
+        2. Find all entry points to this area
+        3. Build complete attack surface picture
+        4. Then make detailed judgment
+
+        Args:
+            signal_id: The disputed signal ID
+            signal_context: Full signal context string
+            specialist_reports: Map of specialist_id -> their report
+            foundation_context: Foundation Context for scope awareness
+
+        Returns:
+            SubagentResult with Arbiter's verdict
+        """
+        # Format specialist reports for Arbiter
+        reports_text = []
+        for specialist_id, report in specialist_reports.items():
+            reports_text.append(f"""
+### Specialist: {specialist_id}
+**Verdict:** {report.get('verdict', 'Unknown')}
+**Reasoning:** {report.get('reasoning', 'No reasoning provided')}
+**Evidence:** {report.get('evidence', 'No evidence provided')}
+""")
+
+        arbiter_task = DispatchTask(
+            task_id=f"arbiter-{signal_id}",
+            agent_type="Arbiter",
+            objective=f"Resolve disagreement on signal {signal_id}",
+            scope="",  # Arbiter should expand search broadly
+            inputs=[],
+            deliverable=f"/memories/arbiter/{signal_id}_verdict.json",
+            constraints=f"""## Signal Under Dispute
+
+{signal_context}
+
+## Specialist Reports (DISAGREEMENT DETECTED)
+
+{"".join(reports_text)}
+
+## Your Task
+
+The specialists above DISAGREE on whether this signal is exploitable.
+
+Follow the "EXPAND FIRST, THEN ANALYZE" principle:
+
+1. **EXPAND THE SEARCH FIRST:**
+   - Find ALL related sinks in this code area
+   - Find ALL entry points that could reach this code
+   - Look for similar patterns nearby
+   - Build complete picture of attack surface
+
+2. **THEN ANALYZE EACH AVENUE:**
+   - With full context of all possibilities
+   - Detailed check of each path
+   - Consider what specialists may have missed
+
+3. **MAKE YOUR VERDICT:**
+   - Based on complete understanding
+   - Not just picking a side
+   - Your own independent analysis
+
+Output a JSON verdict:
+```json
+{{
+  "signal_id": "{signal_id}",
+  "verdict": "vulnerable|not_vulnerable|needs_reproducer",
+  "confidence": 0-100,
+  "expanded_scope": ["files you examined beyond original"],
+  "reasoning": "your analysis",
+  "specialist_errors": {{"specialist_id": "what they missed"}}
+}}
+```
+""",
+            time_budget=600,  # Give Arbiter more time for thorough analysis
+        )
+
+        return await self._spawn_subagent(arbiter_task, foundation_context)

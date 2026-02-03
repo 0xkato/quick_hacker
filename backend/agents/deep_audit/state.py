@@ -272,6 +272,85 @@ class CampaignState(BaseModel):
                 return True
         return False
 
+    # Phase transition methods
+
+    def set_phase(self, phase: CampaignPhase) -> None:
+        """Set the current campaign phase."""
+        self.phase = phase
+
+    def advance_to_hunting(self) -> bool:
+        """Advance to hunting phase if foundation is complete."""
+        if self.foundation_context is None:
+            return False
+        self.phase = CampaignPhase.HUNTING
+        return True
+
+    def advance_to_routing(self) -> bool:
+        """Advance to routing phase if signals exist."""
+        if not self.signals:
+            return False
+        self.phase = CampaignPhase.ROUTING
+        return True
+
+    def advance_to_verification(self) -> bool:
+        """Advance to verification phase if signals are routed."""
+        routed = [s for s in self.signals.values() if s.status in (SignalStatus.ROUTED, SignalStatus.ASSIGNED)]
+        if not routed:
+            return False
+        self.phase = CampaignPhase.VERIFICATION
+        return True
+
+    def advance_to_resolution(self) -> bool:
+        """Advance to resolution phase for final triage."""
+        self.phase = CampaignPhase.RESOLUTION
+        return True
+
+    def is_phase(self, phase: CampaignPhase) -> bool:
+        """Check if currently in a specific phase."""
+        return self.phase == phase
+
+    # Signal tracking methods
+
+    def add_signal(self, signal: SuspiciousSignal) -> SignalState:
+        """Add a new signal to tracking."""
+        state = SignalState(signal=signal)
+        self.signals[signal.signal_id] = state
+        return state
+
+    def get_signal(self, signal_id: str) -> Optional[SignalState]:
+        """Get a signal by ID."""
+        return self.signals.get(signal_id)
+
+    def update_signal_status(self, signal_id: str, status: SignalStatus) -> bool:
+        """Update a signal's status."""
+        if signal_id not in self.signals:
+            return False
+        self.signals[signal_id].status = status
+        self.signals[signal_id].updated_at = datetime.utcnow()
+        return True
+
+    def assign_signal_to_family(self, signal_id: str, family: str) -> bool:
+        """Assign a signal to a specialist family."""
+        if signal_id not in self.signals:
+            return False
+        self.signals[signal_id].assigned_family = family
+        self.signals[signal_id].status = SignalStatus.ROUTED
+        self.signals[signal_id].updated_at = datetime.utcnow()
+        return True
+
+    def assign_signal_to_specialists(self, signal_id: str, specialist_ids: list[str]) -> bool:
+        """Assign a signal to specific specialists."""
+        if signal_id not in self.signals:
+            return False
+        self.signals[signal_id].assigned_specialists = specialist_ids
+        self.signals[signal_id].status = SignalStatus.ASSIGNED
+        self.signals[signal_id].updated_at = datetime.utcnow()
+        return True
+
+    def get_signals_by_status(self, status: SignalStatus) -> list[SignalState]:
+        """Get all signals with a given status."""
+        return [s for s in self.signals.values() if s.status == status]
+
 
 # Backward compatibility alias
 SupervisorState = CampaignState

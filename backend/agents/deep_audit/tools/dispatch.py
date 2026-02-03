@@ -1,15 +1,17 @@
 """Dispatch tools for Overseer to spawn sub-agents."""
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from agents.deep_audit.dispatcher import WaveDispatcher, WavePlan, DispatchTask
+    from agents.deep_audit.foundation import FoundationContext
 
 
 # These will be set by the Overseer when initializing tools
 _dispatcher: "WaveDispatcher" = None
 _current_wave_id: int = 0
+_foundation_context: Optional["FoundationContext"] = None
 
 
 def set_dispatcher(dispatcher: "WaveDispatcher"):
@@ -22,6 +24,17 @@ def set_wave_id(wave_id: int):
     """Set the current wave ID."""
     global _current_wave_id
     _current_wave_id = wave_id
+
+
+def set_foundation_context(context: "FoundationContext"):
+    """Set the Foundation Context from Foundation Phase."""
+    global _foundation_context
+    _foundation_context = context
+
+
+def get_foundation_context() -> Optional["FoundationContext"]:
+    """Get the current Foundation Context."""
+    return _foundation_context
 
 
 async def dispatch_wave(wave_plan_json: str) -> str:
@@ -80,11 +93,13 @@ async def dispatch_wave(wave_plan_json: str) -> str:
             rationale=plan_data.get("rationale", ""),
         )
 
-        # Dispatch and wait
-        result = await _dispatcher.dispatch_wave(wave_plan)
+        # Dispatch and wait - pass Foundation Context if available
+        result = await _dispatcher.dispatch_wave(wave_plan, foundation_context=_foundation_context)
 
         # Format results
+        context_applied = _foundation_context is not None
         return json.dumps({
+            "foundation_context_applied": context_applied,
             "wave_id": result.wave_id,
             "all_succeeded": result.all_succeeded,
             "started_at": result.started_at.isoformat(),
@@ -144,7 +159,8 @@ async def dispatch_agent(
             time_budget=time_budget,
         )
 
-        result = await _dispatcher.dispatch_single(task)
+        # Pass Foundation Context if available
+        result = await _dispatcher.dispatch_single(task, foundation_context=_foundation_context)
 
         return json.dumps({
             "task_id": result.task_id,
@@ -153,6 +169,7 @@ async def dispatch_agent(
             "output_path": result.output_path,
             "error": result.error,
             "tokens_used": result.tokens_used,
+            "foundation_context_applied": _foundation_context is not None,
         }, indent=2)
 
     except Exception as e:
@@ -184,6 +201,87 @@ Example wave_plan_json:
         "required": ["wave_plan_json"]
     }
 }
+
+async def dispatch_foundation_phase() -> str:
+    """Dispatch the Foundation Phase: RepoProfiler, ScopeMapper, ThreatModeler in parallel.
+
+    This MUST be called before any hunting waves. It builds the Foundation Context
+    that all subsequent agents will use for filtering and prioritization.
+
+    Returns:
+        JSON string with Foundation Phase results and context summary
+    """
+    if _dispatcher is None:
+        return json.dumps({"error": "Dispatcher not initialized"})
+
+    try:
+        result, foundation_context = await _dispatcher.dispatch_foundation_phase()
+
+        response = {
+            "wave_id": result.wave_id,
+            "all_succeeded": result.all_succeeded,
+            "started_at": result.started_at.isoformat(),
+            "completed_at": result.completed_at.isoformat() if result.completed_at else None,
+            "results": [
+                {
+                    "task_id": r.task_id,
+                    "agent_type": r.agent_type,
+                    "status": r.status,
+                    "output_path": r.output_path,
+                    "error": r.error,
+                }
+                for r in result.results
+            ],
+            "foundation_context_built": foundation_context is not None,
+        }
+
+        if foundation_context:
+            # Store Foundation Context for subsequent waves
+            global _foundation_context
+            _foundation_context = foundation_context
+
+            response["foundation_summary"] = {
+                "languages": foundation_context.repo_profile.languages,
+                "frameworks": foundation_context.repo_profile.frameworks,
+                "security_critical_paths": foundation_context.scope_map.security_critical[:5],
+                "test_code_patterns": foundation_context.scope_map.test_code[:3],
+                "attacker_capabilities": [c.value for c in foundation_context.threat_model.attacker_capabilities],
+                "in_scope_paths": foundation_context.threat_model.in_scope_paths[:5],
+            }
+            # Phase transition: Foundation complete, ready for Hunting
+            response["next_phase"] = "hunting"
+            response["phase_instruction"] = "Foundation Phase complete. You may now dispatch Hunting waves (EntrypointHunter, SinkHunter)."
+        else:
+            response["next_phase"] = "foundation"
+            response["phase_instruction"] = "Foundation Phase failed. Check errors and retry."
+
+        return json.dumps(response, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+DISPATCH_FOUNDATION_PHASE_TOOL = {
+    "name": "dispatch_foundation_phase",
+    "description": """MANDATORY: Run Foundation Phase before any hunting.
+
+This dispatches RepoProfiler, ScopeMapper, and ThreatModeler in parallel to build the Foundation Context.
+All subsequent agents will use this context for scope filtering and threat model awareness.
+
+Returns the Foundation Context summary including:
+- Languages and frameworks detected
+- Security-critical paths to prioritize
+- Test/vendor code patterns to ignore
+- Attacker capabilities for threat modeling
+
+ALWAYS call this first before dispatch_wave for hunting.""",
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+}
+
 
 DISPATCH_AGENT_TOOL = {
     "name": "dispatch_agent",

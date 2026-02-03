@@ -1,6 +1,6 @@
 """Overseer tools for Deep Agents orchestration."""
 
-from agents.deep_audit.tools.dispatch import dispatch_wave, dispatch_agent
+from agents.deep_audit.tools.dispatch import dispatch_wave, dispatch_agent, dispatch_foundation_phase
 from agents.deep_audit.tools.memories import read_memories, write_synthesis, list_memories, write_artifact
 from agents.deep_audit.tools.finalize import finalize_report, update_campaign_state
 
@@ -11,6 +11,7 @@ __all__ = [
     # Overseer tools
     "dispatch_wave",
     "dispatch_agent",
+    "dispatch_foundation_phase",
     "read_memories",
     "write_synthesis",
     "list_memories",

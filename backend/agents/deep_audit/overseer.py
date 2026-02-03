@@ -41,7 +41,7 @@ from agents.deep_audit.dispatcher import WaveDispatcher, WavePlan, DispatchTask
 from agents.deep_audit.tools import dispatch as dispatch_tools
 from agents.deep_audit.tools import memories as memory_tools
 from agents.deep_audit.tools import finalize as finalize_tools
-from agents.deep_audit.tools.dispatch import DISPATCH_WAVE_TOOL, DISPATCH_AGENT_TOOL
+from agents.deep_audit.tools.dispatch import DISPATCH_WAVE_TOOL, DISPATCH_AGENT_TOOL, DISPATCH_FOUNDATION_PHASE_TOOL
 from agents.deep_audit.tools.memories import (
     READ_MEMORIES_TOOL,
     LIST_MEMORIES_TOOL,
@@ -117,6 +117,7 @@ class Overseer(BaseAgent):
             provider_config=provider_config,
             on_agent_start=self._on_subagent_start,
             on_agent_complete=self._on_subagent_complete,
+            on_message=on_message,  # Pass for sub-agent UI visibility
         )
 
         # Wire up tools with state
@@ -218,6 +219,7 @@ Start by dispatching Wave 0 (reconnaissance) to understand the codebase."""
     def _get_tools(self) -> list[dict]:
         """Get the tool definitions for the Overseer."""
         return [
+            DISPATCH_FOUNDATION_PHASE_TOOL,  # MUST be called first
             DISPATCH_WAVE_TOOL,
             DISPATCH_AGENT_TOOL,
             READ_MEMORIES_TOOL,
@@ -239,7 +241,9 @@ Start by dispatching Wave 0 (reconnaissance) to understand the codebase."""
             Tool result as string
         """
         # Dispatch tools (async)
-        if name == "dispatch_wave":
+        if name == "dispatch_foundation_phase":
+            return await dispatch_tools.dispatch_foundation_phase()
+        elif name == "dispatch_wave":
             return await dispatch_tools.dispatch_wave(arguments.get("wave_plan_json", "{}"))
         elif name == "dispatch_agent":
             return await dispatch_tools.dispatch_agent(

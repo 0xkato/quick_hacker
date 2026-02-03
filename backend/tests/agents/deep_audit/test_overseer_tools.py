@@ -297,7 +297,7 @@ class TestDispatchTools:
         dispatcher = MagicMock(spec=WaveDispatcher)
 
         # Mock dispatch_wave
-        async def mock_dispatch_wave(wave_plan):
+        async def mock_dispatch_wave(wave_plan, foundation_context=None):
             return WaveResult(
                 wave_id=wave_plan.wave_id,
                 tasks=wave_plan.tasks,
@@ -371,7 +371,7 @@ class TestDispatchTools:
         from datetime import datetime
 
         # Mock dispatch_single
-        async def mock_dispatch_single(task):
+        async def mock_dispatch_single(task, foundation_context=None):
             return SubagentResult(
                 task_id=task.task_id,
                 agent_type=task.agent_type,

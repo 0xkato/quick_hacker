@@ -156,12 +156,15 @@ async function request<T>(
 
 // === Git API ===
 
+// Clone timeout - 30 minutes for large repos
+const CLONE_TIMEOUT = 30 * 60 * 1000;
+
 export const git = {
   async clone(req: RepoCloneRequest): Promise<RepoInfo> {
     return request<RepoInfo>('/api/git/clone', {
       method: 'POST',
       body: JSON.stringify(req),
-    });
+    }, CLONE_TIMEOUT);
   },
 
   async list(): Promise<RepoInfo[]> {
@@ -865,14 +868,14 @@ export const projects = {
     return request<Project>(`/api/projects/${projectId}/clone`, {
       method: 'POST',
       body: JSON.stringify({ url, branch, force }),
-    });
+    }, CLONE_TIMEOUT);
   },
 
   async quickClone(url: string, branch?: string, projectName?: string, force: boolean = false): Promise<Project> {
     return request<Project>('/api/projects/quick-clone', {
       method: 'POST',
       body: JSON.stringify({ url, branch, project_name: projectName, force }),
-    });
+    }, CLONE_TIMEOUT);
   },
 
   async refresh(projectId: string): Promise<Project> {

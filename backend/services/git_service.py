@@ -20,7 +20,7 @@ _repos: dict[str, RepoInfo] = {}
 _delete_tasks: dict[str, asyncio.Task[None]] = {}
 
 # Timeout for git operations (clone, pull, etc.)
-GIT_OPERATION_TIMEOUT = 300  # seconds
+GIT_OPERATION_TIMEOUT = 1800  # 30 minutes for large repos
 
 
 async def _delete_repo_dir_background(*, repo_id: str, repo_path: Path) -> None:

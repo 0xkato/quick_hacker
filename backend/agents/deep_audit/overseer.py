@@ -55,6 +55,13 @@ from agents.deep_audit.dispatcher import WaveDispatcher, WavePlan, DispatchTask
 from agents.deep_audit.tools import dispatch as dispatch_tools
 from agents.deep_audit.tools import memories as memory_tools
 from agents.deep_audit.tools import finalize as finalize_tools
+from agents.deep_audit.specialists.registry import (
+    SpecialistRegistry,
+    get_family_for_signal,
+    get_specialists_for_signal,
+)
+from agents.deep_audit.foundation import SignalCategory
+from agents.deep_audit.subagents import get_specialist_prompt
 from agents.deep_audit.tools.dispatch import DISPATCH_WAVE_TOOL, DISPATCH_AGENT_TOOL, DISPATCH_FOUNDATION_PHASE_TOOL
 from agents.deep_audit.tools.memories import (
     READ_MEMORIES_TOOL,
@@ -805,8 +812,13 @@ Output JSON with your analysis for each signal.""",
             elif self.waves_completed >= MAX_WAVES:
                 await self.emit_log(f"Maximum waves reached ({MAX_WAVES})")
 
-            # === PHASE 4: FINALIZE ===
-            await self.emit_log("Phase 4: Generating final report...")
+            # === PHASE 4: VERIFICATION (Specialists) ===
+            # Dispatch specialists to verify high-priority signals
+            if self.campaign_state.confirmed_findings and self.campaign_state.time_remaining() > 60:
+                await self._dispatch_specialists()
+
+            # === PHASE 5: FINALIZE ===
+            await self.emit_log("Phase 5: Generating final report...")
 
             # Create flow node for Finalize Phase
             finalize_node = flow_service.add_node(
@@ -997,6 +1009,184 @@ Output JSON with your analysis for each signal.""",
                                 print(f"[Overseer] Wave {wave_num}: Collected {len(signals)} signals from {file_path}")
             except Exception as e:
                 print(f"[Overseer] Wave {wave_num}: Could not read {file_path}: {e}")
+
+    async def _dispatch_specialists(self):
+        """Dispatch specialists to verify high-priority signals.
+
+        Specialists are sub-agents with vulnerability-specific prompts.
+        They analyze signals matching their expertise and return verdicts.
+        """
+        signals = self.campaign_state.confirmed_findings
+        if not signals:
+            return
+
+        await self.emit_log(f"Phase 4: Dispatching specialists to verify {len(signals)} signals...")
+        print(f"[Overseer] Dispatching specialists for {len(signals)} signals")
+
+        # Create flow node for Verification Phase
+        verify_node = flow_service.add_node(
+            self.id,
+            node_type="analysis",
+            label="Verification Phase",
+            parent_id=None,
+            data={"phase": "verification", "signals_count": len(signals)},
+        )
+        if verify_node:
+            flow_service.update_node_status(self.id, verify_node.id, "running")
+        await self.emit_flow_update()
+
+        # Group signals by category to dispatch appropriate specialists
+        registry = SpecialistRegistry()
+        category_signals: dict[str, list[dict]] = {}
+
+        for signal in signals:
+            # Get category from signal (normalize to lowercase)
+            category = signal.get("vulnerability_type", signal.get("category", "unknown"))
+            if isinstance(category, str):
+                category = category.lower().replace(" ", "_").replace("-", "_")
+
+            if category not in category_signals:
+                category_signals[category] = []
+            category_signals[category].append(signal)
+
+        print(f"[Overseer] Signal categories: {list(category_signals.keys())}")
+
+        # Calculate time budget for specialists
+        remaining = self.campaign_state.time_remaining()
+        specialist_budget = max(60, min(300, int(remaining * 0.1)))
+
+        # Dispatch specialists for each category (limit to top 5 categories by signal count)
+        sorted_categories = sorted(category_signals.items(), key=lambda x: -len(x[1]))[:5]
+        tasks = []
+
+        for category, cat_signals in sorted_categories:
+            # Try to map category string to SignalCategory enum
+            try:
+                signal_cat = SignalCategory(category)
+                specialists = get_specialists_for_signal(signal_cat)
+            except (ValueError, KeyError):
+                # Unknown category, use generic verification
+                specialists = []
+
+            if specialists:
+                # Use first specialist for this category
+                specialist_id = specialists[0]
+                specialist_info = registry.get_by_id(specialist_id)
+
+                if specialist_info:
+                    # Format signals for the specialist
+                    signals_text = self._format_signals_for_specialist(cat_signals[:5])
+
+                    tasks.append(DispatchTask(
+                        agent_type="Specialist",
+                        objective=f"""Verify {len(cat_signals)} {category} signals.
+
+{specialist_info.proficiency}
+
+## Signals to Verify:
+{signals_text}
+
+For each signal:
+1. Read the code at the indicated location
+2. Trace data flow from user input to the sink
+3. Check for sanitization, validation, or encoding
+4. Determine if the vulnerability is exploitable
+
+Output your verdict as JSON.""",
+                        scope=self.repo_path_str,
+                        deliverable=f"/memories/verification/{specialist_id}_verdict.json",
+                        time_budget=specialist_budget,
+                    ))
+
+                    # Add flow node for this specialist
+                    spec_node = flow_service.add_node(
+                        self.id,
+                        node_type="analysis",
+                        label=f"{specialist_info.name}",
+                        parent_id=verify_node.id if verify_node else None,
+                        data={"specialist": specialist_id, "signals": len(cat_signals)},
+                    )
+                    if spec_node:
+                        flow_service.update_node_status(self.id, spec_node.id, "running")
+
+        await self.emit_flow_update()
+
+        if not tasks:
+            await self.emit_log("No specialists matched signal categories")
+            if verify_node:
+                flow_service.update_node_status(self.id, verify_node.id, "completed")
+            return
+
+        # Dispatch all specialists in parallel
+        wave_plan = WavePlan(
+            wave_id=self.waves_completed + 1,
+            tasks=tasks,
+            rationale="Verification Phase: Specialist analysis",
+        )
+
+        try:
+            result = await self.dispatcher.dispatch_wave(wave_plan)
+            await self.emit_log(f"Specialists completed: {result.all_succeeded}")
+
+            # Collect specialist verdicts
+            await self._collect_specialist_verdicts()
+
+            if verify_node:
+                status = "completed" if result.all_succeeded else "failed"
+                flow_service.update_node_status(self.id, verify_node.id, status)
+
+        except Exception as e:
+            print(f"[Overseer] Specialist dispatch failed: {e}")
+            await self.emit_log(f"Specialist dispatch failed: {e}")
+            if verify_node:
+                flow_service.update_node_status(self.id, verify_node.id, "failed")
+
+        await self.emit_flow_update()
+
+    def _format_signals_for_specialist(self, signals: list[dict], max_signals: int = 5) -> str:
+        """Format signals for a specialist prompt."""
+        lines = []
+        for i, signal in enumerate(signals[:max_signals], 1):
+            location = signal.get("location", signal.get("file_path", "unknown"))
+            title = signal.get("title", "Untitled")
+            code = signal.get("code_snippet", "")[:200]
+            why = signal.get("why_suspicious", signal.get("description", ""))[:150]
+
+            lines.append(f"### Signal {i}: {title}")
+            lines.append(f"- **Location:** {location}")
+            if code:
+                lines.append(f"- **Code:** `{code}`")
+            if why:
+                lines.append(f"- **Suspicious because:** {why}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    async def _collect_specialist_verdicts(self):
+        """Collect verdicts from specialist outputs."""
+        try:
+            # List files in verification directory
+            verification_files = self.filesystem.list_directory("/memories/verification/")
+            for filename in verification_files:
+                if filename.endswith("_verdict.json"):
+                    content = self.filesystem.read_file(f"/memories/verification/{filename}")
+                    if content:
+                        verdict_data = self._extract_json_from_output(content)
+                        if verdict_data:
+                            verdict = verdict_data.get("verdict", "unknown")
+                            signal_id = verdict_data.get("signal_id", "")
+                            print(f"[Overseer] Specialist verdict: {signal_id} -> {verdict}")
+
+                            # If verified as vulnerable, update confidence
+                            if verdict == "vulnerable":
+                                # Find and update the signal
+                                for finding in self.campaign_state.confirmed_findings:
+                                    if finding.get("signal_id") == signal_id:
+                                        finding["verified"] = True
+                                        finding["confidence"] = verdict_data.get("confidence", 0.9)
+                                        break
+        except Exception as e:
+            print(f"[Overseer] Error collecting specialist verdicts: {e}")
 
     async def _process_findings(self):
         """Convert campaign state findings to Finding objects."""

@@ -419,13 +419,16 @@ Begin your analysis now."""
             model_arg = model  # Use exact model name from config
 
             # Build claude CLI command
+            # IMPORTANT: Use --append-system-prompt instead of --system-prompt
+            # --system-prompt REPLACES the entire default prompt (including tool instructions)
+            # --append-system-prompt PRESERVES Claude Code's built-in tool usage capabilities
             cmd = [
                 "claude",
                 "-p",  # Print mode (non-interactive)
                 "--model", model_arg,
                 "--permission-mode", "bypassPermissions",
                 "--tools", ",".join(claude_tools),
-                "--system-prompt", system_prompt,
+                "--append-system-prompt", system_prompt,  # Append to preserve tool instructions
                 "--output-format", "text",
                 "--no-session-persistence",  # Don't save session to disk
                 user_prompt,

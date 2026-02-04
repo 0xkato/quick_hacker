@@ -517,14 +517,16 @@ Continue the investigation. What should the next wave focus on?"""
                 parent_id=root_node.id if root_node else None,
                 data={"phase": "foundation", "agents": ["RepoProfiler", "ScopeMapper", "ThreatModeler"]},
             )
-            flow_service.update_node_status(self.id, foundation_node.id, "running")
+            if foundation_node:
+                flow_service.update_node_status(self.id, foundation_node.id, "running")
             await self.emit_flow_update()
 
             foundation_result = await dispatch_tools.dispatch_foundation_phase()
             print(f"[Overseer] Foundation Phase result: {foundation_result[:500]}...")
 
             # Update flow node status
-            flow_service.update_node_status(self.id, foundation_node.id, "completed")
+            if foundation_node:
+                flow_service.update_node_status(self.id, foundation_node.id, "completed")
             await self.emit_flow_update()
 
             # Check for cancellation
@@ -536,7 +538,8 @@ Continue the investigation. What should the next wave focus on?"""
                 foundation_data = json.loads(foundation_result)
                 if not foundation_data.get("all_succeeded"):
                     await self.emit_log("Foundation Phase had failures, continuing with partial results...")
-                    flow_service.update_node_status(self.id, foundation_node.id, "failed")
+                    if foundation_node:
+                        flow_service.update_node_status(self.id, foundation_node.id, "failed")
             except json.JSONDecodeError:
                 await self.emit_log("Could not parse Foundation Phase result, continuing...")
 
@@ -559,10 +562,16 @@ Continue the investigation. What should the next wave focus on?"""
                 parent_id=root_node.id if root_node else None,
                 data={"phase": "hunting", "agents": ["SinkHunter", "EntrypointHunter"]},
             )
-            flow_service.update_node_status(self.id, hunting_node.id, "running")
+            if hunting_node:
+                flow_service.update_node_status(self.id, hunting_node.id, "running")
             await self.emit_flow_update()
 
             from agents.deep_audit.dispatcher import WavePlan, DispatchTask
+
+            # Calculate sub-agent time budget based on remaining time
+            # Give each hunting agent 20% of remaining time, min 60s, max 1800s
+            remaining = self.campaign_state.time_remaining()
+            subagent_budget = max(60, min(1800, int(remaining * 0.2)))
 
             hunting_wave = WavePlan(
                 wave_id=1,
@@ -572,14 +581,14 @@ Continue the investigation. What should the next wave focus on?"""
                         objective="Find dangerous sinks (SQL, command injection, SSRF, etc.)",
                         scope=self.repo_path_str,
                         deliverable="/memories/signals/sinks.json",
-                        time_budget=180,
+                        time_budget=subagent_budget,
                     ),
                     DispatchTask(
                         agent_type="EntrypointHunter",
                         objective="Find all entry points (HTTP routes, CLI handlers, etc.)",
                         scope=self.repo_path_str,
                         deliverable="/memories/signals/entrypoints.json",
-                        time_budget=180,
+                        time_budget=subagent_budget,
                     ),
                 ],
                 rationale="Hunting Phase: Find signals for verification",
@@ -590,8 +599,9 @@ Continue the investigation. What should the next wave focus on?"""
             self.campaign_state.current_wave = 1
 
             # Update flow node status
-            hunt_status = "completed" if hunting_result.all_succeeded else "failed"
-            flow_service.update_node_status(self.id, hunting_node.id, hunt_status)
+            if hunting_node:
+                hunt_status = "completed" if hunting_result.all_succeeded else "failed"
+                flow_service.update_node_status(self.id, hunting_node.id, hunt_status)
             await self.emit_flow_update()
 
             print(f"[Overseer] Hunting Phase complete: {hunting_result.all_succeeded}")
@@ -622,12 +632,14 @@ Continue the investigation. What should the next wave focus on?"""
                 parent_id=root_node.id if root_node else None,
                 data={"phase": "finalize"},
             )
-            flow_service.update_node_status(self.id, finalize_node.id, "running")
+            if finalize_node:
+                flow_service.update_node_status(self.id, finalize_node.id, "running")
             await self.emit_flow_update()
 
             finalize_tools.finalize_report("Scan complete.")
 
-            flow_service.update_node_status(self.id, finalize_node.id, "completed")
+            if finalize_node:
+                flow_service.update_node_status(self.id, finalize_node.id, "completed")
             await self.emit_flow_update()
 
         except Exception as e:
@@ -640,44 +652,37 @@ Continue the investigation. What should the next wave focus on?"""
         # Convert confirmed findings to Finding objects
         await self._process_findings()
 
-    def _extract_tool_calls(self, response) -> list[dict]:
-        """Extract tool calls from LLM response."""
-        tool_calls = []
+    def _extract_json_from_output(self, content: str) -> Optional[dict]:
+        """Extract JSON from Claude CLI output which may include preamble text."""
+        if not content:
+            return None
 
-        # Handle different response formats
-        if hasattr(response, 'content'):
-            content = response.content
-            if isinstance(content, list):
-                for block in content:
-                    if hasattr(block, 'type') and block.type == 'tool_use':
-                        tool_calls.append({
-                            "id": getattr(block, 'id', str(uuid.uuid4())[:8]),
-                            "name": block.name,
-                            "arguments": block.input if hasattr(block, 'input') else {},
-                        })
+        # Try direct parse first
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
 
-        return tool_calls
+        # Try to find JSON object in the content
+        # Look for first { and last }
+        start = content.find('{')
+        end = content.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(content[start:end + 1])
+            except json.JSONDecodeError:
+                pass
 
-    def _extract_text(self, response) -> str:
-        """Extract text content from LLM response."""
-        if hasattr(response, 'content'):
-            content = response.content
-            if isinstance(content, str):
-                return content
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if hasattr(block, 'type') and block.type == 'text':
-                        text_parts.append(block.text)
-                return " ".join(text_parts)
-        return ""
+        # Try to find JSON array
+        start = content.find('[')
+        end = content.rfind(']')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return {"items": json.loads(content[start:end + 1])}
+            except json.JSONDecodeError:
+                pass
 
-    def _format_tool_results(self, results: list[dict]) -> str:
-        """Format tool results for the conversation."""
-        parts = []
-        for r in results:
-            parts.append(f"**Tool Result ({r['name']}):**\n```\n{r['result']}\n```")
-        return "\n\n".join(parts)
+        return None
 
     async def _collect_findings_from_signals(self):
         """Read sub-agent outputs and extract findings from signals."""
@@ -685,10 +690,16 @@ Continue the investigation. What should the next wave focus on?"""
         try:
             sinks_content = self.filesystem.read_file("/memories/signals/sinks.json")
             if sinks_content:
-                # Try to parse as JSON
-                try:
-                    sinks_data = json.loads(sinks_content)
-                    signals = sinks_data.get("signals", sinks_data.get("sinks", []))
+                sinks_data = self._extract_json_from_output(sinks_content)
+                if sinks_data:
+                    # Handle various output formats
+                    signals = (
+                        sinks_data.get("signals") or
+                        sinks_data.get("sinks") or
+                        sinks_data.get("findings") or
+                        sinks_data.get("items") or
+                        (sinks_data if isinstance(sinks_data, list) else [])
+                    )
                     if isinstance(signals, list):
                         for signal in signals:
                             if isinstance(signal, dict):
@@ -705,8 +716,8 @@ Continue the investigation. What should the next wave focus on?"""
                                 }
                                 self.campaign_state.confirmed_findings.append(finding)
                         print(f"[Overseer] Collected {len(signals)} signals from SinkHunter")
-                except json.JSONDecodeError:
-                    print(f"[Overseer] SinkHunter output is not valid JSON, skipping")
+                else:
+                    print(f"[Overseer] Could not parse SinkHunter output as JSON")
         except Exception as e:
             print(f"[Overseer] Could not read SinkHunter output: {e}")
 

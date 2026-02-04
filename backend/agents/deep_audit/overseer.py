@@ -621,8 +621,119 @@ Continue the investigation. What should the next wave focus on?"""
                 await self._process_findings()
                 return
 
-            # === PHASE 3: FINALIZE ===
-            await self.emit_log("Phase 3: Generating final report...")
+            # === PHASE 3: WAVE LOOP ===
+            # Continue dispatching waves until time budget is exhausted
+            # Minimum time to dispatch another wave (2 minutes)
+            MIN_TIME_FOR_WAVE = 120
+            MAX_WAVES = 50  # Safety limit
+
+            while (self.campaign_state.time_remaining() > MIN_TIME_FOR_WAVE
+                   and self.waves_completed < MAX_WAVES
+                   and not self._cancelled):
+
+                self.waves_completed += 1
+                wave_num = self.waves_completed + 1
+                remaining = self.campaign_state.time_remaining()
+
+                await self.emit_log(f"Wave {wave_num}: {remaining:.0f}s remaining, dispatching verification agents...")
+                print(f"[Overseer] Starting Wave {wave_num} with {remaining:.0f}s remaining")
+
+                # Create flow node for this wave
+                wave_node = flow_service.add_node(
+                    self.id,
+                    node_type="scan",
+                    label=f"Wave {wave_num}: Verification",
+                    parent_id=root_node.id if root_node else None,
+                    data={"phase": "verification", "wave": wave_num, "time_remaining": remaining},
+                )
+                if wave_node:
+                    flow_service.update_node_status(self.id, wave_node.id, "running")
+                await self.emit_flow_update()
+
+                # Calculate sub-agent time budget for this wave
+                # Give each agent 15% of remaining time, min 60s, max 600s
+                subagent_budget = max(60, min(600, int(remaining * 0.15)))
+
+                # Determine what agents to dispatch based on current state
+                tasks = []
+
+                # If we have signals, dispatch verification agents
+                signals_count = len(self.campaign_state.confirmed_findings)
+                if signals_count > 0:
+                    # Dispatch DataflowTracer on signals
+                    tasks.append(DispatchTask(
+                        agent_type="DataflowTracer",
+                        objective=f"Trace dataflow for {signals_count} potential vulnerabilities",
+                        scope=self.repo_path_str,
+                        deliverable=f"/memories/waves/wave_{wave_num}/dataflow_trace.json",
+                        time_budget=subagent_budget,
+                    ))
+
+                    # Dispatch AuthBoundaryMapper to check auth
+                    tasks.append(DispatchTask(
+                        agent_type="AuthBoundaryMapper",
+                        objective="Map authentication and authorization boundaries for signals",
+                        scope=self.repo_path_str,
+                        deliverable=f"/memories/waves/wave_{wave_num}/auth_boundaries.json",
+                        time_budget=subagent_budget,
+                    ))
+                else:
+                    # No signals yet, dispatch more hunters in different areas
+                    tasks.append(DispatchTask(
+                        agent_type="SinkHunter",
+                        objective="Deep hunt for dangerous sinks (SQL, command injection, SSRF, deserialization)",
+                        scope=self.repo_path_str,
+                        deliverable=f"/memories/waves/wave_{wave_num}/sinks.json",
+                        time_budget=subagent_budget,
+                    ))
+
+                if not tasks:
+                    await self.emit_log(f"Wave {wave_num}: No tasks to dispatch, exiting wave loop")
+                    break
+
+                # Dispatch the wave
+                wave_plan = WavePlan(
+                    wave_id=wave_num,
+                    tasks=tasks,
+                    rationale=f"Wave {wave_num}: Verification and deep analysis",
+                )
+
+                try:
+                    wave_result = await self.dispatcher.dispatch_wave(wave_plan)
+                    self.campaign_state.current_wave = wave_num
+
+                    # Update flow node status
+                    if wave_node:
+                        wave_status = "completed" if wave_result.all_succeeded else "failed"
+                        flow_service.update_node_status(self.id, wave_node.id, wave_status)
+                    await self.emit_flow_update()
+
+                    # Collect any new findings from this wave
+                    await self._collect_wave_findings(wave_num)
+
+                    print(f"[Overseer] Wave {wave_num} complete: {wave_result.all_succeeded}")
+                    await self.emit_log(f"Wave {wave_num} complete. Total findings: {len(self.campaign_state.confirmed_findings)}")
+
+                except Exception as e:
+                    print(f"[Overseer] Wave {wave_num} failed: {e}")
+                    await self.emit_log(f"Wave {wave_num} failed: {e}")
+                    if wave_node:
+                        flow_service.update_node_status(self.id, wave_node.id, "failed")
+                    await self.emit_flow_update()
+
+                # Brief pause between waves
+                await asyncio.sleep(1)
+
+            # Log why we exited the loop
+            if self._cancelled:
+                await self.emit_log("Scan cancelled by user.")
+            elif self.campaign_state.time_remaining() <= MIN_TIME_FOR_WAVE:
+                await self.emit_log(f"Time budget nearly exhausted ({self.campaign_state.time_remaining():.0f}s remaining)")
+            elif self.waves_completed >= MAX_WAVES:
+                await self.emit_log(f"Maximum waves reached ({MAX_WAVES})")
+
+            # === PHASE 4: FINALIZE ===
+            await self.emit_log("Phase 4: Generating final report...")
 
             # Create flow node for Finalize Phase
             finalize_node = flow_service.add_node(
@@ -736,26 +847,105 @@ Continue the investigation. What should the next wave focus on?"""
 
         await self.emit_log(f"Collected {len(self.campaign_state.confirmed_findings)} potential findings from sub-agents")
 
+    async def _collect_wave_findings(self, wave_num: int):
+        """Collect findings from a specific wave's outputs."""
+        wave_dir = f"/memories/waves/wave_{wave_num}"
+        files_to_check = [
+            f"{wave_dir}/dataflow_trace.json",
+            f"{wave_dir}/auth_boundaries.json",
+            f"{wave_dir}/sinks.json",
+        ]
+
+        for file_path in files_to_check:
+            try:
+                content = self.filesystem.read_file(file_path)
+                if content:
+                    data = self._extract_json_from_output(content)
+                    if data:
+                        # Extract signals/findings from various formats
+                        signals = (
+                            data.get("signals") or
+                            data.get("findings") or
+                            data.get("sinks") or
+                            data.get("traces") or
+                            data.get("items") or
+                            (data if isinstance(data, list) else [])
+                        )
+                        if isinstance(signals, list):
+                            for signal in signals:
+                                if isinstance(signal, dict):
+                                    finding = {
+                                        "title": signal.get("title", signal.get("type", "Potential Vulnerability")),
+                                        "description": signal.get("description", signal.get("reasoning", "")),
+                                        "severity": signal.get("severity", "MEDIUM"),
+                                        "vulnerability_type": signal.get("type", signal.get("sink_type", "unknown")),
+                                        "location": signal.get("location", signal.get("file_path", "")),
+                                        "code_snippet": signal.get("code_snippet", signal.get("code", "")),
+                                        "remediation": signal.get("remediation", signal.get("recommendation", "")),
+                                        "confidence": signal.get("confidence", 0.7),
+                                    }
+                                    self.campaign_state.confirmed_findings.append(finding)
+                            if len(signals) > 0:
+                                print(f"[Overseer] Wave {wave_num}: Collected {len(signals)} signals from {file_path}")
+            except Exception as e:
+                print(f"[Overseer] Wave {wave_num}: Could not read {file_path}: {e}")
+
     async def _process_findings(self):
         """Convert campaign state findings to Finding objects."""
-        for finding_data in self.campaign_state.confirmed_findings:
+        print(f"[Overseer] Processing {len(self.campaign_state.confirmed_findings)} confirmed findings...")
+
+        processed_count = 0
+        error_count = 0
+        skipped_count = 0
+
+        for i, finding_data in enumerate(self.campaign_state.confirmed_findings):
             try:
+                # Debug: show what we're processing
+                if i < 3:  # Only show first 3 to avoid log spam
+                    print(f"[Overseer] Finding {i+1}: {finding_data.get('title', 'No title')[:50]}")
+
+                # Extract file path and line number from location
+                location = finding_data.get("location", "") or finding_data.get("file_path", "")
+                if not location:
+                    print(f"[Overseer] Finding {i+1}: Skipping - no file location")
+                    skipped_count += 1
+                    continue
+
+                file_path = location.split(":")[0] if ":" in location else location
+                line_start = self._extract_line_number(location) or 1
+
+                # Normalize severity to uppercase enum value
+                severity = finding_data.get("severity", "MEDIUM")
+                if isinstance(severity, str):
+                    severity = severity.upper()
+
                 finding_create = FindingCreate(
                     title=finding_data.get("title", "Untitled Finding"),
                     description=finding_data.get("description", ""),
-                    severity=finding_data.get("severity", "MEDIUM"),
+                    severity=severity,
                     vulnerability_type=finding_data.get("vulnerability_type", "unknown"),
-                    file_path=finding_data.get("location", "").split(":")[0] if finding_data.get("location") else None,
-                    line_number=self._extract_line_number(finding_data.get("location", "")),
+                    file_path=file_path,
+                    line_start=line_start,
+                    line_end=line_start,  # Same as start for single-line findings
                     code_snippet=finding_data.get("code_snippet"),
-                    recommendation=finding_data.get("remediation"),
+                    recommended_fix=finding_data.get("remediation") or finding_data.get("recommendation"),
                     confidence=finding_data.get("confidence", 0.8),
-                    verified=True,
                 )
                 finding = self.add_finding(finding_create)
-                await self.emit_finding(finding)
+                if finding:
+                    await self.emit_finding(finding)
+                    processed_count += 1
+                else:
+                    skipped_count += 1  # Duplicate
             except Exception as e:
+                error_count += 1
+                print(f"[Overseer] Error processing finding {i+1}: {e}")
+                import traceback
+                traceback.print_exc()
                 await self.emit_log(f"Error processing finding: {e}")
+
+        print(f"[Overseer] Processed {processed_count} findings, {skipped_count} skipped, {error_count} errors")
+        await self.emit_log(f"Processed {processed_count} findings into final report")
 
     def _extract_line_number(self, location: str) -> Optional[int]:
         """Extract line number from location string like 'file.py:123'."""

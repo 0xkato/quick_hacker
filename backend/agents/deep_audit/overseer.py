@@ -697,9 +697,21 @@ Continue the investigation. What should the next wave focus on?"""
                 # If we have signals, also verify them
                 if signals_count > 0 and wave_num % 2 == 0:
                     # Every other wave, also run verification
+                    # Include actual signals in the objective so the agent knows what to verify
+                    signals_context = self._format_signals_for_context(max_signals=10)
                     tasks.append(DispatchTask(
                         agent_type="DataflowTracer",
-                        objective=f"Trace dataflow for the {signals_count} potential vulnerabilities found so far. Confirm which are exploitable.",
+                        objective=f"""Trace dataflow for potential vulnerabilities. For each signal, determine if user input can reach the dangerous sink.
+
+{signals_context}
+
+For each signal above:
+1. Find where user input enters the system
+2. Trace if that input can reach the vulnerable code
+3. Check for sanitization/validation along the path
+4. Determine if the vulnerability is exploitable
+
+Output JSON with your analysis for each signal.""",
                         scope=self.repo_path_str,
                         deliverable=f"/memories/waves/wave_{wave_num}/dataflow_trace.json",
                         time_budget=subagent_budget,
@@ -811,6 +823,15 @@ Continue the investigation. What should the next wave focus on?"""
         except json.JSONDecodeError:
             pass
 
+        # Try to find ```json code blocks first (common Claude output format)
+        import re
+        json_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
+        if json_block_match:
+            try:
+                return json.loads(json_block_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
         # Try to find JSON object in the content
         # Look for first { and last }
         start = content.find('{')
@@ -831,6 +852,32 @@ Continue the investigation. What should the next wave focus on?"""
                 pass
 
         return None
+
+    def _format_signals_for_context(self, max_signals: int = 10) -> str:
+        """Format collected signals into a prompt-friendly string for verification agents."""
+        if not self.campaign_state.confirmed_findings:
+            return "No signals collected yet."
+
+        signals = self.campaign_state.confirmed_findings[:max_signals]
+        lines = [f"## {len(self.campaign_state.confirmed_findings)} Signals Found (showing top {len(signals)}):\n"]
+
+        for i, signal in enumerate(signals, 1):
+            location = signal.get("location", "unknown location")
+            vuln_type = signal.get("vulnerability_type", signal.get("type", "unknown"))
+            title = signal.get("title", "Untitled")
+            description = signal.get("description", "")[:200]
+            code = signal.get("code_snippet", "")[:150]
+
+            lines.append(f"### Signal {i}: {title}")
+            lines.append(f"- **Type:** {vuln_type}")
+            lines.append(f"- **Location:** {location}")
+            if description:
+                lines.append(f"- **Description:** {description}")
+            if code:
+                lines.append(f"- **Code:** `{code}`")
+            lines.append("")
+
+        return "\n".join(lines)
 
     async def _collect_findings_from_signals(self):
         """Read sub-agent outputs and extract findings from signals."""

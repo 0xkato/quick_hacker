@@ -776,18 +776,70 @@ Begin your analysis now."""
 
         return result, None
 
+    def _extract_json_from_output(self, content: str) -> Optional[dict]:
+        """Extract JSON from Claude CLI output which may include preamble text."""
+        if not content:
+            return None
+
+        # Try direct parse first
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # Try to find ```json code blocks first (common Claude output format)
+        import re
+        json_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
+        if json_block_match:
+            try:
+                return json.loads(json_block_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # Try to find JSON object in the content
+        start = content.find('{')
+        end = content.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(content[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+
+        # Try to find JSON array
+        start = content.find('[')
+        end = content.rfind(']')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return {"items": json.loads(content[start:end + 1])}
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
     async def _build_foundation_context(self) -> FoundationContext:
         """Build FoundationContext from foundation phase outputs."""
         # Read outputs from filesystem (sync methods, no await needed)
-        repo_profile_json = self.filesystem.read_file("/memories/foundation/repo_profile.json")
-        scope_map_json = self.filesystem.read_file("/memories/foundation/scope_map.json")
-        threat_model_json = self.filesystem.read_file("/memories/foundation/threat_model.json")
+        repo_profile_content = self.filesystem.read_file("/memories/foundation/repo_profile.json")
+        scope_map_content = self.filesystem.read_file("/memories/foundation/scope_map.json")
+        threat_model_content = self.filesystem.read_file("/memories/foundation/threat_model.json")
+
+        # Extract JSON from Claude's text output
+        repo_profile = self._extract_json_from_output(repo_profile_content)
+        scope_map = self._extract_json_from_output(scope_map_content)
+        threat_model = self._extract_json_from_output(threat_model_content)
+
+        if not repo_profile:
+            raise ValueError("Could not parse repo_profile.json")
+        if not scope_map:
+            raise ValueError("Could not parse scope_map.json")
+        if not threat_model:
+            raise ValueError("Could not parse threat_model.json")
 
         # Parse and build context
         return FoundationContext.from_dict({
-            "repo_profile": json.loads(repo_profile_json),
-            "scope_map": json.loads(scope_map_json),
-            "threat_model": json.loads(threat_model_json),
+            "repo_profile": repo_profile,
+            "scope_map": scope_map,
+            "threat_model": threat_model,
         })
 
     def inject_foundation_context(self, task: DispatchTask, foundation_context: FoundationContext) -> DispatchTask:

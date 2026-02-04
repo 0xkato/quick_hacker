@@ -14,7 +14,15 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 |-----------|---------|-------|-------|
 | **QuickAudit** | Fast pattern-based scanning | ~1-2 min | Surface-level |
 | **ReAct** | Targeted investigation with reasoning loops | ~5-10 min | Deep dives |
-| **DeepAudit** | Comprehensive systematic audit (LangGraph) | ~15-30 min | Multi-pass thorough |
+| **DeepAudit** | Wave-based parallel sub-agent orchestration | 5 min - 24 hours | Multi-agent thorough |
+
+**DeepAudit Architecture:**
+- **Overseer**: LLM orchestrator that dispatches specialized sub-agents
+- **Sub-agents**: RepoProfiler, SinkHunter, DataflowTracer, AuthBoundaryMapper, etc.
+- **Wave-based dispatch**: Parallel execution with context passing between waves
+- **Claude CLI**: Uses Claude Code subscription auth (no API keys needed)
+
+See [agents/deep_audit/README.md](backend/agents/deep_audit/README.md) for detailed architecture.
 
 ### 🎯 Strict Triage System
 
@@ -207,6 +215,12 @@ QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
 │  │   ├── Reasoning   ├── Tools        ├── State                    │   │
 │  │   └── Utils                                                      │   │
 │  │                                                                  │   │
+│  │   agents/deep_audit/ (Wave-Based Orchestrator)                  │   │
+│  │   ├── Overseer (LLM orchestrator)                               │   │
+│  │   ├── WaveDispatcher (parallel Claude CLI spawning)             │   │
+│  │   ├── Sub-agents: RepoProfiler, SinkHunter, DataflowTracer     │   │
+│  │   └── /memories/ filesystem for inter-agent context             │   │
+│  │                                                                  │   │
 │  │   agents/tool_core/ (Tool Utilities - 8 modules)                │   │
 │  │   └── Cache, Validation, Budget, Core Operations                │   │
 │  │                                                                  │   │
@@ -396,9 +410,20 @@ curl -X POST http://localhost:8000/api/agents/execute \
   -d '{
     "project_id": "project-id-here",
     "agent_type": "DEEP_AUDIT",
+    "scan_tier": "advanced",
     "prompt": "Comprehensive security analysis"
   }'
 ```
+
+**DeepAudit Scan Tiers:**
+| Tier | Time Budget | Use Case |
+|------|-------------|----------|
+| `quick` | 5 min | Fast reconnaissance |
+| `medium` | 15 min | Standard scan |
+| `advanced` | 30 min | Deeper analysis |
+| `pro` | 1 hour | Thorough audit |
+| `ultra` | 4 hours | Extensive coverage |
+| `evil` | 24 hours | Maximum depth |
 
 ### Get Findings
 
@@ -461,6 +486,23 @@ ANTHROPIC_AUTH_TOKEN=...  # OAuth token for Claude SDK
 # `codex login` stores credentials at ~/.codex/auth.json
 CODEX_GLOBAL_HOME=~/.codex  # optional override; defaults to ~/.codex
 ```
+
+### Claude Code Subscription (DeepAudit)
+
+DeepAudit uses the **Claude CLI** with your Claude Code subscription - no API key needed:
+
+```bash
+# Install Claude Code CLI
+npm install -g @anthropic-ai/claude-code
+
+# Login (opens browser for OAuth)
+claude login
+
+# Verify it works
+claude -p "Hello"
+```
+
+DeepAudit spawns `claude -p` processes for each sub-agent (RepoProfiler, SinkHunter, etc.), using your subscription credits instead of API billing.
 
 ## Codex CLI (Local Provider)
 
@@ -554,7 +596,16 @@ quick_hack/
 │   │   │   ├── budget.py            # Budget management
 │   │   │   └── operations.py        # Core tool operations
 │   │   ├── tools.py                 # 19 tool definitions
-│   │   └── validity_checklists/     # Per-vulnerability-type checklists
+│   │   ├── validity_checklists/     # Per-vulnerability-type checklists
+│   │   └── deep_audit/              # 🆕 Wave-based orchestrator
+│   │       ├── README.md            # Architecture documentation
+│   │       ├── overseer.py          # LLM orchestrator
+│   │       ├── dispatcher.py        # Claude CLI sub-agent spawning
+│   │       ├── state.py             # Campaign state management
+│   │       ├── filesystem.py        # /memories/ virtual filesystem
+│   │       ├── subagents.py         # Sub-agent prompts & tools
+│   │       ├── specialists/         # 64 vulnerability specialists
+│   │       └── tools/               # Dispatch, memory, finalize tools
 │   ├── routers/                     # 13 API endpoint modules
 │   │   ├── agents.py                # Agent execution endpoints
 │   │   ├── auth.py                  # Authentication (signup/login/refresh)

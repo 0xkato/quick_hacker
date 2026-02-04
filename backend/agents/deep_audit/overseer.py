@@ -52,6 +52,8 @@ from agents.deep_audit.tools.memories import (
 )
 from agents.deep_audit.tools.finalize import UPDATE_CAMPAIGN_STATE_TOOL, FINALIZE_REPORT_TOOL
 from prompting_loader import load_prompt
+from services.observability_service import observability_service
+from services.flow_service import flow_service
 
 
 # Scan tier time budgets in seconds
@@ -108,20 +110,18 @@ class Overseer(BaseAgent):
             repo_path=repo_path,
         )
 
-        # Initialize dispatcher with full provider config
-        # Support both API key and Claude Code auth modes
-        use_claude_code_auth = getattr(request, 'use_claude_code_auth', False)
+        # Initialize dispatcher with Claude Code auth mode (Gas Town approach)
+        # ALWAYS use Claude CLI with subscription auth - NO API KEYS
+        # ALWAYS use Opus for all agents
         provider_config = {
             "provider": request.provider_config.provider if request.provider_config else ProviderType.ANTHROPIC,
-            "model": request.provider_config.model if request.provider_config else "claude-sonnet-4-20250514",
-            "api_key": request.provider_config.api_key if request.provider_config and request.provider_config.api_key else None,
-            "base_url": request.provider_config.base_url if request.provider_config and request.provider_config.base_url else None,
-            "use_claude_code_auth": use_claude_code_auth,  # Pass through for sub-agents
+            "model": "claude-opus-4-5-20251101",  # Opus for everything
+            "use_claude_code_auth": True,  # ALWAYS use Claude CLI subscription auth
         }
         self.provider_config = provider_config  # Store for later use
 
-        # Model for Claude CLI calls - use Opus for Overseer orchestration
-        self.model = provider_config.get("model", "opus")
+        # Model for Claude CLI calls - ALWAYS use Opus for Overseer orchestration
+        self.model = "claude-opus-4-5-20251101"
 
         self.dispatcher = WaveDispatcher(
             repo_path=repo_path,
@@ -377,8 +377,20 @@ Continue the investigation. What should the next wave focus on?"""
         ]
 
         print(f"[Overseer] Calling Claude CLI with model: {self.model}")
+        print(f"[Overseer] System prompt length: {len(system_prompt)} chars")
+        print(f"[Overseer] User message length: {len(user_message)} chars")
 
-        # Run Claude CLI
+        # Log LLM request for observability
+        observability_service.log_llm_request(
+            agent_id=self.id,
+            messages=[{"role": "user", "content": user_message}],
+            tools_available=["dispatch_wave", "dispatch_agent", "read_memories"],
+            model=self.model,
+            system_prompt=system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt,
+        )
+
+        # Run Claude CLI with timeout
+        start_time = time.time()
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -387,9 +399,23 @@ Continue the investigation. What should the next wave focus on?"""
             env={**os.environ, "NO_COLOR": "1"},
         )
 
-        stdout, stderr = await process.communicate()
+        try:
+            # 5 minute timeout for Overseer LLM calls
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=300,
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise RuntimeError("Claude CLI timed out after 5 minutes")
+
         output = stdout.decode("utf-8", errors="replace")
         error_output = stderr.decode("utf-8", errors="replace")
+
+        print(f"[Overseer] Claude CLI returned, output length: {len(output)}")
+        if error_output:
+            print(f"[Overseer] CLI stderr: {error_output[:500]}")
 
         if process.returncode != 0:
             raise RuntimeError(f"Claude CLI error: {error_output}")
@@ -431,19 +457,30 @@ Continue the investigation. What should the next wave focus on?"""
         else:
             text = str(response_data)
 
+        # Log LLM response for observability
+        duration = time.time() - start_time
+        observability_service.log_llm_response(
+            agent_id=self.id,
+            content=text[:1000] + "..." if len(text) > 1000 else text,
+            tool_calls=[{"name": tc.get("name", ""), "id": tc.get("id", "")} for tc in tool_calls],
+            model=self.model,
+            input_tokens=0,  # CLI doesn't provide token counts
+            output_tokens=0,
+            duration=duration,
+        )
+
         return {"text": text, "tool_calls": tool_calls}
 
     async def analyze(self):
-        """Run the Overseer agent loop.
+        """Run the Overseer orchestration loop.
 
-        This is the main orchestration loop that:
-        1. Sends messages to the LLM
-        2. Executes tool calls
-        3. Synthesizes results
-        4. Repeats until time runs out
+        Uses a direct dispatch approach:
+        1. Run Foundation Phase (RepoProfiler, ScopeMapper, ThreatModeler)
+        2. Run Hunting Phase (SinkHunter, EntrypointHunter)
+        3. Route signals to specialists
+        4. Generate final report
 
-        Returns:
-            List of confirmed findings
+        All sub-agents use Claude CLI with Claude Code subscription auth.
         """
         print("=" * 60)
         print("[Overseer] STARTING PARALLEL SUB-AGENT ORCHESTRATION")
@@ -454,108 +491,145 @@ Continue the investigation. What should the next wave focus on?"""
 
         await self.emit_log("Overseer starting parallel sub-agent orchestration...")
 
-        # Initialize conversation
-        system_prompt = self._get_system_prompt()
-        tools = self._get_tools()
+        # Initialize flow for visualization
+        flow_service.initialize_flow(self.id)
+        root_node = flow_service.add_node(
+            self.id,
+            node_type="structured_root",
+            label=f"Deep Audit: {self.campaign_state.scan_tier}",
+            data={"project_id": self.campaign_state.project_id, "time_budget": self.time_budget},
+        )
+        await self.emit_flow_update()
 
-        # Send initial message
-        self.conversation.append(Message(
-            role="user",
-            content=self._build_initial_user_message(),
-        ))
+        try:
+            # === PHASE 1: FOUNDATION ===
+            await self.emit_log("Phase 1: Running Foundation Phase...")
+            print("[Overseer] Dispatching Foundation Phase sub-agents...")
 
-        turn = 0
-        while turn < self.max_turns:
-            turn += 1
+            # Create flow node for Foundation Phase
+            foundation_node = flow_service.add_node(
+                self.id,
+                node_type="global_recon",
+                label="Wave 0: Foundation",
+                parent_id=root_node.id if root_node else None,
+                data={"phase": "foundation", "agents": ["RepoProfiler", "ScopeMapper", "ThreatModeler"]},
+            )
+            flow_service.update_node_status(self.id, foundation_node.id, "running")
+            await self.emit_flow_update()
 
-            # Check time budget
-            if self.campaign_state.time_remaining() <= 0:
-                await self.emit_log("Time budget exhausted. Generating final report...")
-                # Force finalize
-                result = finalize_tools.finalize_report("Time budget exhausted.")
-                break
+            foundation_result = await dispatch_tools.dispatch_foundation_phase()
+            print(f"[Overseer] Foundation Phase result: {foundation_result[:500]}...")
+
+            # Update flow node status
+            flow_service.update_node_status(self.id, foundation_node.id, "completed")
+            await self.emit_flow_update()
 
             # Check for cancellation
             if self._cancelled:
-                break
+                return
 
-            # Build conversation context for Claude CLI
-            # Format recent conversation history into the user message
-            conversation_context = self._format_conversation_for_cli()
-
-            # Call Claude CLI (uses Claude Code subscription auth)
+            # Parse foundation result
             try:
-                response = await self._call_claude_cli(system_prompt, conversation_context)
-            except Exception as e:
-                await self.emit_log(f"Claude CLI error: {e}")
-                self.error_message = str(e)
-                break
+                foundation_data = json.loads(foundation_result)
+                if not foundation_data.get("all_succeeded"):
+                    await self.emit_log("Foundation Phase had failures, continuing with partial results...")
+                    flow_service.update_node_status(self.id, foundation_node.id, "warning")
+            except json.JSONDecodeError:
+                await self.emit_log("Could not parse Foundation Phase result, continuing...")
 
-            # Process response
-            assistant_message = response.get("text", "")
-            self.conversation.append(Message(role="assistant", content=assistant_message))
+            # Check time budget
+            if self.campaign_state.time_remaining() <= 0:
+                await self.emit_log("Time budget exhausted after Foundation Phase.")
+                finalize_tools.finalize_report("Time budget exhausted after Foundation Phase.")
+                await self._process_findings()
+                return
 
-            # Check for tool calls
-            tool_calls = response.get("tool_calls", [])
+            # === PHASE 2: HUNTING ===
+            await self.emit_log("Phase 2: Running Hunting Phase...")
+            print("[Overseer] Dispatching Hunting Phase sub-agents...")
 
-            if not tool_calls:
-                # No tool calls - check if this is a final response
-                text_content = assistant_message
-                if text_content:
-                    await self.emit_log(f"Overseer: {text_content[:200]}...")
+            # Create flow node for Hunting Phase
+            hunting_node = flow_service.add_node(
+                self.id,
+                node_type="scan",
+                label="Wave 1: Hunting",
+                parent_id=root_node.id if root_node else None,
+                data={"phase": "hunting", "agents": ["SinkHunter", "EntrypointHunter"]},
+            )
+            flow_service.update_node_status(self.id, hunting_node.id, "running")
+            await self.emit_flow_update()
 
-                # Check if we should continue
-                if "final report" in text_content.lower() or "campaign complete" in text_content.lower():
-                    break
+            from agents.deep_audit.dispatcher import WavePlan, DispatchTask
 
-                # Prompt to continue
-                self.conversation.append(Message(
-                    role="user",
-                    content=self._build_continuation_message(),
-                ))
-                continue
+            hunting_wave = WavePlan(
+                wave_id=1,
+                tasks=[
+                    DispatchTask(
+                        agent_type="SinkHunter",
+                        objective="Find dangerous sinks (SQL, command injection, SSRF, etc.)",
+                        scope=self.repo_path_str,
+                        deliverable="/memories/signals/sinks.json",
+                        time_budget=180,
+                    ),
+                    DispatchTask(
+                        agent_type="EntrypointHunter",
+                        objective="Find all entry points (HTTP routes, CLI handlers, etc.)",
+                        scope=self.repo_path_str,
+                        deliverable="/memories/signals/entrypoints.json",
+                        time_budget=180,
+                    ),
+                ],
+                rationale="Hunting Phase: Find signals for verification",
+            )
 
-            # Execute tool calls
-            tool_results = []
-            for tool_call in tool_calls:
-                tool_name = tool_call.get("name", "")
-                tool_args = tool_call.get("arguments", {})
-                tool_id = tool_call.get("id", str(uuid.uuid4())[:8])
+            hunting_result = await self.dispatcher.dispatch_wave(hunting_wave)
+            self.waves_completed = 1
+            self.campaign_state.current_wave = 1
 
-                await self.emit_log(f"Executing tool: {tool_name}")
+            # Update flow node status
+            status = "completed" if hunting_result.all_succeeded else "warning"
+            flow_service.update_node_status(self.id, hunting_node.id, status)
+            await self.emit_flow_update()
 
-                try:
-                    result = await self._execute_tool(tool_name, tool_args)
-                    tool_results.append({
-                        "id": tool_id,
-                        "name": tool_name,
-                        "result": result,
-                    })
-                except Exception as e:
-                    tool_results.append({
-                        "id": tool_id,
-                        "name": tool_name,
-                        "result": json.dumps({"error": str(e)}),
-                    })
+            print(f"[Overseer] Hunting Phase complete: {hunting_result.all_succeeded}")
+            await self.emit_log(f"Hunting Phase complete: found signals in {len(hunting_result.results)} agents")
 
-            # Add tool results to conversation
-            self.conversation.append(Message(
-                role="user",
-                content=self._format_tool_results(tool_results),
-            ))
+            # Check for cancellation
+            if self._cancelled:
+                return
 
-            # Update wave counter and emit progress if dispatch_wave was called
-            for tc in tool_calls:
-                if tc.get("name") == "dispatch_wave":
-                    self.waves_completed += 1
-                    self.campaign_state.current_wave = self.waves_completed
-                    # Parse the wave plan to get task count
-                    try:
-                        wave_plan = json.loads(tc.get("arguments", {}).get("wave_plan_json", "{}"))
-                        tasks_count = len(wave_plan.get("tasks", []))
-                    except:
-                        tasks_count = 0
-                    await self._emit_wave_progress(self.waves_completed, "completed", tasks_count)
+            # Check time budget
+            if self.campaign_state.time_remaining() <= 0:
+                await self.emit_log("Time budget exhausted after Hunting Phase.")
+                finalize_tools.finalize_report("Time budget exhausted after Hunting Phase.")
+                await self._process_findings()
+                return
+
+            # === PHASE 3: FINALIZE ===
+            await self.emit_log("Phase 3: Generating final report...")
+
+            # Create flow node for Finalize Phase
+            finalize_node = flow_service.add_node(
+                self.id,
+                node_type="analysis",
+                label="Finalize Report",
+                parent_id=root_node.id if root_node else None,
+                data={"phase": "finalize"},
+            )
+            flow_service.update_node_status(self.id, finalize_node.id, "running")
+            await self.emit_flow_update()
+
+            finalize_tools.finalize_report("Scan complete.")
+
+            flow_service.update_node_status(self.id, finalize_node.id, "completed")
+            await self.emit_flow_update()
+
+        except Exception as e:
+            print(f"[Overseer] Error during orchestration: {e}")
+            import traceback
+            traceback.print_exc()
+            self.error_message = str(e)
+            await self.emit_log(f"Orchestration error: {e}")
 
         # Convert confirmed findings to Finding objects
         await self._process_findings()
@@ -633,7 +707,7 @@ Continue the investigation. What should the next wave focus on?"""
         """Convert to Agent schema."""
         default_provider_config = ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-opus-4-5-20251101",
         )
 
         return Agent(

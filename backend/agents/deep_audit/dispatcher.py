@@ -28,6 +28,8 @@ from agents.deep_audit.foundation import (
 )
 from agents.deep_audit.state import WaveTask
 from models.schemas import WSMessage, WSMessageType
+from services.observability_service import observability_service
+import time
 
 
 def _claude_cli_available() -> bool:
@@ -225,8 +227,8 @@ class WaveDispatcher:
         if self.on_agent_start:
             self.on_agent_start(task.task_id, task.agent_type)
 
-        # Check if Claude Code auth is requested (use Claude CLI)
-        use_claude_code_auth = self.provider_config.get("use_claude_code_auth", False)
+        # ALWAYS use Claude CLI (Gas Town approach) - NO API KEYS
+        use_claude_code_auth = self.provider_config.get("use_claude_code_auth", True)
 
         if use_claude_code_auth:
             if _claude_cli_available():
@@ -234,21 +236,31 @@ class WaveDispatcher:
                 # Uses user's Claude Code subscription automatically
                 return await self._spawn_subagent_cli(task, foundation_context, started_at)
             else:
-                # Claude CLI not available - warn and fall back
-                print(f"[Dispatcher] WARNING: Claude CLI not found, falling back to ReactAgent with API key")
-                print(f"[Dispatcher] Install Claude Code CLI: https://claude.ai/code")
+                # Claude CLI not available - FAIL, don't fall back to API key
+                error_msg = "Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
+                print(f"[Dispatcher] ERROR: {error_msg}")
                 self._broadcast(
                     WSMessageType.AGENT_STATUS,
                     task.task_id,
                     {
                         "agent_id": task.task_id,
                         "agent_type": task.agent_type,
-                        "status": "warning",
-                        "message": "Claude CLI not found, using API key fallback",
+                        "status": "failed",
+                        "error": error_msg,
                     }
                 )
+                if self.on_agent_complete:
+                    self.on_agent_complete(task.task_id, task.agent_type, "failed")
+                return SubagentResult(
+                    task_id=task.task_id,
+                    agent_type=task.agent_type,
+                    status="failed",
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    error=error_msg,
+                )
 
-        # Use ReactAgent with API key auth
+        # Legacy fallback (should not reach here with use_claude_code_auth=True)
         return await self._spawn_subagent_react(task, foundation_context, started_at)
 
     async def _spawn_subagent_cli(
@@ -326,8 +338,8 @@ class WaveDispatcher:
 
 Begin your analysis now."""
 
-            # Get model from config - use full model name for precise version control
-            model = self.provider_config.get("model", "claude-sonnet-4-20250514")
+            # Get model from config - Opus for everything
+            model = self.provider_config.get("model", "claude-opus-4-5-20251101")
             # Claude CLI accepts both aliases (sonnet, opus, haiku) and full names
             # We prefer full names for version control, but fall back to alias if needed
             model_arg = model  # Use exact model name from config
@@ -348,8 +360,19 @@ Begin your analysis now."""
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
 
+            # Log LLM request for observability
+            observability_service.log_llm_request(
+                agent_id=agent_id,
+                messages=[{"role": "user", "content": user_prompt}],
+                tools_available=list(claude_tools),
+                model=model_arg,
+                system_prompt=system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt,
+                subagent=task.agent_type,
+            )
+
             # Run claude CLI as subprocess
             # Use asyncio.create_subprocess_exec for async execution
+            start_time = time.time()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -383,6 +406,19 @@ Begin your analysis now."""
 
             completed_at = datetime.utcnow()
             status = "completed" if not error_message else "failed"
+            duration = time.time() - start_time
+
+            # Log LLM response for observability
+            observability_service.log_llm_response(
+                agent_id=agent_id,
+                content=output[:1000] + "..." if len(output) > 1000 else output,
+                tool_calls=[],
+                model=model_arg,
+                input_tokens=0,
+                output_tokens=0,
+                duration=duration,
+                subagent=task.agent_type,
+            )
 
             # Write output to deliverable path if we have content
             if output and not error_message:
@@ -473,7 +509,7 @@ Begin your analysis now."""
                 name=f"{task.agent_type}_{task.task_id}",
                 provider_config=ProviderConfig(
                     provider=self.provider_config.get("provider", ProviderType.ANTHROPIC),
-                    model=self.provider_config.get("model", "claude-sonnet-4-20250514"),
+                    model=self.provider_config.get("model", "claude-opus-4-5-20251101"),
                     api_key=self.provider_config.get("api_key"),
                     base_url=self.provider_config.get("base_url"),
                 ),

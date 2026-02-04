@@ -638,7 +638,9 @@ Continue the investigation. What should the next wave focus on?"""
                 rationale="Hunting Phase: Find signals for verification",
             )
 
-            hunting_result = await self.dispatcher.dispatch_wave(hunting_wave)
+            # Get foundation context from dispatch_tools (set during Foundation Phase)
+            foundation_ctx = dispatch_tools.get_foundation_context()
+            hunting_result = await self.dispatcher.dispatch_wave(hunting_wave, foundation_context=foundation_ctx)
             self.waves_completed = 1
             self.campaign_state.current_wave = 1
 
@@ -782,7 +784,8 @@ Output JSON with your analysis for each signal.""",
                 )
 
                 try:
-                    wave_result = await self.dispatcher.dispatch_wave(wave_plan)
+                    foundation_ctx = dispatch_tools.get_foundation_context()
+                    wave_result = await self.dispatcher.dispatch_wave(wave_plan, foundation_context=foundation_ctx)
                     self.campaign_state.current_wave = wave_num
 
                     # Update flow node statuses
@@ -1153,7 +1156,8 @@ Output your verdict as JSON.""",
         )
 
         try:
-            result = await self.dispatcher.dispatch_wave(wave_plan)
+            foundation_ctx = dispatch_tools.get_foundation_context()
+            result = await self.dispatcher.dispatch_wave(wave_plan, foundation_context=foundation_ctx)
             await self.emit_log(f"Specialists completed: {result.all_succeeded}")
 
             # Collect specialist verdicts
@@ -1315,12 +1319,14 @@ Output your verdict as JSON.""",
         prompt = get_devils_advocate_prompt(signal_context, dismissal_verdict)
 
         try:
+            foundation_ctx = dispatch_tools.get_foundation_context()
             result = await self.dispatcher.dispatch_single(
                 agent_type="DevilsAdvocate",
                 objective=prompt,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/challenge/{signal.get('signal_id', 'unknown')}_challenge.json",
                 time_budget=120,  # 2 minutes for thorough challenge
+                foundation_context=foundation_ctx,
             )
 
             if result and result.output:
@@ -1360,12 +1366,14 @@ Decide:
 Output your decision as JSON with keys: decision, rationale"""
 
         try:
+            foundation_ctx = dispatch_tools.get_foundation_context()
             result = await self.dispatcher.dispatch_single(
                 agent_type="Decider",
                 objective=objective,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/routing/decider_{signal.get('signal_id', 'unknown')}.json",
                 time_budget=60,  # 1 minute max for decision
+                foundation_context=foundation_ctx,
             )
 
             if result and result.output:
@@ -1425,12 +1433,14 @@ DO NOT include threat model - that's for Triager only.
 Output as JSON with: primary_specialist, secondary_specialist (optional), context_for_specialist"""
 
         try:
+            foundation_ctx = dispatch_tools.get_foundation_context()
             result = await self.dispatcher.dispatch_single(
                 agent_type="FamilyCoordinator",
                 objective=objective,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/routing/coordinator_{signal.get('signal_id', 'unknown')}.json",
                 time_budget=90,  # 1.5 minutes
+                foundation_context=foundation_ctx,
             )
 
             if result and result.output:
@@ -1537,12 +1547,14 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
 
         start_time = time.time()
         try:
+            foundation_ctx = dispatch_tools.get_foundation_context()
             result = await self.dispatcher.dispatch_single(
                 agent_type="Specialist",
                 objective=prompt,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/verification/{specialist_id}_{signal_id}.json",
                 time_budget=180,
+                foundation_context=foundation_ctx,
             )
 
             analysis_time = time.time() - start_time
@@ -1673,12 +1685,14 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
         )
 
         try:
+            foundation_ctx = dispatch_tools.get_foundation_context()
             result = await self.dispatcher.dispatch_single(
                 agent_type="Arbiter",
                 objective=prompt,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/arbiter/{signal_id}_arbiter.json",
                 time_budget=240,  # 4 minutes for Arbiter
+                foundation_context=foundation_ctx,
             )
 
             if result and result.output:
@@ -1767,12 +1781,14 @@ Classify as:
 Output as JSON with: classification, severity, title, description, recommendation"""
 
         try:
+            foundation_ctx = dispatch_tools.get_foundation_context()
             result = await self.dispatcher.dispatch_single(
                 agent_type="Triager",
                 objective=objective,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/triage/{signal.get('signal_id', 'unknown')}_triage.json",
                 time_budget=120,  # 2 minutes
+                foundation_context=foundation_ctx,
             )
 
             if result and result.output:

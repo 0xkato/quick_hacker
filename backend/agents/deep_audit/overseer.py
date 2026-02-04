@@ -490,8 +490,7 @@ Continue the investigation. What should the next wave focus on?"""
 
         await self.emit_log("Overseer starting parallel sub-agent orchestration...")
 
-        # Initialize flow for visualization
-        flow_service.initialize_flow(self.id)
+        # Add root node for deep audit visualization (flow already initialized by base agent)
         root_node = flow_service.add_node(
             self.id,
             node_type="structured_root",

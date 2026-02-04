@@ -249,6 +249,35 @@ class FoundationContext:
         )
 
         threat_data = data["threat_model"]
+
+        # Parse attacker capabilities, skipping unknown values
+        # Agents may return capabilities not in our predefined enum
+        valid_capabilities = {cap.value for cap in AttackerCapability}
+        parsed_capabilities = []
+        for cap in threat_data.get("attacker_capabilities", []):
+            if cap in valid_capabilities:
+                parsed_capabilities.append(AttackerCapability(cap))
+            else:
+                # Try to map to closest known capability
+                cap_lower = cap.lower()
+                if "network" in cap_lower or "remote" in cap_lower:
+                    parsed_capabilities.append(AttackerCapability.NETWORK_ACCESS)
+                elif "unauth" in cap_lower or "anonymous" in cap_lower:
+                    parsed_capabilities.append(AttackerCapability.UNAUTHENTICATED)
+                elif "admin" in cap_lower:
+                    parsed_capabilities.append(AttackerCapability.AUTHENTICATED_ADMIN)
+                elif "auth" in cap_lower or "user" in cap_lower:
+                    parsed_capabilities.append(AttackerCapability.AUTHENTICATED_USER)
+                elif "local" in cap_lower:
+                    parsed_capabilities.append(AttackerCapability.LOCAL_ACCESS)
+                elif "insider" in cap_lower or "internal" in cap_lower:
+                    parsed_capabilities.append(AttackerCapability.INSIDER)
+                else:
+                    print(f"[Foundation] Unknown attacker capability '{cap}', skipping")
+
+        # Deduplicate capabilities
+        parsed_capabilities = list(set(parsed_capabilities))
+
         threat_model = ThreatModel(
             trust_boundaries=[
                 TrustBoundary(
@@ -256,13 +285,11 @@ class FoundationContext:
                     description=tb["description"],
                     entry_points=tb.get("entry_points", []),
                 )
-                for tb in threat_data["trust_boundaries"]
+                for tb in threat_data.get("trust_boundaries", [])
             ],
-            attacker_capabilities=[
-                AttackerCapability(cap) for cap in threat_data["attacker_capabilities"]
-            ],
-            in_scope_paths=threat_data["in_scope_paths"],
-            out_of_scope_paths=threat_data["out_of_scope_paths"],
+            attacker_capabilities=parsed_capabilities,
+            in_scope_paths=threat_data.get("in_scope_paths", []),
+            out_of_scope_paths=threat_data.get("out_of_scope_paths", []),
             out_of_scope_reasons=threat_data.get("out_of_scope_reasons", {}),
             assumptions=threat_data.get("assumptions", []),
         )

@@ -178,6 +178,27 @@ SINK_HUNTER_PROMPT = """You are a SinkHunter subagent for security audit.
 
 {{FOUNDATION_CONTEXT}}
 
+## CRITICAL: You MUST Use Tools
+
+**DO NOT rely on training data or assumptions.** You MUST actively use your tools to search the actual codebase.
+
+**Required workflow - execute these steps:**
+1. `Glob` - Find relevant files: `**/*.cpp`, `**/*.c`, `**/*.py`, `**/*.go`, etc.
+2. `Grep` - Search for dangerous patterns in those files
+3. `Read` - Read each file containing potential sinks to get exact code and line numbers
+
+**Every signal you report MUST be based on:**
+- Actual code you read with the Read tool
+- Exact file paths and line numbers from your search
+- Real code snippets copied from the files
+
+**Tools available:**
+- `Read` - Read file contents (REQUIRED for every signal)
+- `Grep` - Search for patterns like "memcpy", "exec", "eval", "sprintf"
+- `Glob` - Find files by pattern
+
+If you report signals without using tools, the output is INVALID and will be discarded.
+
 ## Task
 Find potentially dangerous sinks (places where vulnerabilities could occur).
 
@@ -550,6 +571,20 @@ ENTRYPOINT_HUNTER_PROMPT = """You are an EntrypointHunter subagent for security 
 
 {{FOUNDATION_CONTEXT}}
 
+## CRITICAL: You MUST Use Tools
+
+**DO NOT rely on training data.** You MUST search the actual codebase using your tools.
+
+**Required workflow:**
+1. `Grep` - Search for route decorators: `@app.route`, `@router`, `@Get`, `@Post`, etc.
+2. `Glob` - Find relevant files: `**/*router*.py`, `**/*controller*.ts`, `**/routes/*`
+3. `Read` - Read each file to extract exact entry points with line numbers
+
+**Every entry point you report MUST have:**
+- Exact file path from your Glob/Grep results
+- Exact line number from your Read tool output
+- Real code showing the route definition
+
 ## Task
 Find all entry points where external input enters the application.
 
@@ -598,6 +633,21 @@ Be thorough. Every entry point is a potential attack vector.
 DATAFLOW_TRACER_PROMPT = """You are a DataFlowTracer subagent for security audit.
 
 {{FOUNDATION_CONTEXT}}
+
+## CRITICAL: You MUST Use Tools to Trace Code
+
+**DO NOT guess or assume code flow.** You MUST read the actual source files.
+
+**Required workflow for each signal:**
+1. `Read` - Read the sink file to understand the vulnerable code
+2. `Grep` - Search for function calls to the sink: who calls this function?
+3. `Read` - Read the caller files to trace the data flow upward
+4. Repeat until you reach an entry point
+
+**Every data flow step MUST have:**
+- Exact file path and line number from your Read tool
+- Real code snippet copied from the file
+- Verified function call chain (not assumed)
 
 ## Task
 Trace data flow from entry points to sinks to determine if vulnerabilities are exploitable.
@@ -793,6 +843,23 @@ SPECIALIST_PROMPT_TEMPLATE = """You are a {specialist_name} specialist for secur
 ## Your Expertise
 {proficiency}
 
+## CRITICAL: You MUST Use Tools to Verify
+
+**DO NOT rely on the signal description alone.** You MUST read the actual code.
+
+**Required verification workflow:**
+1. `Read` the file at the signal location - examine the actual vulnerable code
+2. `Grep` for function/variable usage - find who calls this code
+3. `Read` caller files - trace the actual data flow
+4. `Grep` for sanitization patterns - search for validation/encoding
+
+**Your verdict MUST be based on:**
+- Actual code you read (not assumed)
+- Real file paths and line numbers
+- Evidence from your tool usage
+
+If you cannot verify with tools, verdict MUST be "needs_more_info".
+
 ## Task
 Verify whether the assigned signal is a real vulnerability.
 
@@ -807,7 +874,7 @@ Verify whether the assigned signal is a real vulnerability.
 5. Determine if security controls prevent exploitation
 
 ## Tools Available
-- Read: Read source code files
+- Read: Read source code files (REQUIRED for verification)
 - Grep: Search for related code patterns
 - Glob: Find related files
 

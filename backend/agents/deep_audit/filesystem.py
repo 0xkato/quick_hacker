@@ -264,6 +264,9 @@ class MemoriesFilesystem:
 
         return sorted([p.name for p in physical_path.iterdir()])
 
+    # Alias for compatibility with Overseer
+    list_directory = ls
+
     def ls_recursive(self, virtual_path: str, pattern: str = "*") -> list[str]:
         """List files recursively with glob pattern.
 

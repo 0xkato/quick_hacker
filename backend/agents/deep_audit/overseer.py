@@ -827,8 +827,22 @@ Output JSON with your analysis for each signal.""",
 
             # === PHASE 4: SIGNAL ROUTING ===
             # Route each signal through: Decider → FamilyCoordinator → Specialist → Triager
-            if self.campaign_state.confirmed_findings and self.campaign_state.time_remaining() > 60:
+            findings_count = len(self.campaign_state.confirmed_findings)
+            time_remaining = self.campaign_state.time_remaining()
+            print(f"[Overseer] Phase 4 check: {findings_count} findings, {time_remaining:.0f}s remaining")
+            await self.emit_log(f"Phase 4 check: {findings_count} findings, {time_remaining:.0f}s remaining")
+
+            if findings_count > 0 and time_remaining > 60:
                 await self._route_all_signals()
+            else:
+                skip_reasons = []
+                if findings_count == 0:
+                    skip_reasons.append("no findings collected")
+                if time_remaining <= 60:
+                    skip_reasons.append(f"insufficient time ({time_remaining:.0f}s <= 60s)")
+                reason_str = ", ".join(skip_reasons)
+                print(f"[Overseer] Skipping Phase 4 (specialists): {reason_str}")
+                await self.emit_log(f"Skipping Phase 4 (specialists): {reason_str}")
 
             # === PHASE 5: FINALIZE ===
             await self.emit_log("Phase 5: Generating final report...")
@@ -893,6 +907,8 @@ Output JSON with your analysis for each signal.""",
 
     async def _collect_findings_from_signals(self):
         """Read sub-agent outputs and extract findings from signals."""
+        collection_errors = []
+
         # Read SinkHunter output
         try:
             sinks_content = self.filesystem.read_file("/memories/signals/sinks.json")
@@ -924,33 +940,69 @@ Output JSON with your analysis for each signal.""",
                                 self.campaign_state.confirmed_findings.append(finding)
                         print(f"[Overseer] Collected {len(signals)} signals from SinkHunter")
                 else:
-                    print(f"[Overseer] Could not parse SinkHunter output as JSON")
+                    error_msg = "Could not parse SinkHunter output as JSON"
+                    print(f"[Overseer] {error_msg}")
+                    collection_errors.append(error_msg)
+            else:
+                error_msg = "SinkHunter output file is empty"
+                print(f"[Overseer] {error_msg}")
+                collection_errors.append(error_msg)
+        except FileNotFoundError:
+            error_msg = "SinkHunter output not found at /memories/signals/sinks.json"
+            print(f"[Overseer] {error_msg}")
+            collection_errors.append(error_msg)
         except Exception as e:
-            print(f"[Overseer] Could not read SinkHunter output: {e}")
+            error_msg = f"Could not read SinkHunter output: {e}"
+            print(f"[Overseer] {error_msg}")
+            collection_errors.append(error_msg)
 
         # Read EntrypointHunter output (for context, not findings)
         try:
             entrypoints_content = self.filesystem.read_file("/memories/signals/entrypoints.json")
             if entrypoints_content:
-                try:
-                    entrypoints_data = json.loads(entrypoints_content)
+                # Use consistent JSON extraction (handles Claude's markdown-wrapped output)
+                entrypoints_data = self._extract_json_from_output(entrypoints_content)
+                if entrypoints_data:
                     entrypoints = entrypoints_data.get("entrypoints", [])
+                    self.campaign_state.entrypoints = entrypoints
                     print(f"[Overseer] Found {len(entrypoints)} entrypoints from EntrypointHunter")
-                except json.JSONDecodeError:
-                    pass
-        except Exception:
-            pass
+                else:
+                    error_msg = "Could not parse EntrypointHunter output as JSON"
+                    print(f"[Overseer] {error_msg}")
+                    collection_errors.append(error_msg)
+        except Exception as e:
+            error_msg = f"Could not read EntrypointHunter output: {e}"
+            print(f"[Overseer] {error_msg}")
+            collection_errors.append(error_msg)
+
+        # Report errors to UI for visibility
+        if collection_errors:
+            await self.emit_log(f"WARNING: {len(collection_errors)} collection error(s): {'; '.join(collection_errors)}")
 
         await self.emit_log(f"Collected {len(self.campaign_state.confirmed_findings)} potential findings from sub-agents")
 
     async def _collect_wave_findings(self, wave_num: int):
         """Collect findings from a specific wave's outputs."""
         wave_dir = f"/memories/waves/wave_{wave_num}"
-        files_to_check = [
-            f"{wave_dir}/dataflow_trace.json",
-            f"{wave_dir}/auth_boundaries.json",
-            f"{wave_dir}/sinks.json",
-        ]
+
+        # Dynamically find all signal files in wave directory
+        # Deliverables use patterns like sinks_{focus_name}.json, not just sinks.json
+        try:
+            all_files = self.filesystem.list_directory(wave_dir)
+        except FileNotFoundError:
+            print(f"[Overseer] Wave {wave_num}: Directory not found: {wave_dir}")
+            return
+
+        # Match files by prefix pattern (handles sinks.json, sinks_memory.json, etc.)
+        sink_files = [f for f in all_files if f.startswith("sinks") and f.endswith(".json")]
+        dataflow_files = [f for f in all_files if "dataflow" in f.lower() and f.endswith(".json")]
+        auth_files = [f for f in all_files if "auth" in f.lower() and f.endswith(".json")]
+
+        files_to_check = [f"{wave_dir}/{f}" for f in sink_files + dataflow_files + auth_files]
+
+        if not files_to_check:
+            print(f"[Overseer] Wave {wave_num}: No signal files found in {wave_dir}")
+            return
 
         for file_path in files_to_check:
             try:

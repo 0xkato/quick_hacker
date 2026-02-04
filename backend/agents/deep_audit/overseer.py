@@ -627,6 +627,18 @@ Continue the investigation. What should the next wave focus on?"""
             MIN_TIME_FOR_WAVE = 120
             MAX_WAVES = 50  # Safety limit
 
+            # Different vulnerability types to hunt for in rotation
+            HUNT_FOCUSES = [
+                ("SQL injection, command injection, code execution", "injection"),
+                ("SSRF, open redirect, path traversal", "network"),
+                ("Deserialization, unsafe reflection, type confusion", "deserialization"),
+                ("Memory corruption, buffer overflow, use-after-free", "memory"),
+                ("Authentication bypass, authorization flaws, privilege escalation", "auth"),
+                ("Cryptographic weaknesses, insecure randomness, hardcoded secrets", "crypto"),
+                ("Race conditions, TOCTOU, concurrency bugs", "race"),
+                ("Input validation, XSS, template injection", "input"),
+            ]
+
             while (self.campaign_state.time_remaining() > MIN_TIME_FOR_WAVE
                    and self.waves_completed < MAX_WAVES
                    and not self._cancelled):
@@ -635,16 +647,20 @@ Continue the investigation. What should the next wave focus on?"""
                 wave_num = self.waves_completed + 1
                 remaining = self.campaign_state.time_remaining()
 
-                await self.emit_log(f"Wave {wave_num}: {remaining:.0f}s remaining, dispatching verification agents...")
-                print(f"[Overseer] Starting Wave {wave_num} with {remaining:.0f}s remaining")
+                # Pick a hunt focus based on wave number (rotate through focuses)
+                focus_idx = (wave_num - 2) % len(HUNT_FOCUSES)
+                hunt_focus, focus_name = HUNT_FOCUSES[focus_idx]
+
+                await self.emit_log(f"Wave {wave_num}: {remaining:.0f}s remaining - hunting for {focus_name} vulnerabilities")
+                print(f"[Overseer] Starting Wave {wave_num} with {remaining:.0f}s remaining, focus: {focus_name}")
 
                 # Create flow node for this wave
                 wave_node = flow_service.add_node(
                     self.id,
                     node_type="scan",
-                    label=f"Wave {wave_num}: Verification",
+                    label=f"Wave {wave_num}: {focus_name.title()}",
                     parent_id=root_node.id if root_node else None,
-                    data={"phase": "verification", "wave": wave_num, "time_remaining": remaining},
+                    data={"phase": "hunting", "wave": wave_num, "focus": focus_name, "time_remaining": remaining},
                 )
                 if wave_node:
                     flow_service.update_node_status(self.id, wave_node.id, "running")
@@ -654,55 +670,75 @@ Continue the investigation. What should the next wave focus on?"""
                 # Give each agent 15% of remaining time, min 60s, max 600s
                 subagent_budget = max(60, min(600, int(remaining * 0.15)))
 
-                # Determine what agents to dispatch based on current state
+                # Build wave tasks - ALWAYS include SinkHunter with focused objective
                 tasks = []
-
-                # If we have signals, dispatch verification agents
                 signals_count = len(self.campaign_state.confirmed_findings)
-                if signals_count > 0:
-                    # Dispatch DataflowTracer on signals
+
+                # Always hunt for MORE vulnerabilities with a specific focus
+                tasks.append(DispatchTask(
+                    agent_type="SinkHunter",
+                    objective=f"Hunt specifically for {hunt_focus} vulnerabilities. Look for dangerous function calls, unsafe patterns, and exploitable code paths.",
+                    scope=self.repo_path_str,
+                    deliverable=f"/memories/waves/wave_{wave_num}/sinks_{focus_name}.json",
+                    time_budget=subagent_budget,
+                ))
+
+                # Add flow node for SinkHunter
+                sink_node = flow_service.add_node(
+                    self.id,
+                    node_type="scan",
+                    label=f"SinkHunter: {focus_name}",
+                    parent_id=wave_node.id if wave_node else None,
+                    data={"agent": "SinkHunter", "focus": focus_name},
+                )
+                if sink_node:
+                    flow_service.update_node_status(self.id, sink_node.id, "running")
+
+                # If we have signals, also verify them
+                if signals_count > 0 and wave_num % 2 == 0:
+                    # Every other wave, also run verification
                     tasks.append(DispatchTask(
                         agent_type="DataflowTracer",
-                        objective=f"Trace dataflow for {signals_count} potential vulnerabilities",
+                        objective=f"Trace dataflow for the {signals_count} potential vulnerabilities found so far. Confirm which are exploitable.",
                         scope=self.repo_path_str,
                         deliverable=f"/memories/waves/wave_{wave_num}/dataflow_trace.json",
                         time_budget=subagent_budget,
                     ))
 
-                    # Dispatch AuthBoundaryMapper to check auth
-                    tasks.append(DispatchTask(
-                        agent_type="AuthBoundaryMapper",
-                        objective="Map authentication and authorization boundaries for signals",
-                        scope=self.repo_path_str,
-                        deliverable=f"/memories/waves/wave_{wave_num}/auth_boundaries.json",
-                        time_budget=subagent_budget,
-                    ))
-                else:
-                    # No signals yet, dispatch more hunters in different areas
-                    tasks.append(DispatchTask(
-                        agent_type="SinkHunter",
-                        objective="Deep hunt for dangerous sinks (SQL, command injection, SSRF, deserialization)",
-                        scope=self.repo_path_str,
-                        deliverable=f"/memories/waves/wave_{wave_num}/sinks.json",
-                        time_budget=subagent_budget,
-                    ))
+                    # Add flow node for DataflowTracer
+                    trace_node = flow_service.add_node(
+                        self.id,
+                        node_type="analysis",
+                        label="DataflowTracer",
+                        parent_id=wave_node.id if wave_node else None,
+                        data={"agent": "DataflowTracer", "signals": signals_count},
+                    )
+                    if trace_node:
+                        flow_service.update_node_status(self.id, trace_node.id, "running")
 
-                if not tasks:
-                    await self.emit_log(f"Wave {wave_num}: No tasks to dispatch, exiting wave loop")
-                    break
+                await self.emit_flow_update()
 
                 # Dispatch the wave
                 wave_plan = WavePlan(
                     wave_id=wave_num,
                     tasks=tasks,
-                    rationale=f"Wave {wave_num}: Verification and deep analysis",
+                    rationale=f"Wave {wave_num}: Hunting {focus_name} + verification",
                 )
 
                 try:
                     wave_result = await self.dispatcher.dispatch_wave(wave_plan)
                     self.campaign_state.current_wave = wave_num
 
-                    # Update flow node status
+                    # Update flow node statuses
+                    for result in wave_result.results:
+                        status = "completed" if result.status == "completed" else "failed"
+                        # Find and update the agent's flow node
+                        if result.agent_type == "SinkHunter" and sink_node:
+                            flow_service.update_node_status(self.id, sink_node.id, status)
+                        elif result.agent_type == "DataflowTracer":
+                            # trace_node might not exist if we didn't dispatch it
+                            pass
+
                     if wave_node:
                         wave_status = "completed" if wave_result.all_succeeded else "failed"
                         flow_service.update_node_status(self.id, wave_node.id, wave_status)
@@ -711,8 +747,9 @@ Continue the investigation. What should the next wave focus on?"""
                     # Collect any new findings from this wave
                     await self._collect_wave_findings(wave_num)
 
-                    print(f"[Overseer] Wave {wave_num} complete: {wave_result.all_succeeded}")
-                    await self.emit_log(f"Wave {wave_num} complete. Total findings: {len(self.campaign_state.confirmed_findings)}")
+                    new_signals = len(self.campaign_state.confirmed_findings) - signals_count
+                    print(f"[Overseer] Wave {wave_num} complete: {wave_result.all_succeeded}, +{new_signals} new signals")
+                    await self.emit_log(f"Wave {wave_num} complete. Found {new_signals} new signals. Total: {len(self.campaign_state.confirmed_findings)}")
 
                 except Exception as e:
                     print(f"[Overseer] Wave {wave_num} failed: {e}")

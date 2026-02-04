@@ -361,13 +361,11 @@ Begin your analysis now."""
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
 
             # Log LLM request for observability
-            observability_service.log_llm_request(
+            request_id = observability_service.log_llm_request(
                 agent_id=agent_id,
-                messages=[{"role": "user", "content": user_prompt}],
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 tools_available=list(claude_tools),
                 model=model_arg,
-                system_prompt=system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt,
-                subagent=task.agent_type,
             )
 
             # Run claude CLI as subprocess
@@ -411,12 +409,11 @@ Begin your analysis now."""
             # Log LLM response for observability
             observability_service.log_llm_response(
                 agent_id=agent_id,
+                request_id=request_id,
                 content=output[:1000] + "..." if len(output) > 1000 else output,
                 tool_calls=[],
+                duration_ms=int(duration * 1000),
                 model=model_arg,
-                input_tokens=0,
-                output_tokens=0,
-                duration=duration,
                 subagent=task.agent_type,
             )
 

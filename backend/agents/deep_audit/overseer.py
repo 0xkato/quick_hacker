@@ -381,12 +381,11 @@ Continue the investigation. What should the next wave focus on?"""
         print(f"[Overseer] User message length: {len(user_message)} chars")
 
         # Log LLM request for observability
-        observability_service.log_llm_request(
+        request_id = observability_service.log_llm_request(
             agent_id=self.id,
-            messages=[{"role": "user", "content": user_message}],
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
             tools_available=["dispatch_wave", "dispatch_agent", "read_memories"],
             model=self.model,
-            system_prompt=system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt,
         )
 
         # Run Claude CLI with timeout
@@ -461,12 +460,11 @@ Continue the investigation. What should the next wave focus on?"""
         duration = time.time() - start_time
         observability_service.log_llm_response(
             agent_id=self.id,
+            request_id=request_id,
             content=text[:1000] + "..." if len(text) > 1000 else text,
             tool_calls=[{"name": tc.get("name", ""), "id": tc.get("id", "")} for tc in tool_calls],
+            duration_ms=int(duration * 1000),
             model=self.model,
-            input_tokens=0,  # CLI doesn't provide token counts
-            output_tokens=0,
-            duration=duration,
         )
 
         return {"text": text, "tool_calls": tool_calls}

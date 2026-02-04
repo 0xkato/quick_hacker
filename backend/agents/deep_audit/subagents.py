@@ -181,19 +181,57 @@ SINK_HUNTER_PROMPT = """You are a SinkHunter subagent for security audit.
 ## Task
 Find potentially dangerous sinks (places where vulnerabilities could occur).
 
-## Sink Categories to Hunt
-- SQL: Raw queries, string formatting in SQL, cursor.execute()
-- Command Injection: subprocess, os.system, exec, eval, shell=True
-- File Operations: open(), path joins with user input, file uploads
+IMPORTANT: Adapt your hunting to the codebase language(s). Check file extensions first.
+
+## Sink Categories by Language
+
+### C/C++ Memory Safety (CRITICAL for native code)
+- Buffer overflow: memcpy, strcpy, strncpy, sprintf, vsprintf, gets, scanf without bounds
+- Integer overflow: unchecked size calculations, malloc(n * size), array indexing
+- Use-after-free: delete/free followed by use, dangling pointers, double-free
+- Format string: printf/sprintf/fprintf with user-controlled format string
+- Stack overflow: alloca, VLAs with user size, deep recursion
+- Type confusion: reinterpret_cast, union type punning, void* casts
+- Uninitialized memory: reading before init, partial struct init
+- Out-of-bounds: array access without bounds check, pointer arithmetic
+- Null deref: unchecked return values from malloc/new, optional access
+
+### C/C++ Parsing/Processing
+- XML/JSON parsing: untrusted input to parsers, XXE in XML
+- Image/media decoding: malformed input handling, codec vulnerabilities
+- Protocol parsing: network packet parsing, binary format parsing
+- Serialization: custom deserializers, untrusted data structures
+
+### Python/JavaScript/Web
+- SQL: Raw queries, string formatting, cursor.execute(), template strings
+- Command Injection: subprocess, os.system, exec, eval, child_process
+- File Operations: open() with user paths, path joins, file uploads
 - SSRF: HTTP requests with user-controlled URLs
 - Template Injection: render() with user data, f-strings in templates
 - Deserialization: pickle.loads, yaml.load, JSON.parse of untrusted data
-- Crypto Issues: MD5, SHA1 for passwords, hardcoded keys
+- Prototype pollution: Object.assign, spread operator with user objects
+
+### Go
+- Command injection: exec.Command with user input
+- SQL: string concatenation in queries
+- Path traversal: filepath.Join with user input, os.Open
+- Unsafe: reflect, unsafe pointer operations
+
+### Rust
+- Unsafe blocks: raw pointer dereference, transmute
+- FFI boundaries: calling C code, handling C strings
+- Panic paths: unwrap on user input, index without bounds
 
 ## Tools Available
-- Glob: Find files by pattern
+- Glob: Find files by pattern (use to identify language: *.cpp, *.c, *.py, *.go, etc.)
 - Read: Read file contents
 - Grep: Search for dangerous patterns
+
+## Hunting Strategy
+1. First, identify the primary language(s) using Glob
+2. Search for patterns relevant to those languages
+3. For C/C++: Focus on memory safety - this is where real vulnerabilities live
+4. Read files with hits and get exact line numbers
 
 ## Output
 When done, output ONLY the following JSON (no other text):
@@ -202,21 +240,22 @@ When done, output ONLY the following JSON (no other text):
   "signals": [
     {
       "signal_id": "sink-001",
-      "category": "sql_injection",
-      "severity": "high",
-      "file_path": "src/api/users.py",
-      "line_start": 45,
-      "line_end": 47,
-      "code_snippet": "cursor.execute(f'SELECT * FROM users WHERE id={user_id}')",
-      "why_suspicious": "String interpolation in SQL query",
-      "entry_point_trace": ["POST /api/users", "create_user()"],
-      "next_steps": ["Trace user_id source", "Check for parameterization"]
+      "category": "buffer_overflow",
+      "severity": "critical",
+      "file_path": "src/codec/SkPngCodec.cpp",
+      "line_start": 234,
+      "line_end": 236,
+      "code_snippet": "memcpy(dst, src, userProvidedSize);",
+      "why_suspicious": "memcpy with potentially user-controlled size from image header",
+      "entry_point_trace": ["SkCodec::MakeFromData", "SkPngCodec::onGetPixels"],
+      "next_steps": ["Check if size is validated", "Trace size from input"]
     }
   ]
 }
 ```
 
 IMPORTANT: Report CANDIDATES, not confirmed vulnerabilities. Be specific with line numbers.
+For C/C++ codebases, memory corruption is far more valuable than web vulns.
 """
 
 

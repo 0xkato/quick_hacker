@@ -58,10 +58,15 @@ from services.flow_service import flow_service
 
 # Scan tier time budgets in seconds
 SCAN_TIER_BUDGETS = {
-    "quick": 300,       # 5 minutes
-    "standard": 900,    # 15 minutes
-    "deep": 1800,       # 30 minutes
-    "exhaustive": 3600, # 60 minutes
+    "quick": 300,           # 5 minutes
+    "medium": 900,          # 15 minutes
+    "standard": 900,        # 15 minutes (alias)
+    "advanced": 1800,       # 30 minutes
+    "deep": 1800,           # 30 minutes (alias)
+    "pro": 3600,            # 1 hour
+    "exhaustive": 3600,     # 1 hour (alias)
+    "ultra": 14400,         # 4 hours
+    "evil": 86400,          # 24 hours
 }
 
 
@@ -592,6 +597,9 @@ Continue the investigation. What should the next wave focus on?"""
             print(f"[Overseer] Hunting Phase complete: {hunting_result.all_succeeded}")
             await self.emit_log(f"Hunting Phase complete: found signals in {len(hunting_result.results)} agents")
 
+            # Parse sub-agent outputs and extract findings
+            await self._collect_findings_from_signals()
+
             # Check for cancellation
             if self._cancelled:
                 return
@@ -670,6 +678,52 @@ Continue the investigation. What should the next wave focus on?"""
         for r in results:
             parts.append(f"**Tool Result ({r['name']}):**\n```\n{r['result']}\n```")
         return "\n\n".join(parts)
+
+    async def _collect_findings_from_signals(self):
+        """Read sub-agent outputs and extract findings from signals."""
+        # Read SinkHunter output
+        try:
+            sinks_content = self.filesystem.read_file("/memories/signals/sinks.json")
+            if sinks_content:
+                # Try to parse as JSON
+                try:
+                    sinks_data = json.loads(sinks_content)
+                    signals = sinks_data.get("signals", sinks_data.get("sinks", []))
+                    if isinstance(signals, list):
+                        for signal in signals:
+                            if isinstance(signal, dict):
+                                # Convert signal to finding format
+                                finding = {
+                                    "title": signal.get("title", signal.get("type", "Potential Vulnerability")),
+                                    "description": signal.get("description", signal.get("reasoning", "")),
+                                    "severity": signal.get("severity", "MEDIUM"),
+                                    "vulnerability_type": signal.get("type", signal.get("sink_type", "unknown")),
+                                    "location": signal.get("location", signal.get("file_path", "")),
+                                    "code_snippet": signal.get("code_snippet", signal.get("code", "")),
+                                    "remediation": signal.get("remediation", signal.get("recommendation", "")),
+                                    "confidence": signal.get("confidence", 0.7),
+                                }
+                                self.campaign_state.confirmed_findings.append(finding)
+                        print(f"[Overseer] Collected {len(signals)} signals from SinkHunter")
+                except json.JSONDecodeError:
+                    print(f"[Overseer] SinkHunter output is not valid JSON, skipping")
+        except Exception as e:
+            print(f"[Overseer] Could not read SinkHunter output: {e}")
+
+        # Read EntrypointHunter output (for context, not findings)
+        try:
+            entrypoints_content = self.filesystem.read_file("/memories/signals/entrypoints.json")
+            if entrypoints_content:
+                try:
+                    entrypoints_data = json.loads(entrypoints_content)
+                    entrypoints = entrypoints_data.get("entrypoints", [])
+                    print(f"[Overseer] Found {len(entrypoints)} entrypoints from EntrypointHunter")
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
+
+        await self.emit_log(f"Collected {len(self.campaign_state.confirmed_findings)} potential findings from sub-agents")
 
     async def _process_findings(self):
         """Convert campaign state findings to Finding objects."""

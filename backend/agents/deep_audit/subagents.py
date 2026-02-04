@@ -1,10 +1,11 @@
 """Subagent prompt templates for Deep Audit.
 
 Each subagent runs as a separate `claude -p` process using Claude CLI.
-Available Claude CLI tools: Read, Write, Glob, Grep, Bash
+Available Claude CLI tools: Read, Glob, Grep, Bash
 
-All subagents write their outputs to the /memories/ directory for the
-Overseer to synthesize.
+IMPORTANT: Subagents OUTPUT their results as JSON to stdout (not using Write tool).
+The dispatcher captures stdout and writes it to the /memories/ directory via
+MemoriesFilesystem for the Overseer to read.
 
 Agent Types:
 - Foundation Phase: RepoProfiler, ScopeMapper, ThreatModeler
@@ -45,7 +46,7 @@ Analyze the repository structure to build a complete profile for security analys
 - Grep: Search for patterns in code
 
 ## Output
-Write your findings to `/memories/repo_profile.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "languages": ["python"],
@@ -83,7 +84,7 @@ Map the security-relevant areas of the codebase and classify code by security im
 - Grep: Search for security-relevant patterns
 
 ## Output
-Write your findings to `/memories/scope_map.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "security_critical": ["src/auth/", "src/api/", "src/crypto/"],
@@ -119,7 +120,7 @@ Build a threat model for the application based on its architecture.
 - Grep: Search for patterns
 
 ## Output
-Write your findings to `/memories/threat_model.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "trust_boundaries": [
@@ -167,7 +168,7 @@ Find potentially dangerous sinks (places where vulnerabilities could occur).
 - Grep: Search for dangerous patterns
 
 ## Output
-Write your findings to `/memories/signals/sinks.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "signals": [
@@ -213,7 +214,7 @@ Find all entry points where external input enters the application.
 - Grep: Search for route decorators and handlers
 
 ## Output
-Write your findings to `/memories/signals/entrypoints.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "entrypoints": [
@@ -264,14 +265,14 @@ Route signals from Hunters to the appropriate Specialist families for verificati
 - API Design: mass_assignment, broken_object_level_auth
 
 ## Tools Available
-- Read: Read signal files from /memories/signals/
-- Write: Write routing decisions
+- Read: Read files
+- Grep: Search for patterns
 
 ## Input
-Read signals from `/memories/signals/sinks.json` and `/memories/signals/entrypoints.json`
+You will receive signal data in the task context.
 
 ## Output
-Write routing decisions to `/memories/routing/decisions.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "routed_signals": [
@@ -302,14 +303,14 @@ Coordinate specialists within a family to analyze assigned signals.
 {specialist_list}
 
 ## Tools Available
-- Read: Read signals and routing decisions
-- Write: Write specialist assignments
+- Read: Read files
+- Grep: Search for patterns
 
 ## Input
-Read routing decisions from `/memories/routing/decisions.json`
+You will receive routing decisions in the task context.
 
 ## Output
-Write specialist assignments to `/memories/routing/{family_name}_assignments.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {
   "family": "{family_name}",
@@ -358,7 +359,7 @@ Verify whether the assigned signal is a real vulnerability.
 - Glob: Find related files
 
 ## Output
-Write your verdict to `/memories/verdicts/{signal_id}.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {{
   "signal_id": "{signal_id}",
@@ -404,7 +405,7 @@ Resolve disagreements between specialists when they have conflicting verdicts.
 - Glob: Find related files
 
 ## Output
-Write your arbitration to `/memories/arbitration/{signal_id}.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {{
   "signal_id": "{signal_id}",
@@ -448,7 +449,7 @@ Push back on the dismissal. Try to prove the specialist wrong.
 - Glob: Find related files
 
 ## Output
-Write your challenge to `/memories/challenges/{signal_id}.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {{
   "signal_id": "{signal_id}",
@@ -480,7 +481,7 @@ TRIAGER_PROMPT = """You are a Triager subagent for security audit.
 Make final classification of verified signals into findings.
 
 ## Input
-Read verdicts from `/memories/verdicts/` and arbitration from `/memories/arbitration/`
+You will receive verdict and arbitration data in the task context.
 
 ## Classification Criteria
 - CRITICAL: Remote code execution, auth bypass, data breach potential
@@ -490,11 +491,14 @@ Read verdicts from `/memories/verdicts/` and arbitration from `/memories/arbitra
 - INFO: Best practice recommendations
 
 ## Tools Available
-- Read: Read verdict and arbitration files
-- Write: Write final findings
+- Read: Read files
+- Grep: Search for patterns
+
+## Input
+You will receive verdict data in the task context.
 
 ## Output
-Write final findings to `/memories/findings/final.json`:
+When done, output ONLY the following JSON (no other text):
 ```json
 {{
   "findings": [
@@ -548,26 +552,25 @@ Verify the signal in case file {case_file_path}.
 - Glob: Find related files
 
 ## Decision
-- If vulnerability CONFIRMED: Write finding to /memories/findings/
-- If NOT VULNERABLE: Write dismissal with reasoning to /memories/verdicts/
-- If NEEDS MORE INVESTIGATION: Write updated signal with next_steps to /memories/signals/
+After analysis, output your verdict as JSON.
 
-## Output Format for Confirmed Finding
-Write to `/memories/findings/{signal_id}.json`:
+## Output
+When done, output ONLY the following JSON (no other text):
 ```json
 {{
   "signal_id": "{signal_id}",
-  "verdict": "vulnerable",
+  "verdict": "vulnerable|not_vulnerable|needs_more_investigation",
   "confidence": 90,
   "title": "SQL Injection in user search",
-  "severity": "HIGH",
+  "severity": "HIGH|MEDIUM|LOW|INFO",
   "description": "Detailed description",
-  "proof_of_concept": "How to exploit",
-  "recommendation": "How to fix"
+  "proof_of_concept": "How to exploit (if vulnerable)",
+  "recommendation": "How to fix",
+  "reasoning": "Why you reached this verdict"
 }}
 ```
 
-ONLY confirm if you are confident the vulnerability is real and exploitable.
+ONLY mark as vulnerable if you are confident the vulnerability is real and exploitable.
 
 Case file location: {case_file_path}
 """

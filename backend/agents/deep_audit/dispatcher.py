@@ -79,34 +79,34 @@ class WaveResult(BaseModel):
 
 # Tool subsets by agent type
 # Mapped to actual tool names in AGENT_TOOLS
-# All agents get write_file (to write outputs to /memories/)
+# Agents output JSON to stdout - dispatcher captures and writes to /memories/
 AGENT_TOOL_SUBSETS = {
-    "RepoProfiler": ["read_file", "list_directory", "search_code", "get_repo_tree", "write_file"],
-    "ScopeMapper": ["read_file", "list_directory", "search_code", "get_file_structure", "write_file"],
-    "EntrypointHunter": ["read_file", "search_code", "grep_semantic", "get_entry_points", "write_file"],
-    "SinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure", "upsert_sink_signal", "write_file"],
-    "DataflowTracer": ["read_file", "get_file_structure", "trace_data_flow", "find_usages", "write_file", "read_memories"],
-    "ThreatModeler": ["read_file", "get_repo_tree", "get_file_structure", "write_file"],
-    "AuthBoundaryMapper": ["read_file", "search_code", "grep_semantic", "get_entry_points", "write_file"],
-    "Triager": ["read_file", "get_file_structure", "trace_data_flow", "triage_finding", "write_file", "read_memories"],
-    "Auditor": ["read_file", "get_file_structure", "trace_data_flow", "trace_path_verdict", "report_finding", "find_usages", "write_file", "read_memories", "list_memories"],
-    "Reproducer": ["read_file", "trace_data_flow", "trace_path_verdict", "write_file", "read_memories"],
+    "RepoProfiler": ["read_file", "list_directory", "search_code", "get_repo_tree"],
+    "ScopeMapper": ["read_file", "list_directory", "search_code", "get_file_structure"],
+    "EntrypointHunter": ["read_file", "search_code", "grep_semantic", "get_entry_points"],
+    "SinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    "DataflowTracer": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
+    "ThreatModeler": ["read_file", "get_repo_tree", "get_file_structure"],
+    "AuthBoundaryMapper": ["read_file", "search_code", "grep_semantic", "get_entry_points"],
+    "Triager": ["read_file", "get_file_structure", "trace_data_flow"],
+    "Auditor": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
+    "Reproducer": ["read_file", "trace_data_flow"],
 
-    # New Foundation Phase agents
-    "Decider": ["read_file", "read_memories", "write_file"],
-    "FamilyCoordinator": ["read_file", "read_memories", "write_file", "list_memories"],
+    # Routing Phase agents
+    "Decider": ["read_file"],
+    "FamilyCoordinator": ["read_file"],
 
-    # Specialist agents (generic - can read/write)
-    "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow", "write_file", "read_memories"],
+    # Specialist agents (read-only analysis)
+    "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow"],
 
     # Resolution agents
-    "Arbiter": ["read_file", "search_code", "trace_data_flow", "find_usages", "write_file", "read_memories", "list_memories"],
+    "Arbiter": ["read_file", "search_code", "trace_data_flow", "find_usages"],
 }
 
 
 def get_tools_for_agent_type(agent_type: str) -> list[str]:
     """Get the tool subset for a given agent type."""
-    return AGENT_TOOL_SUBSETS.get(agent_type, ["read_file", "write_file"])
+    return AGENT_TOOL_SUBSETS.get(agent_type, ["read_file"])
 
 
 class WaveDispatcher:
@@ -272,11 +272,11 @@ class WaveDispatcher:
             allowed_tools = get_tools_for_agent_type(task.agent_type)
 
             # Map our tool names to Claude CLI tool names
-            # Claude CLI has built-in tools: Read, Write, Edit, Glob, Grep, Bash, Task, etc.
+            # Claude CLI has built-in tools: Read, Glob, Grep, Bash, etc.
+            # Note: Agents output JSON to stdout - we don't need Write tool
             claude_tool_mapping = {
-                # File operations
+                # File operations (read-only)
                 "read_file": "Read",
-                "write_file": "Write",
                 "list_directory": "Glob",
                 "get_repo_tree": "Glob",
                 "get_file_structure": "Glob",
@@ -284,15 +284,9 @@ class WaveDispatcher:
                 "search_code": "Grep",
                 "grep_semantic": "Grep",
                 "find_usages": "Grep",
-                # Custom operations via Bash (for tools without direct mapping)
-                "trace_data_flow": "Bash",  # Agent can use grep/ast tools via bash
-                "trace_path_verdict": "Bash",
-                "triage_finding": "Bash",
-                "report_finding": "Bash",
-                "upsert_sink_signal": "Bash",
-                "read_memories": "Read",  # Can read from memories directory
-                "list_memories": "Glob",
                 "get_entry_points": "Grep",
+                # Bash for complex operations
+                "trace_data_flow": "Bash",
             }
 
             # Convert our tool names to Claude CLI tool names
@@ -303,10 +297,6 @@ class WaveDispatcher:
 
             # Ensure we have basic tools (Read, Glob, Grep always available)
             claude_tools.update(["Read", "Glob", "Grep"])
-
-            # Add Write for agents that need to output results
-            if any(t in allowed_tools for t in ["write_file", "report_finding", "upsert_sink_signal"]):
-                claude_tools.add("Write")
 
             claude_tools = sorted(claude_tools)  # Consistent ordering
 

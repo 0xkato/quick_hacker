@@ -930,13 +930,19 @@ Output JSON with your analysis for each signal.""",
                         for signal in signals:
                             if isinstance(signal, dict):
                                 # Convert signal to finding format
+                                # CRITICAL: Preserve signal_id for downstream routing
                                 finding = {
+                                    "signal_id": signal.get("signal_id", f"sig-{hash(str(signal)) % 10000}"),
                                     "title": signal.get("title", signal.get("type", "Potential Vulnerability")),
-                                    "description": signal.get("description", signal.get("reasoning", "")),
+                                    "description": signal.get("description", signal.get("reasoning", signal.get("why_suspicious", ""))),
                                     "severity": signal.get("severity", "MEDIUM"),
+                                    "category": signal.get("category", signal.get("vulnerability_type", "unknown")),
                                     "vulnerability_type": signal.get("type", signal.get("sink_type", "unknown")),
                                     "location": signal.get("location", signal.get("file_path", "")),
+                                    "file_path": signal.get("file_path", signal.get("location", "")),
+                                    "line_start": signal.get("line_start", signal.get("line_number")),
                                     "code_snippet": signal.get("code_snippet", signal.get("code", "")),
+                                    "why_suspicious": signal.get("why_suspicious", signal.get("description", "")),
                                     "remediation": signal.get("remediation", signal.get("recommendation", "")),
                                     "confidence": signal.get("confidence", 0.7),
                                 }
@@ -1025,13 +1031,19 @@ Output JSON with your analysis for each signal.""",
                         if isinstance(signals, list):
                             for signal in signals:
                                 if isinstance(signal, dict):
+                                    # CRITICAL: Preserve signal_id for downstream routing
                                     finding = {
+                                        "signal_id": signal.get("signal_id", f"sig-{hash(str(signal)) % 10000}"),
                                         "title": signal.get("title", signal.get("type", "Potential Vulnerability")),
-                                        "description": signal.get("description", signal.get("reasoning", "")),
+                                        "description": signal.get("description", signal.get("reasoning", signal.get("why_suspicious", ""))),
                                         "severity": signal.get("severity", "MEDIUM"),
+                                        "category": signal.get("category", signal.get("vulnerability_type", "unknown")),
                                         "vulnerability_type": signal.get("type", signal.get("sink_type", "unknown")),
                                         "location": signal.get("location", signal.get("file_path", "")),
+                                        "file_path": signal.get("file_path", signal.get("location", "")),
+                                        "line_start": signal.get("line_start", signal.get("line_number")),
                                         "code_snippet": signal.get("code_snippet", signal.get("code", "")),
+                                        "why_suspicious": signal.get("why_suspicious", signal.get("description", "")),
                                         "remediation": signal.get("remediation", signal.get("recommendation", "")),
                                         "confidence": signal.get("confidence", 0.7),
                                     }
@@ -1846,8 +1858,9 @@ Output as JSON with: classification, severity, title, description, recommendatio
         3. Specialist - Is this technically a vulnerability?
         4. Triager - Final classification based on threat model
         """
-        signals = self.campaign_state.confirmed_findings.copy()  # Copy since we'll modify
-        self.campaign_state.confirmed_findings = []  # Clear, will re-add verified ones
+        # Keep original findings until routing succeeds - don't lose data on failure
+        original_signals = self.campaign_state.confirmed_findings.copy()
+        signals = original_signals.copy()
 
         await self.emit_log(f"Phase 4: Routing {len(signals)} signals through verification pipeline...")
         print(f"[Overseer] Routing {len(signals)} signals through Decider → FamilyCoordinator → Specialist → Triager")
@@ -1939,7 +1952,16 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 await self.emit_log(f"  → Error: {e}")
 
         # Update confirmed findings with verified ones
-        self.campaign_state.confirmed_findings = verified_findings
+        # If routing produced no results, keep original signals as fallback
+        if verified_findings:
+            self.campaign_state.confirmed_findings = verified_findings
+        elif error_count == len(signals):
+            # All signals errored - keep originals
+            self.campaign_state.confirmed_findings = original_signals
+            await self.emit_log("WARNING: All routing failed, keeping original signals as unverified findings")
+        else:
+            # Some dismissed, some errored, none verified - clear (all were intentionally dismissed)
+            self.campaign_state.confirmed_findings = []
 
         if routing_node:
             flow_service.update_node_status(self.id, routing_node.id, "completed")

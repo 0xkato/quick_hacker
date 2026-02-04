@@ -520,8 +520,12 @@ Begin your analysis now."""
             if output and not error_message:
                 try:
                     self.filesystem.write_file(task.deliverable, output)
+                    print(f"[Dispatcher] Wrote {len(output)} bytes to {task.deliverable}")
                 except Exception as e:
-                    print(f"[Dispatcher] Failed to write deliverable: {e}")
+                    # CRITICAL: Propagate write failure to status
+                    error_message = f"Failed to write deliverable: {e}"
+                    status = "failed"
+                    print(f"[Dispatcher] {error_message}")
 
             # Broadcast sub-agent completed
             self._broadcast(

@@ -71,6 +71,11 @@ class MemoriesFilesystem:
         directories = [
             self.memory_root,
             self.memory_root / "overseer",
+            self.memory_root / "foundation",  # Foundation Phase outputs
+            self.memory_root / "signals",     # Hunting Phase outputs (sinks.json, entrypoints.json)
+            self.memory_root / "routing",     # Decider/Coordinator outputs
+            self.memory_root / "waves",       # Per-wave outputs
+            self.memory_root / "challenge",   # Devil's Advocate outputs
             self.memory_root / "scopes",
             self.memory_root / "traces",
             self.memory_root / "triage",

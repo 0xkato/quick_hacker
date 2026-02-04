@@ -532,7 +532,7 @@ Continue the investigation. What should the next wave focus on?"""
                 foundation_data = json.loads(foundation_result)
                 if not foundation_data.get("all_succeeded"):
                     await self.emit_log("Foundation Phase had failures, continuing with partial results...")
-                    flow_service.update_node_status(self.id, foundation_node.id, "warning")
+                    flow_service.update_node_status(self.id, foundation_node.id, "failed")
             except json.JSONDecodeError:
                 await self.emit_log("Could not parse Foundation Phase result, continuing...")
 
@@ -586,8 +586,8 @@ Continue the investigation. What should the next wave focus on?"""
             self.campaign_state.current_wave = 1
 
             # Update flow node status
-            status = "completed" if hunting_result.all_succeeded else "warning"
-            flow_service.update_node_status(self.id, hunting_node.id, status)
+            hunt_status = "completed" if hunting_result.all_succeeded else "failed"
+            flow_service.update_node_status(self.id, hunting_node.id, hunt_status)
             await self.emit_flow_update()
 
             print(f"[Overseer] Hunting Phase complete: {hunting_result.all_succeeded}")

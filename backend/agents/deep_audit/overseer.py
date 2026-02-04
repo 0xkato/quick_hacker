@@ -130,6 +130,7 @@ class Overseer(BaseAgent):
             on_agent_start=self._on_subagent_start,
             on_agent_complete=self._on_subagent_complete,
             on_message=on_message,  # Pass for sub-agent UI visibility
+            parent_agent_id=self.id,  # For logging interactions under Overseer's ID
         )
 
         # Wire up tools with state

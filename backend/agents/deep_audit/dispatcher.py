@@ -129,6 +129,7 @@ class WaveDispatcher:
         on_agent_start: Optional[Callable[[str, str], None]] = None,
         on_agent_complete: Optional[Callable[[str, str, str], None]] = None,
         on_message: Optional[Callable[[WSMessage], None]] = None,
+        parent_agent_id: Optional[str] = None,
     ):
         """Initialize the wave dispatcher.
 
@@ -139,6 +140,7 @@ class WaveDispatcher:
             on_agent_start: Callback(task_id, agent_type) when agent starts
             on_agent_complete: Callback(task_id, agent_type, status) when agent completes
             on_message: WebSocket broadcast callback for UI updates
+            parent_agent_id: Overseer's agent ID for logging interactions
         """
         self.repo_path = repo_path
         self.filesystem = filesystem
@@ -146,6 +148,7 @@ class WaveDispatcher:
         self.on_agent_start = on_agent_start
         self.on_agent_complete = on_agent_complete
         self.on_message = on_message
+        self.parent_agent_id = parent_agent_id
 
     def _broadcast(self, msg_type: WSMessageType, agent_id: str, data: dict):
         """Broadcast a message to UI if callback is set."""
@@ -360,9 +363,10 @@ Begin your analysis now."""
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
 
-            # Log LLM request for observability
+            # Log LLM request for observability (use parent agent ID for frontend visibility)
+            log_agent_id = self.parent_agent_id or agent_id
             request_id = observability_service.log_llm_request(
-                agent_id=agent_id,
+                agent_id=log_agent_id,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 tools_available=list(claude_tools),
                 model=model_arg,
@@ -406,9 +410,9 @@ Begin your analysis now."""
             status = "completed" if not error_message else "failed"
             duration = time.time() - start_time
 
-            # Log LLM response for observability
+            # Log LLM response for observability (use parent agent ID for frontend visibility)
             observability_service.log_llm_response(
-                agent_id=agent_id,
+                agent_id=log_agent_id,
                 request_id=request_id,
                 content=output[:1000] + "..." if len(output) > 1000 else output,
                 tool_calls=[],

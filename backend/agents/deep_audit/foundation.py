@@ -71,7 +71,7 @@ class FoundationContext:
     Complete foundation context for the security audit.
 
     Built during the Foundation Phase by RepoProfiler, ScopeMapper, and ThreatModeler.
-    Injected into all downstream agents via {{FOUNDATION_CONTEXT}} placeholder in prompts.
+    Written to /memories/foundation/context.md for all downstream agents to read.
 
     The context enables agents to:
     - Filter out test/vendor/generated code (is_in_scope)
@@ -88,7 +88,8 @@ class FoundationContext:
         >>> ctx = FoundationContext.from_dict(foundation_data)
         >>> if ctx.is_in_scope("src/api/auth.py"):
         ...     # Analyze this file
-        >>> prompt = base_prompt.replace("{{FOUNDATION_CONTEXT}}", ctx.to_prompt_context())
+        >>> # Context is written to /memories/foundation/context.md
+        >>> # Agents read it using: Read("/memories/foundation/context.md")
     """
     repo_profile: RepoProfile
     scope_map: ScopeMap

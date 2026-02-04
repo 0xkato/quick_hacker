@@ -737,16 +737,16 @@ Begin your analysis now."""
 
         Args:
             task: The task containing agent type and context
-            foundation_context: Optional Foundation Context to inject
+            foundation_context: Optional Foundation Context (no longer used - context is in file)
 
         Returns:
             Complete prompt string for the sub-agent
-        """
-        # Prepare foundation context text if available
-        foundation_context_text = ""
-        if foundation_context:
-            foundation_context_text = foundation_context.to_prompt_context()
 
+        Note:
+            Foundation Context is now written to /memories/foundation/context.md
+            and prompts instruct agents to read it directly. This is simpler and
+            more reliable than placeholder injection.
+        """
         try:
             # Try to load from prompting system
             from prompting_loader import load_prompt, render_prompt
@@ -762,18 +762,14 @@ Begin your analysis now."""
                     inputs=", ".join(task.inputs) if task.inputs else "None",
                     deliverable=task.deliverable,
                     constraints=task.constraints or "None",
-                    FOUNDATION_CONTEXT=foundation_context_text,
                 )
-                # Also replace {{FOUNDATION_CONTEXT}} if not handled by render_prompt
-                if "{{FOUNDATION_CONTEXT}}" in prompt:
-                    prompt = prompt.replace("{{FOUNDATION_CONTEXT}}", foundation_context_text)
                 return prompt
             except FileNotFoundError:
                 # Fall back to Python prompts
-                return self._get_fallback_prompt(task.agent_type, task, foundation_context)
+                return self._get_fallback_prompt(task.agent_type, task)
         except ImportError:
             # prompting_loader not available, use fallback
-            return self._get_fallback_prompt(task.agent_type, task, foundation_context)
+            return self._get_fallback_prompt(task.agent_type, task)
 
     def _get_fallback_prompt(
         self,
@@ -786,7 +782,7 @@ Begin your analysis now."""
         Args:
             agent_type: Type of agent
             task: Optional task for context injection
-            foundation_context: Optional Foundation Context to inject
+            foundation_context: Optional Foundation Context (no longer used - context is in file)
 
         Returns:
             Prompt string
@@ -794,6 +790,8 @@ Begin your analysis now."""
         from agents.deep_audit.subagents import get_prompt_for_agent_type
 
         # Get base prompt for agent type
+        # Note: Prompts now instruct agents to read /memories/foundation/context.md
+        # instead of using {{FOUNDATION_CONTEXT}} placeholder injection
         base = get_prompt_for_agent_type(agent_type)
 
         if task:
@@ -801,14 +799,6 @@ Begin your analysis now."""
             base = base.replace("{scope_id}", task.scope.replace("/", "_"))
             base = base.replace("{scope_path}", task.scope)
             base = base.replace("{case_file_path}", task.deliverable)
-
-        # Inject Foundation Context if available
-        if foundation_context:
-            context_text = foundation_context.to_prompt_context()
-            base = base.replace("{{FOUNDATION_CONTEXT}}", context_text)
-            # If no placeholder, prepend to the prompt
-            if "{{FOUNDATION_CONTEXT}}" not in base and context_text:
-                base = f"## Foundation Context\n{context_text}\n\n{base}"
 
         return base
 
@@ -887,10 +877,21 @@ Begin your analysis now."""
         if result.all_succeeded:
             try:
                 context = await self._build_foundation_context()
+                print(f"[Foundation] SUCCESS: Built Foundation Context")
                 return result, context
             except Exception as e:
-                print(f"Failed to build Foundation Context: {e}")
+                print(f"[Foundation] FAILED to build Foundation Context: {e}")
+                import traceback
+                traceback.print_exc()
                 return result, None
+        else:
+            # Log which foundation agents failed
+            print(f"[Foundation] FAILED: Not all foundation agents succeeded")
+            for r in result.results:
+                status_str = f"status={r.status}"
+                if r.error:
+                    status_str += f", error={r.error[:100]}"
+                print(f"[Foundation]   {r.agent_type}: {status_str}")
 
         return result, None
 
@@ -901,9 +902,28 @@ Begin your analysis now."""
     async def _build_foundation_context(self) -> FoundationContext:
         """Build FoundationContext from foundation phase outputs."""
         # Read outputs from filesystem (sync methods, no await needed)
-        repo_profile_content = self.filesystem.read_file("/memories/foundation/repo_profile.json")
-        scope_map_content = self.filesystem.read_file("/memories/foundation/scope_map.json")
-        threat_model_content = self.filesystem.read_file("/memories/foundation/threat_model.json")
+        print("[Foundation] Reading foundation phase outputs...")
+
+        try:
+            repo_profile_content = self.filesystem.read_file("/memories/foundation/repo_profile.json")
+            print(f"[Foundation] repo_profile.json: {len(repo_profile_content)} bytes")
+        except FileNotFoundError as e:
+            print(f"[Foundation] ERROR: repo_profile.json not found: {e}")
+            raise
+
+        try:
+            scope_map_content = self.filesystem.read_file("/memories/foundation/scope_map.json")
+            print(f"[Foundation] scope_map.json: {len(scope_map_content)} bytes")
+        except FileNotFoundError as e:
+            print(f"[Foundation] ERROR: scope_map.json not found: {e}")
+            raise
+
+        try:
+            threat_model_content = self.filesystem.read_file("/memories/foundation/threat_model.json")
+            print(f"[Foundation] threat_model.json: {len(threat_model_content)} bytes")
+        except FileNotFoundError as e:
+            print(f"[Foundation] ERROR: threat_model.json not found: {e}")
+            raise
 
         # Extract JSON from Claude's text output
         repo_profile = self._extract_json_from_output(repo_profile_content)
@@ -911,18 +931,31 @@ Begin your analysis now."""
         threat_model = self._extract_json_from_output(threat_model_content)
 
         if not repo_profile:
+            print(f"[Foundation] ERROR: Could not parse repo_profile.json. Content preview: {repo_profile_content[:500]}")
             raise ValueError("Could not parse repo_profile.json")
         if not scope_map:
+            print(f"[Foundation] ERROR: Could not parse scope_map.json. Content preview: {scope_map_content[:500]}")
             raise ValueError("Could not parse scope_map.json")
         if not threat_model:
+            print(f"[Foundation] ERROR: Could not parse threat_model.json. Content preview: {threat_model_content[:500]}")
             raise ValueError("Could not parse threat_model.json")
 
+        print("[Foundation] All JSON files parsed successfully, building context...")
+
         # Parse and build context
-        return FoundationContext.from_dict({
+        context = FoundationContext.from_dict({
             "repo_profile": repo_profile,
             "scope_map": scope_map,
             "threat_model": threat_model,
         })
+
+        # Write human-readable context to a file that all subagents can read
+        # This is simpler and more reliable than placeholder replacement
+        context_md = context.to_prompt_context()
+        self.filesystem.write_file("/memories/foundation/context.md", context_md)
+        print(f"[Foundation] Wrote context to /memories/foundation/context.md ({len(context_md)} bytes)")
+
+        return context
 
     def inject_foundation_context(self, task: DispatchTask, foundation_context: FoundationContext) -> DispatchTask:
         """Inject Foundation Context into a task's prompt context.

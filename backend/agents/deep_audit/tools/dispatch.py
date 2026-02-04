@@ -239,6 +239,9 @@ async def dispatch_foundation_phase() -> str:
             # Store Foundation Context for subsequent waves
             global _foundation_context
             _foundation_context = foundation_context
+            print(f"[Foundation] SUCCESS: Foundation Context built and stored")
+            print(f"[Foundation] Languages: {foundation_context.repo_profile.languages}")
+            print(f"[Foundation] Frameworks: {foundation_context.repo_profile.frameworks}")
 
             response["foundation_summary"] = {
                 "languages": foundation_context.repo_profile.languages,
@@ -252,12 +255,18 @@ async def dispatch_foundation_phase() -> str:
             response["next_phase"] = "hunting"
             response["phase_instruction"] = "Foundation Phase complete. You may now dispatch Hunting waves (EntrypointHunter, SinkHunter)."
         else:
+            # Foundation context NOT built - /memories/foundation/context.md won't exist
+            print(f"[Foundation] WARNING: Foundation Context was NOT built!")
+            print(f"[Foundation] all_succeeded={result.all_succeeded}")
+            for r in result.results:
+                print(f"[Foundation]   {r.agent_type}: status={r.status}, error={r.error}")
             response["next_phase"] = "foundation"
-            response["phase_instruction"] = "Foundation Phase failed. Check errors and retry."
+            response["phase_instruction"] = "Foundation Phase failed to build context. /memories/foundation/context.md will not exist. Hunting agents will proceed without context."
 
         return json.dumps(response, indent=2)
 
     except Exception as e:
+        print(f"[Foundation] EXCEPTION during Foundation Phase: {e}")
         return json.dumps({"error": str(e)})
 
 

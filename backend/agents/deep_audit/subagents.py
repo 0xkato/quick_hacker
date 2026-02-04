@@ -12,7 +12,14 @@ The dispatcher captures stdout and writes it to the /memories/ directory via
 MemoriesFilesystem for the Overseer to read.
 
 Prompt Structure:
-- Each prompt includes {{FOUNDATION_CONTEXT}} placeholder
+- Each prompt includes ## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code. placeholder
 - The dispatcher replaces this with FoundationContext.to_prompt_context()
 - All prompts instruct the agent to output ONLY JSON (no other text)
 
@@ -94,7 +101,14 @@ Start by finding package files to identify the tech stack.
 
 SCOPE_MAPPER_PROMPT = """You are a ScopeMapper subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Map the security-relevant areas of the codebase and classify code by security importance.
@@ -130,7 +144,14 @@ Focus on identifying boundaries between trusted and untrusted code.
 
 THREAT_MODELER_PROMPT = """You are a ThreatModeler subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Build a threat model for the application based on its architecture.
@@ -176,7 +197,14 @@ Think like an attacker. What would they target first?
 
 SINK_HUNTER_PROMPT = """You are a SinkHunter subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## CRITICAL: You MUST Use Tools
 
@@ -286,7 +314,14 @@ For C/C++ codebases, memory corruption is far more valuable than web vulns.
 
 MEMORY_SINK_HUNTER_PROMPT = """You are a MemorySinkHunter specializing in memory safety vulnerabilities.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Your Specialty
 Memory corruption vulnerabilities in C/C++/Rust unsafe code. These are often the most severe.
@@ -358,7 +393,14 @@ Output ONLY JSON:
 
 INJECTION_SINK_HUNTER_PROMPT = """You are an InjectionSinkHunter specializing in injection vulnerabilities.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Your Specialty
 Code injection vulnerabilities: SQL, command, template, expression injection.
@@ -426,7 +468,14 @@ Output ONLY JSON:
 
 WEB_SINK_HUNTER_PROMPT = """You are a WebSinkHunter specializing in web application vulnerabilities.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Your Specialty
 Web-specific vulnerabilities: SSRF, XSS, open redirect, request smuggling.
@@ -495,7 +544,14 @@ Output ONLY JSON:
 
 CRYPTO_SINK_HUNTER_PROMPT = """You are a CryptoSinkHunter specializing in cryptographic vulnerabilities.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Your Specialty
 Cryptographic misuse, weak randomness, and secrets exposure.
@@ -569,7 +625,14 @@ Output ONLY JSON:
 
 ENTRYPOINT_HUNTER_PROMPT = """You are an EntrypointHunter subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## CRITICAL: You MUST Use Tools
 
@@ -632,7 +695,14 @@ Be thorough. Every entry point is a potential attack vector.
 
 DATAFLOW_TRACER_PROMPT = """You are a DataFlowTracer subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## CRITICAL: You MUST Use Tools to Trace Code
 
@@ -746,7 +816,14 @@ Be thorough. Missing a path could mean missing a real vulnerability.
 
 DECIDER_PROMPT = """You are a Decider subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Route signals from Hunters to the appropriate Specialist families for verification.
@@ -795,7 +872,14 @@ When done, output ONLY the following JSON (no other text):
 
 FAMILY_COORDINATOR_PROMPT = """You are a FamilyCoordinator subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Coordinate specialists within a family to analyze assigned signals.
@@ -838,7 +922,14 @@ Assign the most relevant specialist as primary. Add secondary for complex cases.
 
 SPECIALIST_PROMPT_TEMPLATE = """You are a {specialist_name} specialist for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Your Expertise
 {proficiency}
@@ -902,7 +993,14 @@ Be rigorous. False positives waste time. False negatives miss real vulnerabiliti
 
 ARBITER_PROMPT = """You are an Arbiter subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Resolve disagreements between specialists when they have conflicting verdicts.
@@ -944,7 +1042,14 @@ Your decision is final. Be thorough and impartial.
 
 DEVILS_ADVOCATE_PROMPT = """You are a Devil's Advocate subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Challenge a specialist who dismissed a high-severity signal too quickly.
@@ -995,7 +1100,14 @@ Be adversarial. Your job is to find what they missed.
 
 TRIAGER_PROMPT = """You are a Triager subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Make final classification of signals based on threat model.
@@ -1058,7 +1170,14 @@ Your classification is FINAL. Be thorough but decisive.
 
 AUDITOR_PROMPT_TEMPLATE = """You are an Auditor subagent for security audit.
 
-{{FOUNDATION_CONTEXT}}
+## Foundation Context
+**IMPORTANT:** First, check if `/memories/foundation/context.md` exists.
+If it exists, READ it to get:
+- Repository profile (languages, frameworks, build system)
+- Scope map (security-critical paths, test/vendor code to exclude)
+- Threat model (attacker capabilities, trust boundaries, in-scope paths)
+
+Use this context to focus your analysis on in-scope, security-critical code.
 
 ## Task
 Verify the signal in case file {case_file_path}.

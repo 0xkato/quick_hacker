@@ -1,15 +1,27 @@
 """Overseer - Strategic orchestrator for Deep Audit campaigns.
 
-The Overseer is an LLM-powered agent that strategically plans and executes
-security audits using specialized sub-agents. It operates in waves, dispatching
-parallel tasks and synthesizing results to build hypotheses about vulnerabilities.
+The Overseer orchestrates security audits by spawning specialized sub-agents
+via Claude CLI. It operates in phases, dispatching parallel waves of agents
+and collecting findings to build a comprehensive vulnerability report.
+
+Architecture:
+- Uses the "Gas Town" approach: Claude CLI with subscription auth (no API keys)
+- All sub-agents run as separate `claude -p` processes
+- Parallel execution within waves, sequential between phases
+
+Phases:
+1. Foundation Phase: RepoProfiler, ScopeMapper, ThreatModeler build context
+2. Hunting Phase: SinkHunter, EntrypointHunter find signals
+3. Wave Loop: Rotate through vulnerability types, verify with DataflowTracer
+4. Finalize: Generate report, emit findings
 
 Key responsibilities:
-- Strategic planning of audit waves
-- Dispatch of specialized sub-agents (RepoProfiler, SinkHunter, Auditor, etc.)
-- Hypothesis lifecycle management (NEW → TRIAGED → TRACING → AUDITING → CONFIRMED/DISMISSED)
-- Time budget enforcement
-- Final report generation
+- Time budget enforcement based on scan tier (quick: 5min to evil: 24hr)
+- Dispatch of specialized sub-agents via WaveDispatcher
+- Collection of findings from sub-agent outputs in /memories/
+- Final report generation at /memories/overseer/final_report.md
+
+See agents/deep_audit/README.md for full architecture documentation.
 """
 
 import asyncio
@@ -73,9 +85,21 @@ SCAN_TIER_BUDGETS = {
 class Overseer(BaseAgent):
     """Strategic orchestrator for Deep Audit campaigns.
 
-    The Overseer runs as an LLM agent with access to orchestration tools.
-    It plans waves, dispatches sub-agents, and synthesizes results to find
-    real vulnerabilities.
+    The Overseer runs a phased audit campaign, spawning sub-agents via Claude CLI
+    to perform parallel code analysis. All agents use the user's Claude Code
+    subscription for authentication (Gas Town approach).
+
+    Attributes:
+        campaign_state: CampaignState tracking hypotheses, findings, and coverage
+        filesystem: MemoriesFilesystem for agent artifact I/O
+        dispatcher: WaveDispatcher for spawning Claude CLI sub-agents
+        time_budget: Total seconds allocated for this scan tier
+        waves_completed: Number of waves dispatched so far
+
+    Example:
+        >>> overseer = Overseer(request, repo_path, on_message=ws_callback)
+        >>> await overseer.analyze()  # Runs full audit campaign
+        >>> findings = overseer.findings  # Get confirmed findings
     """
 
     agent_type: AgentType = AgentType.DEEP_AUDIT

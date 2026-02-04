@@ -2,9 +2,38 @@
 Specialist Family Registry for Deep Audit.
 
 This registry maps vulnerability signal categories to specialist families and
-individual specialist agents. The Decider uses get_family_for_signal() to route
-signals to the correct family, and Family Coordinators use get_specialists_for_signal()
-to assign specific specialists.
+individual specialist agents. Contains 64 specialists organized into 14 families.
+
+Routing Flow:
+1. SinkHunter/EntrypointHunter find signals with a category (e.g., SQL_INJECTION)
+2. Decider calls get_family_for_signal() to route to a family (e.g., INJECTION)
+3. FamilyCoordinator calls get_specialists_for_signal() to assign specialists
+4. Specialists analyze signals and return verdicts
+
+Families:
+- MEMORY_SAFETY: Buffer overflow, use-after-free, integer overflow (8 specialists)
+- INJECTION: SQL, command, template, LDAP injection (10 specialists)
+- WEB_EDGE_CASES: SSRF, request smuggling, cache poisoning (4 specialists)
+- BROWSER_CLIENT: XSS, prototype pollution, clickjacking (4 specialists)
+- DESERIALIZATION_PARSING: Unsafe deserialization, XXE, zip slip (6 specialists)
+- FILE_SYSTEM: Path traversal, file upload, symlink attacks (4 specialists)
+- AUTHN_SESSION: Auth bypass, session fixation, CSRF, OAuth, JWT (5 specialists)
+- AUTHZ_BUSINESS_LOGIC: IDOR, privilege escalation, workflow bypass (5 specialists)
+- CRYPTO_SECRETS: Crypto misuse, weak randomness, secrets exposure (4 specialists)
+- INFRASTRUCTURE: Container, Kubernetes, CI/CD security (4 specialists)
+- SUPPLY_CHAIN: Dependency confusion, plugin security (3 specialists)
+- CONCURRENCY: Race conditions, resource exhaustion (2 specialists)
+- DATA_EXPOSURE: Sensitive data exposure, tokens in URLs (2 specialists)
+- API_DESIGN: Mass assignment, parameter pollution, GraphQL (3 specialists)
+
+Usage:
+    >>> from agents.deep_audit.specialists.registry import get_family_for_signal
+    >>> family = get_family_for_signal(SignalCategory.SQL_INJECTION)
+    >>> # family == SpecialistFamily.INJECTION
+
+Adding a New Specialist:
+1. Add SpecialistInfo to ALL_SPECIALISTS list
+2. Map new SignalCategory to family in CATEGORY_TO_FAMILY dict
 """
 
 from dataclasses import dataclass, field

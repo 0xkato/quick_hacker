@@ -1,18 +1,46 @@
 """Subagent prompt templates for Deep Audit.
 
 Each subagent runs as a separate `claude -p` process using Claude CLI.
-Available Claude CLI tools: Read, Glob, Grep, Bash
+The dispatcher maps tool names to Claude CLI built-in tools:
+- read_file -> Read
+- list_directory, get_repo_tree, get_file_structure -> Glob
+- search_code, grep_semantic, find_usages -> Grep
+- trace_data_flow -> Bash
 
 IMPORTANT: Subagents OUTPUT their results as JSON to stdout (not using Write tool).
 The dispatcher captures stdout and writes it to the /memories/ directory via
 MemoriesFilesystem for the Overseer to read.
 
-Agent Types:
-- Foundation Phase: RepoProfiler, ScopeMapper, ThreatModeler
-- Hunting Phase: SinkHunter, EntrypointHunter
-- Routing Phase: Decider, FamilyCoordinator
-- Verification Phase: Specialist (64 types), Arbiter
-- Resolution Phase: Triager
+Prompt Structure:
+- Each prompt includes {{FOUNDATION_CONTEXT}} placeholder
+- The dispatcher replaces this with FoundationContext.to_prompt_context()
+- All prompts instruct the agent to output ONLY JSON (no other text)
+
+Agent Types by Phase:
+1. Foundation Phase: RepoProfiler, ScopeMapper, ThreatModeler
+   - Build context for all subsequent agents
+   - Outputs: repo_profile.json, scope_map.json, threat_model.json
+
+2. Hunting Phase: SinkHunter, EntrypointHunter
+   - Find suspicious signals and entry points
+   - Outputs: sinks.json, entrypoints.json
+
+3. Routing Phase: Decider, FamilyCoordinator
+   - Route signals to appropriate specialist families
+   - Outputs: routing decisions
+
+4. Verification Phase: Specialist (64 types), Arbiter
+   - Verify specific vulnerability categories
+   - Arbiter resolves specialist disagreements
+
+5. Resolution Phase: Triager, Auditor
+   - Final classification and deep-dive verification
+
+Adding a New Agent:
+1. Define a prompt constant: NEW_AGENT_PROMPT = '''...'''
+2. Add to AGENT_PROMPTS dict: AGENT_PROMPTS["NewAgent"] = NEW_AGENT_PROMPT
+3. Add tool subset in dispatcher.py: AGENT_TOOL_SUBSETS["NewAgent"] = [...]
+4. Optionally add a helper: def get_new_agent_prompt(...) -> str:
 """
 
 from typing import Dict, Any

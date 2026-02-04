@@ -174,6 +174,28 @@ class CampaignState(BaseModel):
 
     This is the central state object that the Overseer maintains
     across all waves, tracking the complete investigation context.
+
+    Attributes:
+        project_id: Unique identifier for the project/repository
+        scan_tier: Time budget tier (quick/medium/advanced/pro/ultra/evil)
+        deadline: Unix timestamp when time budget expires
+        phase: Current campaign phase (FOUNDATION -> HUNTING -> VERIFICATION -> RESOLUTION)
+        foundation_context: Built during Foundation Phase, injected into all agents
+        hypotheses: Legacy tracking structure for candidate vulnerabilities
+        signals: New signal tracking (NEW -> ROUTED -> VERIFIED/DISMISSED)
+        confirmed_findings: Verified vulnerabilities to report
+        dismissed: False positives with reasoning
+        current_wave: Current wave number (0 = Foundation)
+        wave_history: Record of all completed waves
+
+    Phase Transitions:
+        FOUNDATION: Build context with RepoProfiler, ScopeMapper, ThreatModeler
+        HUNTING: Find signals with SinkHunter, EntrypointHunter
+        ROUTING: Assign signals to specialist families (via Decider)
+        VERIFICATION: Specialists analyze assigned signals
+        RESOLUTION: Final triage and report generation
+
+    The state is persisted to /memories/overseer/campaign_state.json.
     """
 
     # Project context

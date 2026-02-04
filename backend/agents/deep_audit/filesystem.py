@@ -21,14 +21,34 @@ DATA_BASE_PATH = Path("data/projects")
 class MemoriesFilesystem:
     """Virtual filesystem with /repo and /memories namespaces.
 
-    Maps virtual paths to physical filesystem locations with access control:
+    Provides a secure, namespaced filesystem for agent I/O:
     - /repo/* -> {repo_path} (read-only, the actual repository being scanned)
     - /memories/* -> {data_path}/memories (writable, agent artifacts)
 
+    Physical storage: data/projects/{project_id}/memories/
+
+    Standard directories in /memories/:
+    - overseer/: Wave syntheses, campaign state, final report
+    - foundation/: RepoProfiler, ScopeMapper, ThreatModeler outputs
+    - signals/: Hunter outputs (sinks.json, entrypoints.json)
+    - scopes/: Per-scope summaries and signals
+    - traces/: DataflowTracer outputs
+    - triage/: Triage verdicts
+    - audits/: Auditor outputs
+    - findings/: Confirmed findings
+    - waves/: Per-wave outputs (wave_N/)
+
     Security features:
     - Path traversal protection using resolve().relative_to()
-    - Namespace validation
-    - Auto-creates memories directory structure
+    - Namespace validation (must start with /repo/ or /memories/)
+    - /repo/ is read-only, /memories/ is writable
+    - Auto-creates memories directory structure on init
+
+    Example:
+        >>> fs = MemoriesFilesystem("project-123", "/path/to/repo")
+        >>> content = fs.read_file("/repo/src/main.py")  # Read from repo
+        >>> fs.write_json("/memories/signals/sinks.json", data)  # Write artifact
+        >>> files = fs.ls("/memories/")  # List directories
     """
 
     def __init__(self, project_id: str, repo_path: Optional[str] = None):

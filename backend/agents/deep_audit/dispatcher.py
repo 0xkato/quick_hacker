@@ -112,13 +112,19 @@ def get_tools_for_agent_type(agent_type: str) -> list[str]:
 
 
 class WaveDispatcher:
-    """Dispatches sub-agents in parallel and collects results.
+    """Dispatches sub-agents in parallel using Claude CLI and collects results.
 
-    The dispatcher:
+    The dispatcher implements the "Gas Town" approach:
     1. Takes a WavePlan with tasks to execute
-    2. Spawns ReactAgent instances for each task in parallel
-    3. Waits for all to complete (batch wave model)
-    4. Returns collected results
+    2. Spawns Claude CLI processes (`claude -p`) for each task in parallel
+    3. Uses the user's Claude Code subscription for authentication (no API keys)
+    4. Waits for all to complete (batch wave model)
+    5. Writes outputs to /memories/ and returns collected results
+
+    Each sub-agent runs as a separate process with:
+    - A filtered tool subset (Read, Glob, Grep, Bash)
+    - The Foundation Context injected into its system prompt
+    - A time budget enforced via asyncio.wait_for()
     """
 
     def __init__(

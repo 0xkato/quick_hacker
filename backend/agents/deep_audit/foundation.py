@@ -70,7 +70,25 @@ class FoundationContext:
     """
     Complete foundation context for the security audit.
 
-    Built during the Foundation phase and injected into all downstream agents.
+    Built during the Foundation Phase by RepoProfiler, ScopeMapper, and ThreatModeler.
+    Injected into all downstream agents via {{FOUNDATION_CONTEXT}} placeholder in prompts.
+
+    The context enables agents to:
+    - Filter out test/vendor/generated code (is_in_scope)
+    - Prioritize security-critical paths (is_security_critical)
+    - Understand the threat model and attacker capabilities
+    - Make informed decisions about vulnerability severity
+
+    Attributes:
+        repo_profile: Languages, frameworks, build system, entry points
+        scope_map: Security-critical vs test/vendor/generated code paths
+        threat_model: Trust boundaries, attacker capabilities, in/out of scope
+
+    Example:
+        >>> ctx = FoundationContext.from_dict(foundation_data)
+        >>> if ctx.is_in_scope("src/api/auth.py"):
+        ...     # Analyze this file
+        >>> prompt = base_prompt.replace("{{FOUNDATION_CONTEXT}}", ctx.to_prompt_context())
     """
     repo_profile: RepoProfile
     scope_map: ScopeMap

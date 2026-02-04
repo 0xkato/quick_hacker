@@ -14,6 +14,8 @@ Key responsibilities:
 
 import asyncio
 import json
+import os
+import shutil
 import time
 import uuid
 from datetime import datetime
@@ -32,7 +34,7 @@ from models.schemas import (
     ProviderConfig,
     ProviderType,
 )
-from providers import Message, get_provider
+from providers import Message
 
 from agents.base_agent import BaseAgent
 from agents.deep_audit.state import CampaignState, Hypothesis, ScopeStatus, HypothesisStatus
@@ -118,24 +120,8 @@ class Overseer(BaseAgent):
         }
         self.provider_config = provider_config  # Store for later use
 
-        # Create the actual LLM provider for Overseer's own LLM calls
-        # Note: The Overseer needs an API key for orchestration even when sub-agents
-        # use Claude Code auth. The sub-agents use `claude -p` CLI, but Overseer
-        # needs direct API access for its orchestration loop.
-        import os
-        api_key = provider_config.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key and use_claude_code_auth:
-            # Warn that Overseer still needs an API key for orchestration
-            print("[Overseer] WARNING: Claude Code auth is for sub-agents only.")
-            print("[Overseer] The Overseer orchestrator still needs ANTHROPIC_API_KEY env var for its LLM calls.")
-
-        overseer_provider_config = ProviderConfig(
-            provider=provider_config["provider"],
-            model=provider_config["model"],
-            api_key=api_key,
-            base_url=provider_config.get("base_url"),
-        )
-        self.provider = get_provider(overseer_provider_config)
+        # Model for Claude CLI calls - use Opus for Overseer orchestration
+        self.model = provider_config.get("model", "opus")
 
         self.dispatcher = WaveDispatcher(
             repo_path=repo_path,
@@ -337,6 +323,116 @@ Begin now. Use ALL available time productively."""
 
 Continue the investigation. What should the next wave focus on?"""
 
+    def _format_conversation_for_cli(self) -> str:
+        """Format conversation history for Claude CLI input.
+
+        Since Claude CLI doesn't maintain session state in -p mode,
+        we include relevant conversation context in each call.
+        """
+        # Get the last user message (current turn)
+        if not self.conversation:
+            return self._build_initial_user_message()
+
+        # Format recent history (last few turns for context)
+        parts = []
+        recent_messages = self.conversation[-6:]  # Last 3 turns (user + assistant pairs)
+
+        for msg in recent_messages:
+            role = msg.role.upper()
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            parts.append(f"[{role}]\n{content}\n")
+
+        return "\n".join(parts)
+
+    async def _call_claude_cli(self, system_prompt: str, user_message: str) -> dict:
+        """Call Claude CLI for Overseer's own LLM orchestration.
+
+        Uses `claude -p` with Claude Code subscription auth (no API key needed).
+
+        Args:
+            system_prompt: System prompt for the LLM
+            user_message: Current user message (includes conversation context)
+
+        Returns:
+            Dict with 'text' (response text) and 'tool_calls' (list of tool calls)
+        """
+        # Check if Claude CLI is available
+        if not shutil.which("claude"):
+            raise RuntimeError("Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code")
+
+        # Build the prompt with conversation context
+        # For multi-turn, we format the conversation as part of the user message
+        full_prompt = user_message
+
+        # Build command
+        cmd = [
+            "claude",
+            "-p",  # Print mode (non-interactive)
+            "--model", self.model,
+            "--permission-mode", "bypassPermissions",
+            "--system-prompt", system_prompt,
+            "--output-format", "json",  # Get structured output
+            "--no-session-persistence",
+            full_prompt,
+        ]
+
+        print(f"[Overseer] Calling Claude CLI with model: {self.model}")
+
+        # Run Claude CLI
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=self.repo_path_str,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+
+        stdout, stderr = await process.communicate()
+        output = stdout.decode("utf-8", errors="replace")
+        error_output = stderr.decode("utf-8", errors="replace")
+
+        if process.returncode != 0:
+            raise RuntimeError(f"Claude CLI error: {error_output}")
+
+        # Parse JSON output
+        try:
+            response_data = json.loads(output)
+        except json.JSONDecodeError:
+            # If not valid JSON, treat as plain text response
+            return {"text": output, "tool_calls": []}
+
+        # Extract text and tool calls from response
+        text = ""
+        tool_calls = []
+
+        # Handle different response formats
+        if isinstance(response_data, dict):
+            # Check for result field (stream-json format)
+            if "result" in response_data:
+                text = response_data.get("result", "")
+            elif "content" in response_data:
+                # Standard message format
+                content = response_data.get("content", [])
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                text += block.get("text", "")
+                            elif block.get("type") == "tool_use":
+                                tool_calls.append({
+                                    "id": block.get("id", str(uuid.uuid4())[:8]),
+                                    "name": block.get("name", ""),
+                                    "arguments": block.get("input", {}),
+                                })
+            else:
+                text = str(response_data)
+        else:
+            text = str(response_data)
+
+        return {"text": text, "tool_calls": tool_calls}
+
     async def analyze(self):
         """Run the Overseer agent loop.
 
@@ -383,32 +479,28 @@ Continue the investigation. What should the next wave focus on?"""
             if self._cancelled:
                 break
 
-            # Call LLM
+            # Build conversation context for Claude CLI
+            # Format recent conversation history into the user message
+            conversation_context = self._format_conversation_for_cli()
+
+            # Call Claude CLI (uses Claude Code subscription auth)
             try:
-                response = await self.provider.complete(
-                    messages=self.conversation,
-                    system=system_prompt,
-                    tools=tools,
-                )
+                response = await self._call_claude_cli(system_prompt, conversation_context)
             except Exception as e:
-                await self.emit_log(f"LLM error: {e}")
+                await self.emit_log(f"Claude CLI error: {e}")
                 self.error_message = str(e)
                 break
 
-            # Track tokens
-            if hasattr(response, 'usage'):
-                self.total_tokens += getattr(response.usage, 'total_tokens', 0)
-
             # Process response
-            assistant_message = response.content
+            assistant_message = response.get("text", "")
             self.conversation.append(Message(role="assistant", content=assistant_message))
 
             # Check for tool calls
-            tool_calls = self._extract_tool_calls(response)
+            tool_calls = response.get("tool_calls", [])
 
             if not tool_calls:
                 # No tool calls - check if this is a final response
-                text_content = self._extract_text(response)
+                text_content = assistant_message
                 if text_content:
                     await self.emit_log(f"Overseer: {text_content[:200]}...")
 

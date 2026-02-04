@@ -28,6 +28,7 @@ import asyncio
 import json
 import os
 import shutil
+import re
 import time
 import uuid
 from datetime import datetime
@@ -57,11 +58,18 @@ from agents.deep_audit.tools import memories as memory_tools
 from agents.deep_audit.tools import finalize as finalize_tools
 from agents.deep_audit.specialists.registry import (
     SpecialistRegistry,
+    SpecialistFamily,
     get_family_for_signal,
     get_specialists_for_signal,
 )
 from agents.deep_audit.foundation import SignalCategory
 from agents.deep_audit.subagents import get_specialist_prompt
+from agents.deep_audit.calibration import (
+    CalibrationStore,
+    ConfidenceCalibrator,
+    VerdictRecord,
+)
+from agents.deep_audit.utils.json_extractor import extract_json_from_output
 from agents.deep_audit.tools.dispatch import DISPATCH_WAVE_TOOL, DISPATCH_AGENT_TOOL, DISPATCH_FOUNDATION_PHASE_TOOL
 from agents.deep_audit.tools.memories import (
     READ_MEMORIES_TOOL,
@@ -179,6 +187,11 @@ class Overseer(BaseAgent):
         # Track metrics
         self.total_tokens = 0
         self.waves_completed = 0
+
+        # Initialize calibration system for tracking specialist accuracy
+        calibration_path = str(self.filesystem.memory_root / "calibration")
+        self.calibration_store = CalibrationStore(calibration_path)
+        self.calibrator = ConfidenceCalibrator(self.calibration_store)
 
     def _init_tools(self):
         """Initialize tools with filesystem and state references."""
@@ -812,10 +825,10 @@ Output JSON with your analysis for each signal.""",
             elif self.waves_completed >= MAX_WAVES:
                 await self.emit_log(f"Maximum waves reached ({MAX_WAVES})")
 
-            # === PHASE 4: VERIFICATION (Specialists) ===
-            # Dispatch specialists to verify high-priority signals
+            # === PHASE 4: SIGNAL ROUTING ===
+            # Route each signal through: Decider → FamilyCoordinator → Specialist → Triager
             if self.campaign_state.confirmed_findings and self.campaign_state.time_remaining() > 60:
-                await self._dispatch_specialists()
+                await self._route_all_signals()
 
             # === PHASE 5: FINALIZE ===
             await self.emit_log("Phase 5: Generating final report...")
@@ -849,45 +862,8 @@ Output JSON with your analysis for each signal.""",
         await self._process_findings()
 
     def _extract_json_from_output(self, content: str) -> Optional[dict]:
-        """Extract JSON from Claude CLI output which may include preamble text."""
-        if not content:
-            return None
-
-        # Try direct parse first
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
-
-        # Try to find ```json code blocks first (common Claude output format)
-        import re
-        json_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
-        if json_block_match:
-            try:
-                return json.loads(json_block_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # Try to find JSON object in the content
-        # Look for first { and last }
-        start = content.find('{')
-        end = content.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(content[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        # Try to find JSON array
-        start = content.find('[')
-        end = content.rfind(']')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return {"items": json.loads(content[start:end + 1])}
-            except json.JSONDecodeError:
-                pass
-
-        return None
+        """Extract JSON from Claude CLI output. Delegates to shared util."""
+        return extract_json_from_output(content)
 
     def _format_signals_for_context(self, max_signals: int = 10) -> str:
         """Format collected signals into a prompt-friendly string for verification agents."""
@@ -1187,6 +1163,737 @@ Output your verdict as JSON.""",
                                         break
         except Exception as e:
             print(f"[Overseer] Error collecting specialist verdicts: {e}")
+
+    # =========================================================================
+    # SIGNAL ROUTING PIPELINE
+    # =========================================================================
+
+    async def _route_signal_through_pipeline(self, signal: dict) -> Optional[dict]:
+        """Route a single signal through Decider → FamilyCoordinator → Specialist → [Devil's Advocate] → Triager.
+
+        Args:
+            signal: A signal dict from SinkHunter with keys like signal_id, category, file_path, etc.
+
+        Returns:
+            Finding dict if signal is verified as vulnerability, None if dismissed.
+        """
+        signal_id = signal.get("signal_id", f"sig-{hash(str(signal)) % 10000}")
+        signal_severity = signal.get("severity", "MEDIUM").upper()
+
+        # Stage 1: Decider - Should we investigate?
+        decider_result = await self._run_decider(signal)
+        if not decider_result or decider_result.get("decision") == "dismiss":
+            print(f"[Overseer] Signal {signal_id}: Dismissed by Decider")
+            return None
+
+        # Stage 2: FamilyCoordinator - Which specialist? What context?
+        coordinator_result = await self._run_family_coordinator(signal, decider_result)
+        if not coordinator_result:
+            print(f"[Overseer] Signal {signal_id}: FamilyCoordinator failed, using defaults")
+            coordinator_result = {"primary_specialist": "generic_auditor", "context_for_specialist": ""}
+
+        # Stage 3: Specialist - Technical validation
+        specialist_start = time.time()
+        specialist_result = await self._run_specialist(signal, coordinator_result)
+        specialist_duration = time.time() - specialist_start
+
+        # Stage 3.5: Devil's Advocate - Challenge quick dismissals of high-severity signals
+        if specialist_result and self._should_challenge_specialist(
+            signal_severity, specialist_result, specialist_duration
+        ):
+            print(f"[Overseer] Signal {signal_id}: Challenging specialist dismissal with Devil's Advocate")
+            challenge_result = await self._run_devils_advocate(signal, specialist_result)
+            if challenge_result and challenge_result.get("recommendation") == "reconsider":
+                # Devil's Advocate found issues - update specialist result
+                specialist_result["challenged"] = True
+                specialist_result["challenge_findings"] = challenge_result.get("challenge_findings", [])
+                # If Devil's Advocate strongly disagrees, override verdict
+                if challenge_result.get("new_evidence"):
+                    specialist_result["verdict"] = "needs_more_info"
+                    specialist_result["devils_advocate_override"] = True
+
+        # Stage 4: Triager - Final classification (even if specialist failed/errored)
+        finding = await self._run_triager(signal, specialist_result)
+
+        return finding
+
+    def _should_challenge_specialist(
+        self,
+        signal_severity: str,
+        specialist_result: dict,
+        duration_seconds: float,
+    ) -> bool:
+        """Determine if specialist result should be challenged by Devil's Advocate.
+
+        Triggers:
+        - High-severity signal dismissed quickly (< 30 seconds)
+        - Low confidence dismissal of critical signal
+        - Generic reasoning for dismissal
+        """
+        # Only challenge dismissals, not confirmations
+        verdict = specialist_result.get("verdict", "").lower()
+        if verdict not in ("not_vulnerable", "invalid", "dismiss", "dismissed"):
+            return False
+
+        # Always challenge quick dismissals of critical/high severity
+        if signal_severity in ("CRITICAL", "HIGH"):
+            # Quick dismissal (< 30 seconds)
+            if duration_seconds < 30:
+                return True
+            # Low confidence
+            confidence = specialist_result.get("confidence", 100)
+            if isinstance(confidence, (int, float)) and confidence < 70:
+                return True
+
+        return False
+
+    async def _run_devils_advocate(self, signal: dict, specialist_result: dict) -> Optional[dict]:
+        """Run Devil's Advocate to challenge a specialist dismissal.
+
+        Devil's Advocate tries to prove the specialist wrong by:
+        - Finding alternative paths to exploitation
+        - Checking for bypass conditions
+        - Looking for edge cases the specialist missed
+        """
+        from agents.deep_audit.subagents import get_devils_advocate_prompt
+
+        signal_context = json.dumps(signal, indent=2)
+        dismissal_verdict = json.dumps(specialist_result, indent=2)
+
+        prompt = get_devils_advocate_prompt(signal_context, dismissal_verdict)
+
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="DevilsAdvocate",
+                objective=prompt,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/challenge/{signal.get('signal_id', 'unknown')}_challenge.json",
+                time_budget=120,  # 2 minutes for thorough challenge
+            )
+
+            if result and result.output:
+                return self._extract_json_from_output(result.output)
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] Devil's Advocate failed: {e}")
+            return None
+
+    async def _run_decider(self, signal: dict) -> Optional[dict]:
+        """Stage 1: Decider evaluates if signal is worth investigating.
+
+        Decider looks at each signal individually and decides:
+        - investigate: Signal looks promising, route to specialist
+        - dismiss: Signal is clearly not a vulnerability (e.g., test code, dead code)
+
+        Args:
+            signal: Signal dict from hunter
+
+        Returns:
+            Dict with decision and routing info, or None on error
+        """
+        signal_context = json.dumps(signal, indent=2)
+
+        objective = f"""Evaluate this signal and decide if it's worth investigating.
+
+## Signal to Evaluate
+```json
+{signal_context}
+```
+
+Decide:
+- "investigate" if this looks like a real potential vulnerability
+- "dismiss" if this is clearly not a vulnerability (test code, unreachable, etc.)
+
+Output your decision as JSON with keys: decision, rationale"""
+
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="Decider",
+                objective=objective,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/routing/decider_{signal.get('signal_id', 'unknown')}.json",
+                time_budget=60,  # 1 minute max for decision
+            )
+
+            if result and result.output:
+                return self._extract_json_from_output(result.output)
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] Decider failed for signal: {e}")
+            # On error, default to investigate (don't drop signals)
+            return {"decision": "investigate", "error": str(e)}
+
+    async def _run_family_coordinator(self, signal: dict, decider_result: dict) -> Optional[dict]:
+        """Stage 2: FamilyCoordinator picks specialists and provides context.
+
+        IMPORTANT: FamilyCoordinator provides CODE CONTEXT to specialists,
+        NOT the threat model. The threat model is only used by Triager.
+
+        Args:
+            signal: Signal dict from hunter
+            decider_result: Output from Decider stage
+
+        Returns:
+            Dict with specialist assignment and context, or None on error
+        """
+        from agents.deep_audit.foundation import SignalCategory
+
+        # Determine the family for this signal
+        category_str = signal.get("category", signal.get("vulnerability_type", "unknown"))
+        try:
+            category = SignalCategory(category_str.lower().replace(" ", "_").replace("-", "_"))
+            family = get_family_for_signal(category)
+        except (ValueError, KeyError):
+            family = SpecialistFamily.API_DESIGN  # Fallback
+
+        # Get specialists in this family
+        registry = SpecialistRegistry()
+        family_specialists = registry.get_by_family(family)
+        specialist_list = "\n".join([f"- {s.id}: {s.proficiency}" for s in family_specialists])
+
+        signal_context = json.dumps(signal, indent=2)
+
+        objective = f"""Coordinate specialist assignment for this signal.
+
+## Signal
+```json
+{signal_context}
+```
+
+## Family: {family.value}
+
+## Available Specialists
+{specialist_list}
+
+Pick the most appropriate specialist(s) and provide code context they need.
+DO NOT include threat model - that's for Triager only.
+
+Output as JSON with: primary_specialist, secondary_specialist (optional), context_for_specialist"""
+
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="FamilyCoordinator",
+                objective=objective,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/routing/coordinator_{signal.get('signal_id', 'unknown')}.json",
+                time_budget=90,  # 1.5 minutes
+            )
+
+            if result and result.output:
+                coord_result = self._extract_json_from_output(result.output)
+                if coord_result:
+                    coord_result["family"] = family.value
+                return coord_result
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] FamilyCoordinator failed: {e}")
+            # On error, use default specialist for category
+            try:
+                category = SignalCategory(category_str.lower().replace(" ", "_").replace("-", "_"))
+                specialists = get_specialists_for_signal(category)
+            except (ValueError, KeyError):
+                specialists = []
+            return {
+                "primary_specialist": specialists[0] if specialists else "generic_auditor",
+                "family": family.value,
+                "context_for_specialist": "Error getting coordinator context",
+                "error": str(e),
+            }
+
+    async def _run_specialist(self, signal: dict, coordinator_result: dict) -> Optional[dict]:
+        """Stage 3: Specialist validates signal technically.
+
+        Specialist focuses ONLY on technical validation:
+        - Is this actually a vulnerability?
+        - Can it be exploited?
+        - What's the technical evidence?
+
+        For CRITICAL severity signals, runs cross-validation with 2 specialists.
+        If they disagree, dispatches Arbiter to resolve.
+
+        Args:
+            signal: Signal dict from hunter
+            coordinator_result: Output from FamilyCoordinator with specialist assignment
+
+        Returns:
+            Dict with verdict (vulnerable/not_vulnerable/needs_more_info), or None on error
+        """
+        signal_severity = signal.get("severity", "MEDIUM").upper()
+        signal_id = signal.get('signal_id', 'unknown')
+
+        # For critical signals, use cross-validation
+        if signal_severity == "CRITICAL":
+            return await self._run_specialist_cross_validation(signal, coordinator_result)
+
+        # Standard single-specialist flow for non-critical
+        return await self._run_single_specialist(signal, coordinator_result)
+
+    async def _run_single_specialist(self, signal: dict, coordinator_result: dict) -> Optional[dict]:
+        """Run a single specialist for standard validation."""
+        specialist_id = coordinator_result.get("primary_specialist", "generic_auditor")
+        context = coordinator_result.get("context_for_specialist", "")
+        signal_id = signal.get('signal_id', 'unknown')
+
+        # Get specialist info
+        registry = SpecialistRegistry()
+        specialist_info = registry.get_by_id(specialist_id)
+
+        if not specialist_info:
+            # Fallback to first specialist in family
+            family_str = coordinator_result.get("family", "api_design")
+            try:
+                family = SpecialistFamily(family_str)
+                family_specialists = registry.get_by_family(family)
+                if family_specialists:
+                    specialist_info = family_specialists[0]
+            except (ValueError, KeyError):
+                pass
+
+        if not specialist_info:
+            print(f"[Overseer] No specialist found for {specialist_id}")
+            return {"verdict": "needs_more_info", "error": "No specialist found"}
+
+        # Check if this specialist needs cross-validation based on calibration history
+        specialist_type = specialist_info.id
+        if self.calibrator.should_require_cross_validation(specialist_type):
+            print(f"[Overseer] Calibration: {specialist_type} requires cross-validation due to historical performance")
+            # Promote to cross-validation even if not critical
+            return await self._run_specialist_cross_validation(signal, coordinator_result)
+
+        # Format signal for specialist
+        signal_context = f"""## Signal
+- ID: {signal_id}
+- Category: {signal.get('category', signal.get('vulnerability_type', 'unknown'))}
+- File: {signal.get('file_path', signal.get('location', 'unknown'))}
+- Line: {signal.get('line_start', signal.get('line_number', '?'))}
+- Code: {signal.get('code_snippet', 'N/A')}
+- Why suspicious: {signal.get('why_suspicious', signal.get('description', 'N/A'))}
+
+## Additional Context from Coordinator
+{context}"""
+
+        prompt = get_specialist_prompt(
+            specialist_name=specialist_info.name,
+            specialist_id=specialist_info.id,
+            proficiency=specialist_info.proficiency,
+            signal_id=signal_id,
+            signal_context=signal_context,
+        )
+
+        start_time = time.time()
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="Specialist",
+                objective=prompt,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/verification/{specialist_id}_{signal_id}.json",
+                time_budget=180,
+            )
+
+            analysis_time = time.time() - start_time
+
+            if result and result.output:
+                verdict = self._extract_json_from_output(result.output)
+                if verdict:
+                    verdict["specialist_id"] = specialist_id
+                    verdict["specialist_name"] = specialist_info.name
+
+                    # Record verdict in calibration system
+                    confidence = verdict.get("confidence", 50)
+                    self.calibration_store.record_verdict(VerdictRecord(
+                        signal_id=signal_id,
+                        specialist_type=specialist_type,
+                        verdict=verdict.get("verdict", "unknown"),
+                        confidence=confidence,
+                        analysis_time_seconds=analysis_time,
+                    ))
+
+                    # Apply trust weighting from calibration
+                    weighted_verdict, weighted_confidence = self.calibrator.weight_verdict(
+                        specialist_type,
+                        verdict.get("verdict", "unknown"),
+                        confidence,
+                    )
+                    verdict["original_confidence"] = confidence
+                    verdict["weighted_confidence"] = weighted_confidence
+                    verdict["trust_weight"] = self.calibrator.calculate_trust_weight(specialist_type)
+
+                    # Check for calibration alerts
+                    alerts = self.calibrator.check_alerts(specialist_type)
+                    if alerts:
+                        verdict["calibration_alerts"] = [a.message for a in alerts]
+                        for alert in alerts:
+                            print(f"[Overseer] Calibration Alert: {alert.message}")
+
+                return verdict
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] Specialist {specialist_id} failed: {e}")
+            return {"verdict": "error", "specialist_id": specialist_id, "error": str(e)}
+
+    async def _run_specialist_cross_validation(self, signal: dict, coordinator_result: dict) -> Optional[dict]:
+        """Run cross-validation with 2 specialists for critical signals.
+
+        If specialists disagree, dispatches Arbiter to resolve.
+        """
+        signal_id = signal.get('signal_id', 'unknown')
+        print(f"[Overseer] Signal {signal_id}: Running cross-validation (CRITICAL severity)")
+
+        # Get primary and secondary specialists
+        primary_id = coordinator_result.get("primary_specialist", "generic_auditor")
+        secondary_id = coordinator_result.get("secondary_specialist")
+
+        # If no secondary, get another from the same family
+        if not secondary_id:
+            registry = SpecialistRegistry()
+            family_str = coordinator_result.get("family", "api_design")
+            try:
+                family = SpecialistFamily(family_str)
+                family_specialists = registry.get_by_family(family)
+                for s in family_specialists:
+                    if s.id != primary_id:
+                        secondary_id = s.id
+                        break
+            except (ValueError, KeyError):
+                pass
+
+        if not secondary_id:
+            # Can't cross-validate, fall back to single specialist
+            return await self._run_single_specialist(signal, coordinator_result)
+
+        # Run both specialists in parallel
+        primary_task = self._run_single_specialist(signal, {**coordinator_result, "primary_specialist": primary_id})
+        secondary_task = self._run_single_specialist(signal, {**coordinator_result, "primary_specialist": secondary_id})
+
+        results = await asyncio.gather(primary_task, secondary_task, return_exceptions=True)
+
+        primary_result = results[0] if not isinstance(results[0], Exception) else None
+        secondary_result = results[1] if not isinstance(results[1], Exception) else None
+
+        # Check for agreement
+        if primary_result and secondary_result:
+            primary_verdict = primary_result.get("verdict", "").lower()
+            secondary_verdict = secondary_result.get("verdict", "").lower()
+
+            # Normalize verdicts
+            primary_is_vuln = primary_verdict in ("vulnerable", "exploitable", "valid")
+            secondary_is_vuln = secondary_verdict in ("vulnerable", "exploitable", "valid")
+
+            if primary_is_vuln == secondary_is_vuln:
+                # Specialists agree
+                print(f"[Overseer] Signal {signal_id}: Specialists agree - {primary_verdict}")
+                primary_result["cross_validated"] = True
+                primary_result["secondary_verdict"] = secondary_verdict
+                return primary_result
+            else:
+                # Disagreement - dispatch Arbiter
+                print(f"[Overseer] Signal {signal_id}: Specialist disagreement - dispatching Arbiter")
+                return await self._run_arbiter(signal, primary_result, secondary_result)
+
+        # If one failed, use the other
+        return primary_result or secondary_result
+
+    async def _run_arbiter(self, signal: dict, verdict_a: dict, verdict_b: dict) -> Optional[dict]:
+        """Dispatch Arbiter to resolve specialist disagreement."""
+        from agents.deep_audit.subagents import get_arbiter_prompt
+
+        signal_id = signal.get('signal_id', 'unknown')
+        signal_context = json.dumps(signal, indent=2)
+
+        specialist_verdicts = f"""### Specialist A: {verdict_a.get('specialist_id', 'unknown')}
+Verdict: {verdict_a.get('verdict', 'unknown')}
+Confidence: {verdict_a.get('confidence', 'N/A')}
+Reasoning: {verdict_a.get('reasoning', 'None')}
+
+### Specialist B: {verdict_b.get('specialist_id', 'unknown')}
+Verdict: {verdict_b.get('verdict', 'unknown')}
+Confidence: {verdict_b.get('confidence', 'N/A')}
+Reasoning: {verdict_b.get('reasoning', 'None')}"""
+
+        prompt = get_arbiter_prompt(
+            signal_id=signal_id,
+            disagreement_context=signal_context,
+            specialist_verdicts=specialist_verdicts,
+        )
+
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="Arbiter",
+                objective=prompt,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/arbiter/{signal_id}_arbiter.json",
+                time_budget=240,  # 4 minutes for Arbiter
+            )
+
+            if result and result.output:
+                arbiter_result = self._extract_json_from_output(result.output)
+                if arbiter_result:
+                    arbiter_result["arbitrated"] = True
+                    arbiter_result["specialist_a"] = verdict_a.get("specialist_id")
+                    arbiter_result["specialist_b"] = verdict_b.get("specialist_id")
+                return arbiter_result
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] Arbiter failed: {e}")
+            # Fall back to primary specialist result
+            return verdict_a
+
+    async def _run_triager(self, signal: dict, specialist_result: Optional[dict]) -> Optional[dict]:
+        """Stage 4: Triager classifies signal based on threat model.
+
+        Triager makes final classification:
+        - SECURITY_VULNERABILITY: Real, exploitable vuln matching threat model
+        - HARDENING: Real issue but not in threat model scope (nice-to-fix)
+        - BY_DESIGN: Intentional behavior, not a vulnerability
+        - DISMISSED: Not a real vulnerability
+
+        Triager considers:
+        - Specialist's technical verdict (if available)
+        - Threat model (what attackers are in scope)
+        - Business context (what's actually at risk)
+
+        Args:
+            signal: Signal dict from hunter
+            specialist_result: Output from Specialist (may be None or have error)
+
+        Returns:
+            Finding dict if classified as vulnerability, None if dismissed
+        """
+        # Get threat model from foundation context
+        threat_model = "Unknown - no threat model available"
+        try:
+            tm_content = self.filesystem.read_file("/memories/foundation/threat_model.json")
+            if tm_content:
+                tm_data = self._extract_json_from_output(tm_content)
+                if tm_data:
+                    threat_model = json.dumps(tm_data, indent=2)
+        except Exception:
+            pass
+
+        # Format specialist verdict
+        if specialist_result:
+            if specialist_result.get("error"):
+                specialist_summary = f"Specialist encountered error: {specialist_result.get('error')}"
+            else:
+                verdict = specialist_result.get("verdict", "unknown")
+                confidence = specialist_result.get("confidence", "N/A")
+                reasoning = specialist_result.get("reasoning", "No reasoning provided")
+                specialist_summary = f"""Verdict: {verdict}
+Confidence: {confidence}
+Reasoning: {reasoning}"""
+        else:
+            specialist_summary = "No specialist verdict available (specialist failed or timed out)"
+
+        signal_context = json.dumps(signal, indent=2)
+
+        objective = f"""Make final classification for this signal.
+
+## Signal
+```json
+{signal_context}
+```
+
+## Specialist Analysis
+{specialist_summary}
+
+## Threat Model
+```json
+{threat_model}
+```
+
+Classify as:
+- SECURITY_VULNERABILITY: Real vuln, attacker in scope can exploit
+- HARDENING: Real issue but attacker not in scope (nice-to-fix)
+- BY_DESIGN: Intentional behavior
+- DISMISSED: Not a real vulnerability
+
+Output as JSON with: classification, severity, title, description, recommendation"""
+
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="Triager",
+                objective=objective,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/triage/{signal.get('signal_id', 'unknown')}_triage.json",
+                time_budget=120,  # 2 minutes
+            )
+
+            if result and result.output:
+                triage_result = self._extract_json_from_output(result.output)
+                if triage_result:
+                    classification = triage_result.get("classification", "DISMISSED")
+
+                    if classification == "SECURITY_VULNERABILITY":
+                        # Build finding from triage result
+                        return {
+                            "signal_id": signal.get("signal_id"),
+                            "title": triage_result.get("title", signal.get("title", "Untitled")),
+                            "description": triage_result.get("description", ""),
+                            "severity": triage_result.get("severity", "MEDIUM"),
+                            "vulnerability_type": signal.get("category", signal.get("vulnerability_type", "unknown")),
+                            "location": signal.get("file_path", signal.get("location", "")),
+                            "file_path": signal.get("file_path", ""),
+                            "line_start": signal.get("line_start", signal.get("line_number")),
+                            "code_snippet": signal.get("code_snippet", ""),
+                            "remediation": triage_result.get("recommendation", ""),
+                            "confidence": specialist_result.get("confidence", 0.7) if specialist_result else 0.5,
+                            "verified_by": specialist_result.get("specialist_id") if specialist_result else None,
+                            "classification": classification,
+                        }
+                    elif classification == "HARDENING":
+                        # Still return as finding but lower priority
+                        return {
+                            "signal_id": signal.get("signal_id"),
+                            "title": f"[Hardening] {triage_result.get('title', signal.get('title', 'Untitled'))}",
+                            "description": triage_result.get("description", ""),
+                            "severity": "LOW",  # Hardening items are always low
+                            "vulnerability_type": signal.get("category", "hardening"),
+                            "location": signal.get("file_path", ""),
+                            "file_path": signal.get("file_path", ""),
+                            "line_start": signal.get("line_start"),
+                            "code_snippet": signal.get("code_snippet", ""),
+                            "remediation": triage_result.get("recommendation", ""),
+                            "confidence": 0.5,
+                            "classification": classification,
+                        }
+                    # BY_DESIGN and DISMISSED return None
+                    return None
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] Triager failed: {e}")
+            return None
+
+    async def _route_all_signals(self):
+        """Route all collected signals through the verification pipeline.
+
+        Each signal goes through:
+        1. Decider - Should we investigate?
+        2. FamilyCoordinator - Which specialist? What context?
+        3. Specialist - Is this technically a vulnerability?
+        4. Triager - Final classification based on threat model
+        """
+        signals = self.campaign_state.confirmed_findings.copy()  # Copy since we'll modify
+        self.campaign_state.confirmed_findings = []  # Clear, will re-add verified ones
+
+        await self.emit_log(f"Phase 4: Routing {len(signals)} signals through verification pipeline...")
+        print(f"[Overseer] Routing {len(signals)} signals through Decider → FamilyCoordinator → Specialist → Triager")
+
+        # Emit phase start event for UI
+        await self.emit(
+            WSMessageType.PROGRESS,
+            {
+                "type": "phase_start",
+                "phase": "routing",
+                "phase_number": 4,
+                "phase_name": "Signal Routing",
+                "signals_total": len(signals),
+                "time_remaining": self.campaign_state.time_remaining(),
+            }
+        )
+
+        # Create flow node for routing phase
+        routing_node = flow_service.add_node(
+            self.id,
+            node_type="analysis",
+            label="Signal Routing",
+            parent_id=None,
+            data={"phase": "routing", "signals_count": len(signals)},
+        )
+        if routing_node:
+            flow_service.update_node_status(self.id, routing_node.id, "running")
+        await self.emit_flow_update()
+
+        verified_findings = []
+        dismissed_count = 0
+        error_count = 0
+
+        for i, signal in enumerate(signals):
+            # Check time budget
+            if self.campaign_state.time_remaining() < 30:
+                await self.emit_log(f"Time budget low, stopping routing at signal {i+1}/{len(signals)}")
+                break
+
+            signal_id = signal.get("signal_id", f"sig-{i}")
+            await self.emit_log(f"Routing signal {i+1}/{len(signals)}: {signal_id}")
+
+            # Emit progress event for UI
+            await self.emit(
+                WSMessageType.PROGRESS,
+                {
+                    "type": "signal_routing",
+                    "signal_id": signal_id,
+                    "signal_index": i + 1,
+                    "signals_total": len(signals),
+                    "signal_category": signal.get("category", "unknown"),
+                    "signal_severity": signal.get("severity", "MEDIUM"),
+                    "status": "routing",
+                    "time_remaining": self.campaign_state.time_remaining(),
+                }
+            )
+
+            try:
+                finding = await self._route_signal_through_pipeline(signal)
+                if finding:
+                    verified_findings.append(finding)
+                    await self.emit_log(f"  → Verified: {finding.get('title', 'Untitled')}")
+                    # Emit verified finding event
+                    await self.emit(
+                        WSMessageType.PROGRESS,
+                        {
+                            "type": "signal_verified",
+                            "signal_id": signal_id,
+                            "title": finding.get("title", "Untitled"),
+                            "severity": finding.get("severity", "MEDIUM"),
+                            "verified_count": len(verified_findings),
+                        }
+                    )
+                else:
+                    dismissed_count += 1
+                    await self.emit_log(f"  → Dismissed")
+                    # Emit dismissed event
+                    await self.emit(
+                        WSMessageType.PROGRESS,
+                        {
+                            "type": "signal_dismissed",
+                            "signal_id": signal_id,
+                            "dismissed_count": dismissed_count,
+                        }
+                    )
+            except Exception as e:
+                error_count += 1
+                print(f"[Overseer] Error routing signal {signal_id}: {e}")
+                await self.emit_log(f"  → Error: {e}")
+
+        # Update confirmed findings with verified ones
+        self.campaign_state.confirmed_findings = verified_findings
+
+        if routing_node:
+            flow_service.update_node_status(self.id, routing_node.id, "completed")
+        await self.emit_flow_update()
+
+        await self.emit_log(f"Routing complete: {len(verified_findings)} verified, {dismissed_count} dismissed, {error_count} errors")
+        print(f"[Overseer] Routing complete: {len(verified_findings)} verified, {dismissed_count} dismissed, {error_count} errors")
+
+        # Emit phase complete event
+        await self.emit(
+            WSMessageType.PROGRESS,
+            {
+                "type": "phase_complete",
+                "phase": "routing",
+                "phase_number": 4,
+                "phase_name": "Signal Routing",
+                "verified_count": len(verified_findings),
+                "dismissed_count": dismissed_count,
+                "error_count": error_count,
+                "time_remaining": self.campaign_state.time_remaining(),
+            }
+        )
 
     async def _process_findings(self):
         """Convert campaign state findings to Finding objects."""

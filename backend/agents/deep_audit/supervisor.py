@@ -1,4 +1,23 @@
-"""Deep Audit Supervisor using LangGraph + Deep Agents."""
+"""Deep Audit Supervisor using LangGraph + Deep Agents.
+
+DEPRECATED: This module is the legacy LangGraph-based supervisor.
+Use the Overseer class from overseer.py instead, which provides:
+- Foundation-first analysis with 64 specialists
+- Signal routing pipeline (Decider → FamilyCoordinator → Specialist → Triager)
+- Cross-validation and Devil's Advocate challenges
+- Confidence calibration
+
+The DeepAuditSupervisor relies on stub implementations in nodes.py
+and should not be used for new deployments.
+"""
+
+import warnings
+warnings.warn(
+    "agents.deep_audit.supervisor.DeepAuditSupervisor is deprecated. "
+    "Use Overseer from agents.deep_audit.overseer instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import uuid
 from datetime import datetime

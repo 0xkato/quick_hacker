@@ -1,23 +1,46 @@
-"""Memory access tools for Overseer."""
+"""Memory access tools for Overseer.
+
+Supports both explicit context passing (preferred) and global state (legacy).
+New code should use context-aware functions; global state is for backward compatibility.
+"""
 
 import json
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
     from agents.deep_audit.filesystem import MemoriesFilesystem
+    from agents.deep_audit.context import ScanContext
 
 
-# Will be set by Overseer
+# Will be set by Overseer (DEPRECATED - use context instead)
 _filesystem: "MemoriesFilesystem" = None
 
 
 def set_filesystem(filesystem: "MemoriesFilesystem"):
-    """Set the filesystem instance for tools to use."""
+    """Set the filesystem instance for tools to use.
+
+    DEPRECATED: Use ScanContext instead for thread-safe operation.
+    """
     global _filesystem
     _filesystem = filesystem
 
 
-def read_memories(path: str) -> str:
+def _get_filesystem(ctx: Optional["ScanContext"] = None) -> Optional["MemoriesFilesystem"]:
+    """Get filesystem from context or fall back to global."""
+    if ctx is not None:
+        return ctx.filesystem
+
+    # Try thread-local context
+    from agents.deep_audit.context import get_current_context
+    current_ctx = get_current_context()
+    if current_ctx is not None:
+        return current_ctx.filesystem
+
+    # Fall back to global (deprecated)
+    return _filesystem
+
+
+def read_memories(path: str, ctx: Optional["ScanContext"] = None) -> str:
     """Read an artifact from /memories/.
 
     Args:
@@ -26,18 +49,20 @@ def read_memories(path: str) -> str:
               - /memories/repo_profile.json
               - /memories/scopes/backend/signals.json
               - /memories/overseer/wave_1_synthesis.md
+        ctx: Optional ScanContext for thread-safe operation
 
     Returns:
         File contents as string, or JSON error
     """
-    if _filesystem is None:
+    filesystem = _get_filesystem(ctx)
+    if filesystem is None:
         return json.dumps({"error": "Filesystem not initialized"})
 
     try:
         if not path.startswith("/memories/"):
             return json.dumps({"error": f"Path must start with /memories/: {path}"})
 
-        content = _filesystem.read_file(path)
+        content = filesystem.read_file(path)
 
         # Try to parse as JSON for better formatting
         if path.endswith(".json"):
@@ -55,17 +80,19 @@ def read_memories(path: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-def list_memories(path: str = "/memories/") -> str:
+def list_memories(path: str = "/memories/", ctx: Optional["ScanContext"] = None) -> str:
     """List contents of a /memories/ directory.
 
     Args:
         path: Directory path to list, must start with /memories/
               Default is /memories/ (root)
+        ctx: Optional ScanContext for thread-safe operation
 
     Returns:
         JSON list of files/directories, or error
     """
-    if _filesystem is None:
+    filesystem = _get_filesystem(ctx)
+    if filesystem is None:
         return json.dumps({"error": "Filesystem not initialized"})
 
     try:
@@ -76,7 +103,7 @@ def list_memories(path: str = "/memories/") -> str:
         if not path.endswith("/"):
             path = path + "/"
 
-        items = _filesystem.ls(path.rstrip("/"))
+        items = filesystem.ls(path.rstrip("/"))
 
         # Categorize items
         result = {
@@ -87,7 +114,7 @@ def list_memories(path: str = "/memories/") -> str:
 
         for item in items:
             item_path = f"{path.rstrip('/')}/{item}"
-            if _filesystem.is_dir(item_path):
+            if filesystem.is_dir(item_path):
                 result["directories"].append(item)
             else:
                 result["files"].append(item)
@@ -100,44 +127,48 @@ def list_memories(path: str = "/memories/") -> str:
         return json.dumps({"error": str(e)})
 
 
-def write_synthesis(wave_id: int, synthesis_content: str) -> str:
+def write_synthesis(wave_id: int, synthesis_content: str, ctx: Optional["ScanContext"] = None) -> str:
     """Write wave synthesis document.
 
     Args:
         wave_id: Wave number
         synthesis_content: Markdown content for wave synthesis
+        ctx: Optional ScanContext for thread-safe operation
 
     Returns:
         Path where synthesis was written, or error
     """
-    if _filesystem is None:
+    filesystem = _get_filesystem(ctx)
+    if filesystem is None:
         return json.dumps({"error": "Filesystem not initialized"})
 
     try:
-        path = _filesystem.save_wave_synthesis(wave_id, synthesis_content)
+        path = filesystem.save_wave_synthesis(wave_id, synthesis_content)
         return json.dumps({"success": True, "path": path})
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
-def write_artifact(path: str, content: str) -> str:
+def write_artifact(path: str, content: str, ctx: Optional["ScanContext"] = None) -> str:
     """Write an artifact to /memories/.
 
     Args:
         path: Path to write, must start with /memories/
         content: Content to write
+        ctx: Optional ScanContext for thread-safe operation
 
     Returns:
         JSON with success status and path
     """
-    if _filesystem is None:
+    filesystem = _get_filesystem(ctx)
+    if filesystem is None:
         return json.dumps({"error": "Filesystem not initialized"})
 
     try:
         if not path.startswith("/memories/"):
             return json.dumps({"error": f"Path must start with /memories/: {path}"})
 
-        written_path = _filesystem.write_file(path, content)
+        written_path = filesystem.write_file(path, content)
         return json.dumps({"success": True, "path": written_path})
     except Exception as e:
         return json.dumps({"error": str(e)})

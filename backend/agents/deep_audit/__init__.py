@@ -5,6 +5,7 @@ from agents.deep_audit.overseer import Overseer
 from agents.deep_audit.state import CampaignState, Hypothesis, HypothesisStatus
 from agents.deep_audit.filesystem import MemoriesFilesystem
 from agents.deep_audit.dispatcher import WaveDispatcher
+from agents.deep_audit.context import ScanContext, ScanContextManager
 from agents.deep_audit.foundation import (
     FoundationContext,
     RepoProfile,
@@ -20,6 +21,8 @@ from agents.deep_audit.foundation import (
 __all__ = [
     "DeepAuditSupervisor",
     "Overseer",
+    "ScanContext",
+    "ScanContextManager",
     "CampaignState",
     "Hypothesis",
     "HypothesisStatus",

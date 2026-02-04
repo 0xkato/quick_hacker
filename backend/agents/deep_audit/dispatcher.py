@@ -27,6 +27,7 @@ from agents.deep_audit.foundation import (
     ThreatModel,
 )
 from agents.deep_audit.state import WaveTask
+from agents.deep_audit.utils.json_extractor import extract_json_from_output
 from models.schemas import WSMessage, WSMessageType
 from services.observability_service import observability_service
 import time
@@ -63,6 +64,7 @@ class SubagentResult(BaseModel):
     agent_type: str
     status: str  # "completed", "failed", "timeout"
     output_path: Optional[str] = None
+    output: Optional[str] = None  # Raw output from the agent
     started_at: datetime
     completed_at: datetime
     error: Optional[str] = None
@@ -87,6 +89,11 @@ AGENT_TOOL_SUBSETS = {
     "ScopeMapper": ["read_file", "list_directory", "search_code", "get_file_structure"],
     "EntrypointHunter": ["read_file", "search_code", "grep_semantic", "get_entry_points"],
     "SinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    # Specialized SinkHunters
+    "MemorySinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    "InjectionSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    "WebSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    "CryptoSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
     "DataflowTracer": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
     "ThreatModeler": ["read_file", "get_repo_tree", "get_file_structure"],
     "AuthBoundaryMapper": ["read_file", "search_code", "grep_semantic", "get_entry_points"],
@@ -103,6 +110,9 @@ AGENT_TOOL_SUBSETS = {
 
     # Resolution agents
     "Arbiter": ["read_file", "search_code", "trace_data_flow", "find_usages"],
+
+    # Challenge agents
+    "DevilsAdvocate": ["read_file", "search_code", "find_usages"],
 }
 
 
@@ -272,6 +282,61 @@ class WaveDispatcher:
         # Legacy fallback (should not reach here with use_claude_code_auth=True)
         return await self._spawn_subagent_react(task, foundation_context, started_at)
 
+    async def _read_process_output_limited(
+        self,
+        process: asyncio.subprocess.Process,
+        max_size: int,
+    ) -> tuple[str, str, bool]:
+        """Read process output with size limit to prevent OOM.
+
+        Args:
+            process: The subprocess to read from
+            max_size: Maximum bytes to read before truncating
+
+        Returns:
+            Tuple of (stdout_str, stderr_str, was_truncated)
+        """
+        stdout_chunks = []
+        stderr_chunks = []
+        stdout_size = 0
+        stderr_size = 0
+        was_truncated = False
+
+        async def read_stream(stream, chunks, current_size):
+            nonlocal was_truncated
+            size = current_size
+            while True:
+                chunk = await stream.read(8192)  # Read in 8KB chunks
+                if not chunk:
+                    break
+                if size + len(chunk) > max_size:
+                    # Truncate
+                    remaining = max_size - size
+                    if remaining > 0:
+                        chunks.append(chunk[:remaining])
+                    was_truncated = True
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            return size
+
+        # Read stdout and stderr concurrently
+        await asyncio.gather(
+            read_stream(process.stdout, stdout_chunks, stdout_size),
+            read_stream(process.stderr, stderr_chunks, stderr_size),
+        )
+
+        # Wait for process to complete
+        await process.wait()
+
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+
+        if was_truncated:
+            stdout += "\n\n[OUTPUT TRUNCATED - exceeded size limit]"
+
+        return stdout, stderr, was_truncated
+
     async def _spawn_subagent_cli(
         self,
         task: DispatchTask,
@@ -389,14 +454,17 @@ Begin your analysis now."""
                 env={**os.environ, "NO_COLOR": "1"},  # Disable color codes in output
             )
 
-            # Wait for completion with timeout
+            # Wait for completion with timeout and output size limit
+            # Limit output to 10MB to prevent OOM from runaway subagents
+            MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                output, error_output, was_truncated = await asyncio.wait_for(
+                    self._read_process_output_limited(process, MAX_OUTPUT_SIZE),
                     timeout=task.time_budget,
                 )
-                output = stdout.decode("utf-8", errors="replace")
-                error_output = stderr.decode("utf-8", errors="replace")
+
+                if was_truncated:
+                    print(f"[Dispatcher] {agent_id} output truncated at {MAX_OUTPUT_SIZE} bytes")
 
                 if process.returncode != 0:
                     error_message = f"Claude CLI exited with code {process.returncode}: {error_output}"
@@ -426,6 +494,24 @@ Begin your analysis now."""
                 model=model_arg,
                 subagent=task.agent_type,
             )
+
+            # Check if output contains questions - surface them for visibility
+            questions = self._detect_questions_in_output(output) if output else []
+            if questions and not error_message:
+                for q in questions:
+                    print(f"[Dispatcher] {agent_id} asked: {q[:150]}...")
+                # Broadcast questions to UI for user visibility
+                self._broadcast(
+                    WSMessageType.AGENT_STATUS,
+                    agent_id,
+                    {
+                        "agent_id": agent_id,
+                        "agent_type": task.agent_type,
+                        "status": "has_questions",
+                        "questions": questions,
+                        "task_id": task.task_id,
+                    }
+                )
 
             # Write output to deliverable path if we have content
             if output and not error_message:
@@ -458,6 +544,7 @@ Begin your analysis now."""
                 agent_type=task.agent_type,
                 status=status,
                 output_path=task.deliverable,
+                output=output if not error_message else None,  # Include raw output
                 started_at=started_at,
                 completed_at=completed_at,
                 error=error_message,
@@ -724,18 +811,40 @@ Begin your analysis now."""
 
     async def dispatch_single(
         self,
-        task: DispatchTask,
+        task: Optional[DispatchTask] = None,
         foundation_context: Optional[FoundationContext] = None,
+        *,
+        agent_type: Optional[str] = None,
+        objective: Optional[str] = None,
+        scope: Optional[str] = None,
+        deliverable: Optional[str] = None,
+        time_budget: Optional[int] = None,
     ) -> SubagentResult:
         """Dispatch a single sub-agent (convenience method).
 
+        Can be called with a DispatchTask object OR with keyword arguments.
+
         Args:
-            task: The task to execute
+            task: The task to execute (if provided, other args ignored)
             foundation_context: Optional Foundation Context to inject into prompt
+            agent_type: Agent type (if not using task)
+            objective: What to accomplish (if not using task)
+            scope: Directory scope (if not using task)
+            deliverable: Output path (if not using task)
+            time_budget: Seconds for this task (if not using task)
 
         Returns:
             SubagentResult
         """
+        # If keyword args provided instead of task, build the task
+        if task is None and agent_type is not None:
+            task = DispatchTask(
+                agent_type=agent_type,
+                objective=objective or "",
+                scope=scope or self.repo_path,
+                deliverable=deliverable or f"/memories/{agent_type.lower()}_output.json",
+                time_budget=time_budget or 300,
+            )
         return await self._spawn_subagent(task, foundation_context)
 
     async def dispatch_foundation_phase(self) -> tuple[WaveResult, Optional[FoundationContext]]:
@@ -783,44 +892,8 @@ Begin your analysis now."""
         return result, None
 
     def _extract_json_from_output(self, content: str) -> Optional[dict]:
-        """Extract JSON from Claude CLI output which may include preamble text."""
-        if not content:
-            return None
-
-        # Try direct parse first
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
-
-        # Try to find ```json code blocks first (common Claude output format)
-        import re
-        json_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
-        if json_block_match:
-            try:
-                return json.loads(json_block_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # Try to find JSON object in the content
-        start = content.find('{')
-        end = content.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(content[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        # Try to find JSON array
-        start = content.find('[')
-        end = content.rfind(']')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return {"items": json.loads(content[start:end + 1])}
-            except json.JSONDecodeError:
-                pass
-
-        return None
+        """Extract JSON from Claude CLI output. Delegates to shared util."""
+        return extract_json_from_output(content)
 
     async def _build_foundation_context(self) -> FoundationContext:
         """Build FoundationContext from foundation phase outputs."""
@@ -1174,3 +1247,64 @@ Output a JSON verdict:
         )
 
         return await self._spawn_subagent(arbiter_task, foundation_context)
+
+    def _detect_questions_in_output(self, output: str) -> list[str]:
+        """Detect questions in sub-agent output.
+
+        Looks for common question patterns that indicate the agent needs
+        clarification or additional context. Questions are surfaced to the
+        user for visibility - NOT auto-answered.
+
+        Args:
+            output: The raw output from the sub-agent
+
+        Returns:
+            List of detected questions (empty if none found)
+        """
+        if not output:
+            return []
+
+        questions = []
+        lines = output.split('\n')
+
+        # Question patterns that indicate the agent needs input
+        question_indicators = [
+            # Direct questions
+            '?',
+            # Clarification requests
+            'could you clarify',
+            'can you clarify',
+            'please clarify',
+            'could you specify',
+            'can you specify',
+            'please specify',
+            'need more information',
+            'need clarification',
+            'unclear whether',
+            'not sure if',
+            'should i',
+            'do you want',
+            'would you like',
+            # Context requests
+            'where is',
+            'where can i find',
+            'which file',
+            'what is the',
+        ]
+
+        for line in lines:
+            line_lower = line.lower().strip()
+            # Skip empty lines and code blocks
+            if not line_lower or line_lower.startswith('```'):
+                continue
+
+            # Check for question indicators
+            for indicator in question_indicators:
+                if indicator in line_lower:
+                    # Clean up the line and add if substantial
+                    clean_line = line.strip()
+                    if len(clean_line) > 10 and clean_line not in questions:
+                        questions.append(clean_line)
+                        break  # Only add once per line
+
+        return questions[:5]  # Limit to first 5 questions

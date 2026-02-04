@@ -1,9 +1,23 @@
 """
 LangGraph node functions for deep_audit supervisor orchestration.
 
-This module contains the node implementations for the supervisor graph
-that orchestrates worker and auditor subagents in the Deep Agents architecture.
+DEPRECATED: This module is part of the legacy LangGraph-based supervisor.
+Use the Overseer class from overseer.py instead, which provides:
+- Foundation-first analysis with 64 specialists
+- Signal routing pipeline (Decider → FamilyCoordinator → Specialist → Triager)
+- Cross-validation and Devil's Advocate challenges
+- Confidence calibration
+
+This module contains mostly stub implementations and will be removed
+in a future version.
 """
+
+import warnings
+warnings.warn(
+    "agents.deep_audit.nodes is deprecated. Use Overseer from overseer.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 from datetime import datetime, timedelta
 from typing import Literal

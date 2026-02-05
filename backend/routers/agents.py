@@ -908,9 +908,11 @@ async def llm_triage_findings(
     # If still no repo_path, try to get from project
     if not repo_path and repo_id:
         try:
-            project = await project_service.get_project(repo_id)
-            if project and project.local_path:
-                repo_path = project.local_path
+            # Use helper that handles path + repo_name correctly
+            repo_path = project_service.get_project_repo_path(repo_id)
+            if not repo_path:
+                # Fallback to just the project path
+                repo_path = project_service.get_project_path(repo_id)
         except Exception as e:
             print(f"[Triage] Could not get project path: {e}")
 

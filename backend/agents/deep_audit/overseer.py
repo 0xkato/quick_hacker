@@ -581,8 +581,19 @@ Continue the investigation. What should the next wave focus on?"""
                 flow_service.update_node_status(self.id, foundation_node.id, "running")
             await self.emit_flow_update()
 
-            foundation_result = await dispatch_tools.dispatch_foundation_phase()
-            print(f"[Overseer] Foundation Phase result: {foundation_result[:500]}...")
+            # Call dispatcher directly instead of through dispatch_tools to avoid ContextVar issues
+            # dispatch_tools.dispatch_foundation_phase() relies on ContextVar which may not propagate
+            # across async task boundaries correctly
+            foundation_wave_result, foundation_ctx = await self.dispatcher.dispatch_foundation_phase()
+            print(f"[Overseer] Foundation Phase complete: all_succeeded={foundation_wave_result.all_succeeded}")
+
+            # Store Foundation Context in dispatch_tools for other code that still uses it
+            if foundation_ctx:
+                dispatch_tools.set_foundation_context(foundation_ctx)
+                print(f"[Overseer] Foundation Context built: languages={foundation_ctx.repo_profile.languages}")
+                print(f"[Overseer] Foundation Context: frameworks={foundation_ctx.repo_profile.frameworks}")
+            else:
+                print(f"[Overseer] WARNING: Foundation Context was NOT built")
 
             # Update flow node status
             if foundation_node:
@@ -593,15 +604,14 @@ Continue the investigation. What should the next wave focus on?"""
             if self._cancelled:
                 return
 
-            # Parse foundation result
-            try:
-                foundation_data = json.loads(foundation_result)
-                if not foundation_data.get("all_succeeded"):
-                    await self.emit_log("Foundation Phase had failures, continuing with partial results...")
-                    if foundation_node:
-                        flow_service.update_node_status(self.id, foundation_node.id, "failed")
-            except json.JSONDecodeError:
-                await self.emit_log("Could not parse Foundation Phase result, continuing...")
+            # Check foundation result
+            if not foundation_wave_result.all_succeeded:
+                await self.emit_log("Foundation Phase had failures, continuing with partial results...")
+                if foundation_node:
+                    flow_service.update_node_status(self.id, foundation_node.id, "failed")
+                for r in foundation_wave_result.results:
+                    if r.status != "completed":
+                        print(f"[Overseer] Foundation agent {r.agent_type} failed: {r.error}")
 
             # Check time budget
             if self.campaign_state.time_remaining() <= 0:
@@ -654,8 +664,8 @@ Continue the investigation. What should the next wave focus on?"""
                 rationale="Hunting Phase: Find signals for verification",
             )
 
-            # Get foundation context from dispatch_tools (set during Foundation Phase)
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            # Use foundation_ctx from Foundation Phase (already available in local scope)
+            # This avoids ContextVar issues that can occur across async boundaries
             if foundation_ctx is None:
                 print("[Overseer] WARNING: Foundation Context not available - Hunting agents will run without context")
                 await self.emit_log("WARNING: Foundation Context not available - analysis may be less accurate")

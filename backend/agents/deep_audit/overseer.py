@@ -851,6 +851,12 @@ Output JSON with your analysis for each signal.""",
                     print(f"[Overseer] Wave {wave_num} complete: {wave_result.all_succeeded}, +{new_signals} new signals")
                     await self.emit_log(f"Wave {wave_num} complete. Found {new_signals} new signals. Total: {len(self.campaign_state.confirmed_findings)}")
 
+                    # === INCREMENTAL ROUTING ===
+                    # Route new signals to specialists immediately instead of waiting until end
+                    # This gives users faster feedback on vulnerability validity
+                    if new_signals > 0 and self.campaign_state.time_remaining() > 120:
+                        await self._route_new_signals_incrementally(signals_count, wave_num)
+
                 except Exception as e:
                     print(f"[Overseer] Wave {wave_num} failed: {e}")
                     await self.emit_log(f"Wave {wave_num} failed: {e}")
@@ -1963,8 +1969,99 @@ Output as JSON with: classification, severity, title, description, recommendatio
             "unverified_reason": reason,
         }
 
+    async def _route_new_signals_incrementally(self, previous_count: int, wave_num: int):
+        """Route newly discovered signals through specialists immediately.
+
+        This is called after each wave to provide faster feedback on vulnerability validity,
+        rather than waiting until the end of all hunting waves.
+
+        Args:
+            previous_count: Number of signals before this wave (to identify new ones)
+            wave_num: Current wave number for logging
+        """
+        # Get only the NEW signals from this wave
+        all_signals = self.campaign_state.confirmed_findings
+        new_signals = all_signals[previous_count:]
+
+        if not new_signals:
+            return
+
+        # Limit signals per wave to avoid spending too much time on routing
+        # Route up to 5 signals per wave, prioritizing by severity
+        MAX_SIGNALS_PER_WAVE = 5
+
+        # Sort by severity (critical first)
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        sorted_signals = sorted(
+            new_signals,
+            key=lambda s: severity_order.get(s.get("severity", "medium").lower(), 2)
+        )
+        signals_to_route = sorted_signals[:MAX_SIGNALS_PER_WAVE]
+
+        await self.emit_log(f"Wave {wave_num}: Routing {len(signals_to_route)} high-priority signals to specialists...")
+        print(f"[Overseer] Incremental routing: {len(signals_to_route)} signals from wave {wave_num}")
+
+        verified_count = 0
+        dismissed_count = 0
+
+        for i, signal in enumerate(signals_to_route):
+            # Check time budget - need at least 60s for each routing
+            if self.campaign_state.time_remaining() < 60:
+                print(f"[Overseer] Stopping incremental routing - low time budget")
+                break
+
+            signal_id = signal.get("signal_id", f"sig-{i}")
+            severity = signal.get("severity", "medium")
+
+            try:
+                # Route through full pipeline: Decider → FamilyCoordinator → Specialist → Triager
+                finding = await self._route_signal_through_pipeline(signal)
+
+                if finding:
+                    verified_count += 1
+                    # Mark signal as routed and store the verified finding
+                    signal["_routed"] = True
+                    signal["_verified_finding"] = finding
+                    await self.emit_log(f"  ✓ {signal_id} ({severity}): Verified as {finding.get('classification', 'vulnerability')}")
+
+                    # Emit the finding immediately for UI visibility
+                    finding_create = FindingCreate(
+                        title=finding.get("title", "Untitled"),
+                        description=finding.get("description", ""),
+                        severity=finding.get("severity", "medium"),
+                        category=finding.get("category", "unknown"),
+                        file_path=finding.get("file_path", ""),
+                        line_start=finding.get("line_start"),
+                        code_snippet=finding.get("code_snippet"),
+                        remediation=finding.get("remediation"),
+                        cwe_id=finding.get("cwe_id"),
+                        confidence=finding.get("confidence", 0.5),
+                    )
+                    db_finding = self.add_finding(finding_create)
+                    if db_finding:
+                        try:
+                            await findings_service.save_finding(db_finding)
+                        except Exception as db_err:
+                            print(f"[Overseer] Failed to save finding to database: {db_err}")
+                        await self.emit_finding(db_finding)
+                else:
+                    dismissed_count += 1
+                    signal["_routed"] = True
+                    signal["_dismissed"] = True
+                    await self.emit_log(f"  ✗ {signal_id} ({severity}): Dismissed by specialist")
+
+            except Exception as e:
+                print(f"[Overseer] Error routing signal {signal_id}: {e}")
+                # Don't mark as routed so it can be retried in Phase 4
+
+        print(f"[Overseer] Incremental routing complete: {verified_count} verified, {dismissed_count} dismissed")
+        await self.emit_log(f"Wave {wave_num} routing: {verified_count} verified, {dismissed_count} dismissed")
+
     async def _route_all_signals(self):
         """Route all collected signals through the verification pipeline.
+
+        Note: With incremental routing enabled, many signals may already be routed.
+        This method now only routes signals that weren't processed incrementally.
 
         Each signal goes through:
         1. Decider - Should we investigate?
@@ -1974,7 +2071,31 @@ Output as JSON with: classification, severity, title, description, recommendatio
         """
         # Keep original findings until routing succeeds - don't lose data on failure
         original_signals = self.campaign_state.confirmed_findings.copy()
-        signals = original_signals.copy()
+
+        # Filter out signals already routed incrementally during waves
+        unrouted_signals = [s for s in original_signals if not s.get("_routed")]
+        already_routed = len(original_signals) - len(unrouted_signals)
+
+        # Also collect verified findings from incremental routing
+        verified_from_incremental = [
+            s.get("_verified_finding")
+            for s in original_signals
+            if s.get("_routed") and s.get("_verified_finding")
+        ]
+
+        if already_routed > 0:
+            await self.emit_log(f"Phase 4: {already_routed} signals already routed incrementally, {len(unrouted_signals)} remaining...")
+            print(f"[Overseer] Skipping {already_routed} already-routed signals, processing {len(unrouted_signals)} remaining")
+
+        signals = unrouted_signals
+
+        if not signals:
+            await self.emit_log("Phase 4: All signals already routed during waves. Skipping batch routing.")
+            print(f"[Overseer] All signals already routed incrementally, skipping Phase 4 batch routing")
+            # Update confirmed findings with verified ones from incremental routing
+            if verified_from_incremental:
+                self.campaign_state.confirmed_findings = verified_from_incremental
+            return
 
         await self.emit_log(f"Phase 4: Routing {len(signals)} signals through verification pipeline...")
         print(f"[Overseer] Routing {len(signals)} signals through Decider → FamilyCoordinator → Specialist → Triager")
@@ -2066,33 +2187,34 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 await self.emit_log(f"  → Error: {e}")
 
         # Update confirmed findings with verified ones
+        # Combine: verified from batch routing + verified from incremental routing
         # Preserve errored signals as unverified to avoid data loss
-        verified_ids = {f.get("signal_id") for f in verified_findings}
-        if verified_findings:
+        all_verified = verified_findings + verified_from_incremental
+        verified_ids = {f.get("signal_id") for f in all_verified}
+
+        if all_verified:
             # Include verified findings plus any errored signals (marked as unverified)
-            # Errored signals = original signals NOT verified AND NOT dismissed
+            # Errored signals = signals NOT verified AND NOT dismissed AND NOT already routed
             errored_signals = [
-                s for s in original_signals
+                s for s in signals  # Only check batch-routed signals
                 if s.get("signal_id") not in verified_ids
                 and s.get("signal_id") not in dismissed_signal_ids
             ]
             for sig in errored_signals:
                 sig["unverified"] = True
                 sig["routing_error"] = True
-            self.campaign_state.confirmed_findings = verified_findings + errored_signals
-        elif error_count == len(signals):
-            # All signals errored - keep originals marked as unverified
-            for sig in original_signals:
+            self.campaign_state.confirmed_findings = all_verified + errored_signals
+        elif error_count == len(signals) and len(signals) > 0:
+            # All batch signals errored - keep originals marked as unverified
+            for sig in signals:
                 sig["unverified"] = True
                 sig["routing_error"] = True
-            self.campaign_state.confirmed_findings = original_signals
-            await self.emit_log("WARNING: All routing failed, keeping original signals as unverified findings")
+            self.campaign_state.confirmed_findings = verified_from_incremental + signals
+            await self.emit_log("WARNING: All batch routing failed, keeping signals as unverified findings")
         elif error_count > 0:
-            # Some dismissed, some errored, none verified - preserve errored ones
-            # (dismissed ones were intentionally dismissed, but errors need investigation)
-            # Find signals that errored (not verified AND not dismissed)
+            # Some dismissed, some errored, none verified in batch - preserve errored ones
             errored_signals = [
-                s for s in original_signals
+                s for s in signals
                 if s.get("signal_id") not in verified_ids
                 and s.get("signal_id") not in dismissed_signal_ids
             ]
@@ -2100,10 +2222,10 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 sig["unverified"] = True
                 sig["routing_error"] = True
             await self.emit_log(f"WARNING: {len(errored_signals)} signals failed routing - preserving as unverified")
-            self.campaign_state.confirmed_findings = errored_signals
+            self.campaign_state.confirmed_findings = verified_from_incremental + errored_signals
         else:
-            # All intentionally dismissed - clear
-            self.campaign_state.confirmed_findings = []
+            # All batch signals intentionally dismissed - keep only incremental findings
+            self.campaign_state.confirmed_findings = verified_from_incremental
 
         if routing_node:
             flow_service.update_node_status(self.id, routing_node.id, "completed")

@@ -229,8 +229,20 @@ function clearStoredTriageState(): void {
   localStorage.removeItem(TRIAGE_STORAGE_KEY);
 }
 
+// Disposition priority for sorting (lower = higher priority)
+const DISPOSITION_PRIORITY: Record<Disposition | 'none', number> = {
+  valid_security_issue: 0,
+  bug: 1,
+  misconfiguration: 2,
+  hardening: 3,
+  by_design: 4,
+  speculative: 5,
+  none: 6,
+};
+
 export function FindingsList({ findings, agentId, repoId, allAgents, onFindingClick, onNavigateToFile, onFindingsUpdated }: FindingsListProps) {
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
+  const [filterDisposition, setFilterDisposition] = useState<Disposition | 'all'>('all');
   const [showReportView, setShowReportView] = useState(false);
   const [isTriaging, setIsTriaging] = useState(false);
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
@@ -366,10 +378,25 @@ export function FindingsList({ findings, agentId, repoId, allAgents, onFindingCl
   const visibleFindings = showFiltered ? findings : findings.filter(isReportable);
 
   // Filter by severity
-  const filteredFindings =
+  const severityFiltered =
     filterSeverity === 'all'
       ? visibleFindings
       : visibleFindings.filter((f) => f.severity === filterSeverity);
+
+  // Filter by disposition
+  const dispositionFiltered =
+    filterDisposition === 'all'
+      ? severityFiltered
+      : severityFiltered.filter((f) => f.disposition === filterDisposition);
+
+  // Sort by disposition priority (valid issues first), then by severity
+  const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const filteredFindings = [...dispositionFiltered].sort((a, b) => {
+    const dispA = DISPOSITION_PRIORITY[a.disposition || 'none'];
+    const dispB = DISPOSITION_PRIORITY[b.disposition || 'none'];
+    if (dispA !== dispB) return dispA - dispB;
+    return SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
+  });
 
   // Count by severity (from visible findings)
   const counts: Record<Severity | 'all', number> = {
@@ -379,6 +406,17 @@ export function FindingsList({ findings, agentId, repoId, allAgents, onFindingCl
     medium: visibleFindings.filter((f) => f.severity === 'medium').length,
     low: visibleFindings.filter((f) => f.severity === 'low').length,
     info: visibleFindings.filter((f) => f.severity === 'info').length,
+  };
+
+  // Count by disposition
+  const dispCounts: Record<Disposition | 'all', number> = {
+    all: visibleFindings.length,
+    valid_security_issue: visibleFindings.filter((f) => f.disposition === 'valid_security_issue').length,
+    bug: visibleFindings.filter((f) => f.disposition === 'bug').length,
+    misconfiguration: visibleFindings.filter((f) => f.disposition === 'misconfiguration').length,
+    hardening: visibleFindings.filter((f) => f.disposition === 'hardening').length,
+    by_design: visibleFindings.filter((f) => f.disposition === 'by_design').length,
+    speculative: visibleFindings.filter((f) => f.disposition === 'speculative').length,
   };
 
   return (
@@ -488,6 +526,39 @@ export function FindingsList({ findings, agentId, repoId, allAgents, onFindingCl
             >
               {sev === 'all' ? 'All' : sev.charAt(0).toUpperCase() + sev.slice(1)}{' '}
               <span style={{ opacity: 0.7 }}>({counts[sev]})</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Disposition filter */}
+        <div className="flex flex-wrap gap-1 mt-2">
+          {(['all', 'valid_security_issue', 'bug', 'misconfiguration', 'hardening', 'by_design', 'speculative'] as const).map((disp) => (
+            <button
+              key={disp}
+              onClick={() => setFilterDisposition(disp)}
+              disabled={dispCounts[disp] === 0}
+              className={clsx(
+                'px-2 py-1 text-vsc-xs transition-all',
+                dispCounts[disp] === 0 && 'opacity-50 cursor-not-allowed'
+              )}
+              style={{
+                borderRadius: 'var(--radius-full)',
+                border: filterDisposition === disp
+                  ? `1px solid ${disp === 'all' ? 'var(--vsc-accent)' : DISPOSITION_COLORS[disp]}`
+                  : '1px solid #3c3c3c',
+                background: filterDisposition === disp
+                  ? disp === 'all'
+                    ? 'rgba(0, 120, 212, 0.2)'
+                    : `${DISPOSITION_COLORS[disp].replace('0.85', '0.2')}`
+                  : 'transparent',
+                color: filterDisposition === disp
+                  ? disp === 'all' ? 'var(--vsc-accent)' : DISPOSITION_COLORS[disp]
+                  : 'var(--vsc-text-muted)',
+                transition: 'var(--transition-default)',
+              }}
+            >
+              {disp === 'all' ? 'All' : DISPOSITION_LABELS[disp]}{' '}
+              <span style={{ opacity: 0.7 }}>({dispCounts[disp]})</span>
             </button>
           ))}
         </div>

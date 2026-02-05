@@ -276,8 +276,8 @@ async def get_all_findings(
     limit: int = Query(500, description="Maximum findings to return"),
 ):
     """Get all findings with optional filtering (from memory and persisted states)."""
-    # Track findings by (agent_id, id) to avoid duplicates
-    finding_ids: set[tuple[str, str]] = set()
+    # Track findings by id alone to avoid duplicates (same finding may exist in multiple sources)
+    seen_ids: set[str] = set()
     findings: list[Finding] = []
 
     # 1. Get in-memory findings (most recent state) - fast
@@ -286,10 +286,9 @@ async def get_all_findings(
         for f in memory_findings:
             if len(findings) >= limit:
                 break
-            f_key = (f.agent_id, f.id)
-            if f_key not in finding_ids:
+            if f.id not in seen_ids:
                 findings.append(f)
-                finding_ids.add(f_key)
+                seen_ids.add(f.id)
     except Exception as e:
         print(f"[Findings] Error loading from memory: {e}")
 
@@ -310,10 +309,10 @@ async def get_all_findings(
                     for f_data in snapshot.findings:
                         if len(findings) >= limit:
                             break
-                        f_key = (f_data.get("agent_id"), f_data.get("id"))
-                        if f_key not in finding_ids:
+                        f_id = f_data.get("id")
+                        if f_id and f_id not in seen_ids:
                             findings.append(Finding(**f_data))
-                            finding_ids.add(f_key)
+                            seen_ids.add(f_id)
         except Exception as e:
             print(f"[Findings] Error loading from snapshots: {e}")
 
@@ -324,10 +323,9 @@ async def get_all_findings(
             for f in db_findings:
                 if len(findings) >= limit:
                     break
-                f_key = (f.agent_id, f.id)
-                if f_key not in finding_ids:
+                if f.id not in seen_ids:
                     findings.append(f)
-                    finding_ids.add(f_key)
+                    seen_ids.add(f.id)
         except Exception as e:
             print(f"[Findings] Error loading from database: {e}")
 

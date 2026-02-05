@@ -143,7 +143,7 @@ def _format_finding_for_triage(finding: Finding, index: int) -> str:
     """Format a single finding for inclusion in the triage prompt."""
     lines = [
         f"## Finding {index + 1}: {finding.title}",
-        f"**ID:** {finding.id}",
+        f"**FINDING_ID:** `{finding.id}` (USE THIS EXACT ID IN YOUR RESPONSE)",
         f"**Severity:** {finding.severity.value}",
         f"**File:** {finding.file_path}:{finding.line_start}",
         f"**Type:** {finding.vulnerability_type}",
@@ -323,9 +323,11 @@ async def run_triage_agent(
 
 For EACH finding below, output a decision block. Do not skip any finding.
 
+CRITICAL: Use the EXACT FINDING_ID shown for each finding (the value in backticks after "FINDING_ID:"). Do NOT use "Finding 1" or other labels.
+
 {findings_text}
 
-Remember: Output one ```decision``` block for EACH finding above with FINDING_ID, DECISION, CONFIDENCE, and REASONING."""
+Remember: Output one ```decision``` block for EACH finding above. Use the EXACT FINDING_ID from the finding (e.g., `finding-abc123`), not "Finding 1"."""
 
         # Configure SDK client - no tools, just prompt/response
         options = ClaudeAgentOptions(
@@ -382,9 +384,24 @@ Remember: Output one ```decision``` block for EACH finding above with FINDING_ID
         all_decisions.extend(batch_decisions)
 
     print(f"[TriageAgent] Total decisions collected: {len(all_decisions)}")
+    for d in all_decisions:
+        print(f"[TriageAgent]   Decision: {d.finding_id} -> {d.decision} ({d.confidence}%)")
 
-    # Apply decisions to findings
-    decision_map = {d.finding_id: d for d in all_decisions}
+    # Apply decisions to findings with flexible matching
+    # Build multiple lookup maps for robust matching
+    decision_by_exact = {d.finding_id: d for d in all_decisions}
+    decision_by_lower = {d.finding_id.lower().strip(): d for d in all_decisions}
+    # Also build index-based map (Finding 1 -> index 0, etc.)
+    decision_by_index: dict[int, TriageDecision] = {}
+    for d in all_decisions:
+        # Try to extract index from "Finding 1", "finding-1", etc.
+        import re
+        match = re.search(r'(\d+)', d.finding_id)
+        if match:
+            idx = int(match.group(1)) - 1  # Convert 1-based to 0-based
+            if idx >= 0:
+                decision_by_index[idx] = d
+
     triaged_findings: list[Finding] = []
 
     disposition_map = {
@@ -397,12 +414,36 @@ Remember: Output one ```decision``` block for EACH finding above with FINDING_ID
     }
 
     valid_count = 0
-    for finding in findings:
-        decision = decision_map.get(finding.id)
+    matched_count = 0
+    for idx, finding in enumerate(findings):
+        # Try multiple matching strategies
+        decision = None
+
+        # 1. Exact match
+        decision = decision_by_exact.get(finding.id)
+
+        # 2. Case-insensitive match
+        if not decision:
+            decision = decision_by_lower.get(finding.id.lower().strip())
+
+        # 3. Partial match (finding ID contains or is contained in decision ID)
+        if not decision:
+            for d in all_decisions:
+                if finding.id in d.finding_id or d.finding_id in finding.id:
+                    decision = d
+                    break
+
+        # 4. Index-based fallback (if LLM output "Finding 1" instead of actual ID)
+        if not decision:
+            decision = decision_by_index.get(idx)
+
         if decision:
+            matched_count += 1
             finding.disposition = disposition_map.get(decision.decision, Disposition.SPECULATIVE)
             finding.classification_confidence = decision.confidence
             finding.reasoning = decision.reasoning
+            finding.triaged_at = datetime.utcnow()
+            print(f"[TriageAgent] Matched {finding.id} -> {decision.decision}")
             if decision.decision == "valid_security_issue":
                 valid_count += 1
         else:
@@ -410,7 +451,10 @@ Remember: Output one ```decision``` block for EACH finding above with FINDING_ID
             finding.disposition = Disposition.SPECULATIVE
             finding.classification_confidence = 30
             finding.reasoning = ["No triage decision received - needs manual review"]
+            print(f"[TriageAgent] No match for finding {finding.id}")
         triaged_findings.append(finding)
+
+    print(f"[TriageAgent] Matched {matched_count}/{len(findings)} findings to decisions")
 
     # Complete agent
     agent.status = AgentStatus.COMPLETED

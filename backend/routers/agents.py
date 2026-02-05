@@ -1020,6 +1020,20 @@ async def llm_triage_findings(
             orchestrator._findings[agent_id] = merged_findings
             print(f"[Triage] Triage agent {triage_agent.id} completed: {len(results)} findings triaged, {len(merged_findings)} total preserved")
 
+            # PERSIST triaged findings to snapshot so they survive page refreshes
+            try:
+                existing_snapshot = persistence_service.load_agent_state(agent_id)
+                if existing_snapshot:
+                    # Update findings in existing snapshot
+                    existing_snapshot.findings = [f.model_dump() for f in merged_findings]
+                    persistence_service.save_agent_state(existing_snapshot)
+                    print(f"[Triage] Persisted {len(merged_findings)} triaged findings to snapshot")
+                else:
+                    print(f"[Triage] No existing snapshot to update for agent {agent_id}")
+            except Exception as persist_err:
+                print(f"[Triage] Failed to persist triaged findings: {persist_err}")
+                # Don't fail the request, just log the error
+
             return LLMTriageResponse(
                 triaged_count=len(results),
                 results=results,
@@ -1099,6 +1113,16 @@ async def llm_triage_findings(
 
     orchestrator._findings[agent_id] = merged_findings
     print(f"[LLM Triage] Completed: {len(triaged_findings)} findings triaged, {len(merged_findings)} total preserved (rule-based fallback)")
+
+    # PERSIST triaged findings to snapshot so they survive page refreshes
+    try:
+        existing_snapshot = persistence_service.load_agent_state(agent_id)
+        if existing_snapshot:
+            existing_snapshot.findings = [f.model_dump() for f in merged_findings]
+            persistence_service.save_agent_state(existing_snapshot)
+            print(f"[Triage] Persisted {len(merged_findings)} triaged findings to snapshot (rule-based)")
+    except Exception as persist_err:
+        print(f"[Triage] Failed to persist triaged findings: {persist_err}")
 
     return LLMTriageResponse(
         triaged_count=len(results),

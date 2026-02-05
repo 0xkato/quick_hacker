@@ -30,6 +30,7 @@ from services.observability_service import observability_service
 from services.flow_service import flow_service
 from services.investigation_queue_service import investigation_queue_service
 from services.persistence_service import persistence_service
+from services.findings_service import findings_service
 from services.report_service import report_service
 from services.finding_triage_service import triage_service
 from services.project_service import project_service
@@ -273,17 +274,24 @@ async def get_agent_findings(agent_id: str):
 async def get_all_findings(
     repo_id: Optional[str] = Query(None, description="Filter by repository"),
 ):
-    """Get all findings with optional filtering (from memory and persisted states)."""
-    # Get in-memory findings
-    findings = await orchestrator.get_findings(repo_id=repo_id)
-    finding_ids = {(f.agent_id, f.id) for f in findings}
+    """Get all findings with optional filtering (from memory, persisted states, and database)."""
+    # Track findings by (agent_id, id) to avoid duplicates
+    finding_ids: set[tuple[str, str]] = set()
+    findings: list[Finding] = []
 
-    # Add findings from persisted states
+    # 1. Get in-memory findings (most recent state)
+    memory_findings = await orchestrator.get_findings(repo_id=repo_id)
+    for f in memory_findings:
+        f_key = (f.agent_id, f.id)
+        if f_key not in finding_ids:
+            findings.append(f)
+            finding_ids.add(f_key)
+
+    # 2. Get findings from persisted JSON states
     saved_states = persistence_service.list_saved_states()
     for state_meta in saved_states:
         if repo_id and state_meta.get("repo_id") != repo_id:
             continue
-        # Load full state to get findings
         snapshot = persistence_service.load_agent_state(state_meta.get("agent_id"))
         if snapshot and snapshot.findings:
             for f_data in snapshot.findings:
@@ -291,6 +299,27 @@ async def get_all_findings(
                 if f_key not in finding_ids:
                     findings.append(Finding(**f_data))
                     finding_ids.add(f_key)
+
+    # 3. Get findings from database (survives restarts)
+    try:
+        if repo_id:
+            db_findings = await findings_service.get_findings_by_repo(repo_id)
+        else:
+            # Get all findings from database - query all known repos
+            db_findings = []
+            for state_meta in saved_states:
+                rid = state_meta.get("repo_id")
+                if rid:
+                    db_findings.extend(await findings_service.get_findings_by_repo(rid))
+
+        for f in db_findings:
+            f_key = (f.agent_id, f.id)
+            if f_key not in finding_ids:
+                findings.append(f)
+                finding_ids.add(f_key)
+    except Exception as e:
+        print(f"[Findings] Error loading from database: {e}")
+        # Continue without database findings
 
     # Sort by severity
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.connection import get_session
 from database.models import Finding as DBFinding
-from models.schemas import Finding, Severity
+from models.schemas import Finding, Severity, Disposition
 
 
 class FindingsService:
@@ -39,6 +39,11 @@ class FindingsService:
         """
         async with get_session() as session:
             # Convert Pydantic model to SQLAlchemy model
+            # Get disposition value (handle enum and string)
+            disposition_val = None
+            if hasattr(finding, 'disposition') and finding.disposition is not None:
+                disposition_val = finding.disposition.value if hasattr(finding.disposition, 'value') else finding.disposition
+
             db_finding = DBFinding(
                 id=finding.id,
                 agent_id=finding.agent_id,
@@ -60,6 +65,11 @@ class FindingsService:
                 source_trace=finding.source_trace,
                 created_at=finding.created_at,
                 metadata_=finding.metadata or {},
+                # Triage fields
+                disposition=disposition_val,
+                classification_confidence=getattr(finding, 'classification_confidence', None),
+                reasoning=getattr(finding, 'reasoning', None),
+                triaged_at=getattr(finding, 'triaged_at', None),
             )
 
             # Check if finding already exists (prevent duplicates)
@@ -165,6 +175,14 @@ class FindingsService:
         Returns:
             Pydantic Finding model
         """
+        # Parse disposition enum if present
+        disposition = None
+        if db_finding.disposition:
+            try:
+                disposition = Disposition(db_finding.disposition)
+            except ValueError:
+                disposition = None
+
         return Finding(
             id=db_finding.id,
             agent_id=db_finding.agent_id,
@@ -186,6 +204,11 @@ class FindingsService:
             source_trace=db_finding.source_trace,
             created_at=db_finding.created_at,
             metadata=db_finding.metadata_,
+            # Triage fields
+            disposition=disposition,
+            classification_confidence=db_finding.classification_confidence,
+            reasoning=db_finding.reasoning,
+            triaged_at=db_finding.triaged_at,
         )
 
 

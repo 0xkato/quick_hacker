@@ -52,6 +52,7 @@ from services.resource_monitor import get_resource_monitor
 from services.project_service import project_service
 from services.settings_service import settings_service
 from services.persistence_service import persistence_service
+from services.findings_service import findings_service
 from services.report_service import report_service
 from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
@@ -1342,6 +1343,19 @@ class AgentOrchestrator:
             agent.findings = triaged_findings
             print(f"[Orchestrator] Total findings: {len(triaged_findings)} ({reportable_count} reportable)")
 
+            # === Save findings to database for persistence across restarts ===
+            try:
+                db_save_count = 0
+                for finding in triaged_findings:
+                    try:
+                        await findings_service.save_finding(finding)
+                        db_save_count += 1
+                    except Exception as save_err:
+                        print(f"[Orchestrator] Failed to save finding {finding.id} to DB: {save_err}")
+                print(f"[Orchestrator] Saved {db_save_count}/{len(triaged_findings)} findings to database")
+            except Exception as db_err:
+                print(f"[Orchestrator] Database save failed: {db_err}")
+
             # === Add completion node to flow ===
             completion_status = "completed" if result.get("success", True) else "failed"
             flow_service.add_node(
@@ -2192,6 +2206,19 @@ class AgentOrchestrator:
                     print(f"[Orchestrator] Codex triage failed, using raw findings: {triage_err}")
 
             agent.findings = triaged_findings
+
+            # === Save findings to database for persistence across restarts ===
+            try:
+                db_save_count = 0
+                for finding in triaged_findings:
+                    try:
+                        await findings_service.save_finding(finding)
+                        db_save_count += 1
+                    except Exception as save_err:
+                        print(f"[Orchestrator] Failed to save finding {finding.id} to DB: {save_err}")
+                print(f"[Orchestrator] Codex: Saved {db_save_count}/{len(triaged_findings)} findings to database")
+            except Exception as db_err:
+                print(f"[Orchestrator] Codex: Database save failed: {db_err}")
 
             agent.completed_at = datetime.utcnow()
             agent.status = AgentStatus.COMPLETED

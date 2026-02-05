@@ -411,20 +411,14 @@ Remember: Output one ```decision``` block for EACH finding above. Use the EXACT 
         # Parse decisions from collected text
         full_response = "".join(collected_text)
 
-        # Debug: log what we received
+        # Always log full response for debugging
         if full_response:
-            # Log first 2000 chars for debugging
-            preview = full_response[:2000].replace('\n', '\\n')
-            print(f"[TriageAgent] Response ({len(full_response)} chars): {preview}")
+            print(f"[TriageAgent] Full response ({len(full_response)} chars):\n{full_response}")
         else:
             print(f"[TriageAgent] WARNING: Empty response from SDK")
 
         batch_decisions = _parse_decisions_from_text(full_response)
         print(f"[TriageAgent] Parsed {len(batch_decisions)} decisions from batch")
-
-        # If parsing failed, log more details
-        if not batch_decisions and full_response:
-            print(f"[TriageAgent] PARSE FAILED - Full response:\n{full_response}")
 
         all_decisions.extend(batch_decisions)
 

@@ -284,6 +284,90 @@ class TestDispatcherFoundationIntegration:
         assert "Python" in updated_task.constraints
         assert "api/" in updated_task.constraints
 
+    def test_gas_town_prompt_embedding(self, mock_filesystem):
+        """Gas Town: Foundation Context is embedded directly in system prompt.
+
+        This verifies the Gas Town architecture fix where Foundation Context
+        is prepended to the system prompt so subagents (which run as separate
+        processes) receive the full context without needing to read files.
+        """
+        dispatcher = WaveDispatcher(
+            repo_path="/test/repo",
+            filesystem=mock_filesystem,
+        )
+
+        context = FoundationContext(
+            repo_profile=RepoProfile(
+                languages=["Python", "Go"],
+                frameworks=["FastAPI", "gRPC"],
+                build_system="pip",
+                entry_point_files=["main.py"],
+            ),
+            scope_map=ScopeMap(
+                security_critical=["api/auth/", "pkg/crypto/"],
+                test_code=["tests/"],
+                vendor_code=["vendor/"],
+                generated_code=["*.pb.go"],
+            ),
+            threat_model=ThreatModel(
+                trust_boundaries=[
+                    TrustBoundary(name="public", description="Public API", entry_points=["api/"])
+                ],
+                attacker_capabilities=[AttackerCapability.NETWORK_ACCESS],
+                in_scope_paths=["src/"],
+                out_of_scope_paths=["internal/admin/"],
+                out_of_scope_reasons={"internal/admin/": "Admin only"},
+            ),
+        )
+
+        task = DispatchTask(
+            agent_type="SinkHunter",
+            objective="Find SQL injection sinks",
+            scope="/test/repo/api",
+            deliverable="/memories/sinks.json",
+        )
+
+        # Get the prompt WITH Foundation Context embedded
+        prompt_with_context = dispatcher._get_subagent_prompt(task, context)
+
+        # Verify Foundation Context is at the TOP of the prompt
+        assert prompt_with_context.startswith("## Foundation Context (Pre-loaded)")
+
+        # Verify all key Foundation Context elements are in the prompt
+        assert "Python" in prompt_with_context
+        assert "Go" in prompt_with_context
+        assert "FastAPI" in prompt_with_context
+        assert "api/auth/" in prompt_with_context
+        assert "tests/" in prompt_with_context
+        assert "NETWORK_ACCESS" in prompt_with_context
+
+        # Verify the base prompt is also included AFTER the context
+        # The separator "---" should appear between context and base prompt
+        assert "---" in prompt_with_context
+
+    def test_gas_town_no_context_fallback(self, mock_filesystem):
+        """Without Foundation Context, prompt is just the base template."""
+        dispatcher = WaveDispatcher(
+            repo_path="/test/repo",
+            filesystem=mock_filesystem,
+        )
+
+        task = DispatchTask(
+            agent_type="RepoProfiler",
+            objective="Profile the repository",
+            scope="/test/repo",
+            deliverable="/memories/repo_profile.json",
+        )
+
+        # Get prompt WITHOUT Foundation Context
+        prompt_without_context = dispatcher._get_subagent_prompt(task, None)
+
+        # Should NOT have Foundation Context header
+        assert not prompt_without_context.startswith("## Foundation Context")
+
+        # Should still have the base prompt content
+        assert len(prompt_without_context) > 0
+
 
 class TestSignalRouting:
     """Test signal routing through the pipeline."""

@@ -286,48 +286,47 @@ class WaveDispatcher:
         self,
         process: asyncio.subprocess.Process,
         max_size: int,
-    ) -> tuple[str, str, bool]:
+    ) -> tuple[str, str, bool, int]:
         """Read process output with size limit to prevent OOM.
 
         Args:
             process: The subprocess to read from
-            max_size: Maximum bytes to read before truncating
+            max_size: Maximum TOTAL bytes to read before truncating (shared between stdout/stderr)
 
         Returns:
-            Tuple of (stdout_str, stderr_str, was_truncated)
+            Tuple of (stdout_str, stderr_str, was_truncated, returncode)
         """
         stdout_chunks = []
         stderr_chunks = []
-        stdout_size = 0
-        stderr_size = 0
         was_truncated = False
+        total_read = 0  # Shared counter for both streams
 
-        async def read_stream(stream, chunks, current_size):
-            nonlocal was_truncated
-            size = current_size
+        async def read_stream(stream, chunks):
+            nonlocal was_truncated, total_read
             while True:
                 chunk = await stream.read(8192)  # Read in 8KB chunks
                 if not chunk:
                     break
-                if size + len(chunk) > max_size:
-                    # Truncate
-                    remaining = max_size - size
+                if total_read + len(chunk) > max_size:
+                    # Truncate - shared limit for both streams
+                    remaining = max_size - total_read
                     if remaining > 0:
                         chunks.append(chunk[:remaining])
+                        total_read += remaining
                     was_truncated = True
                     break
                 chunks.append(chunk)
-                size += len(chunk)
-            return size
+                total_read += len(chunk)
 
-        # Read stdout and stderr concurrently
+        # Read stdout and stderr concurrently with shared size limit
         await asyncio.gather(
-            read_stream(process.stdout, stdout_chunks, stdout_size),
-            read_stream(process.stderr, stderr_chunks, stderr_size),
+            read_stream(process.stdout, stdout_chunks),
+            read_stream(process.stderr, stderr_chunks),
         )
 
-        # Wait for process to complete
+        # Wait for process to complete and get returncode
         await process.wait()
+        returncode = process.returncode
 
         stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
         stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
@@ -335,7 +334,7 @@ class WaveDispatcher:
         if was_truncated:
             stdout += "\n\n[OUTPUT TRUNCATED - exceeded size limit]"
 
-        return stdout, stderr, was_truncated
+        return stdout, stderr, was_truncated, returncode
 
     async def _spawn_subagent_cli(
         self,
@@ -437,6 +436,15 @@ Begin your analysis now."""
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
 
+            # Verify Foundation Context file exists for downstream agents
+            # This helps debug cases where agents should have read context but didn't
+            foundation_context_path = self.filesystem.memory_root / "foundation" / "context.md"
+            if foundation_context_path.exists():
+                ctx_size = foundation_context_path.stat().st_size
+                print(f"[Dispatcher] Foundation Context available: {foundation_context_path} ({ctx_size} bytes)")
+            else:
+                print(f"[Dispatcher] Foundation Context NOT available (file does not exist)")
+
             # Log LLM request for observability (use parent agent ID for frontend visibility)
             log_agent_id = self.parent_agent_id or agent_id
             request_id = observability_service.log_llm_request(
@@ -461,7 +469,7 @@ Begin your analysis now."""
             # Limit output to 10MB to prevent OOM from runaway subagents
             MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB
             try:
-                output, error_output, was_truncated = await asyncio.wait_for(
+                output, error_output, was_truncated, returncode = await asyncio.wait_for(
                     self._read_process_output_limited(process, MAX_OUTPUT_SIZE),
                     timeout=task.time_budget,
                 )
@@ -469,12 +477,20 @@ Begin your analysis now."""
                 if was_truncated:
                     print(f"[Dispatcher] {agent_id} output truncated at {MAX_OUTPUT_SIZE} bytes")
 
-                if process.returncode != 0:
-                    error_message = f"Claude CLI exited with code {process.returncode}: {error_output}"
+                # Use returncode from the function (guaranteed valid after wait())
+                if returncode != 0:
+                    error_message = f"Claude CLI exited with code {returncode}: {error_output}"
                     print(f"[Dispatcher] {agent_id} failed: {error_message}")
+                elif not output or not output.strip():
+                    # Non-zero exit with empty output is suspicious
+                    error_message = "Claude CLI produced no output"
+                    print(f"[Dispatcher] {agent_id} produced no output")
                 else:
                     error_message = None
                     print(f"[Dispatcher] {agent_id} completed successfully")
+                    # Log stderr warnings even on success
+                    if error_output and error_output.strip():
+                        print(f"[Dispatcher] {agent_id} stderr: {error_output[:200]}...")
 
             except asyncio.TimeoutError:
                 process.kill()
@@ -517,7 +533,8 @@ Begin your analysis now."""
                 )
 
             # Write output to deliverable path if we have content
-            if output and not error_message:
+            # IMPORTANT: Write even if there's an error - output may still contain useful data
+            if output and output.strip():
                 try:
                     self.filesystem.write_file(task.deliverable, output)
                     print(f"[Dispatcher] Wrote {len(output)} bytes to {task.deliverable}")
@@ -737,19 +754,54 @@ Begin your analysis now."""
         task: DispatchTask,
         foundation_context: Optional[FoundationContext] = None,
     ) -> str:
-        """Build the prompt for a sub-agent.
+        """Build the prompt for a sub-agent with Foundation Context embedded.
 
         Args:
             task: The task containing agent type and context
-            foundation_context: Optional Foundation Context (no longer used - context is in file)
+            foundation_context: Foundation Context to embed directly in the prompt
 
         Returns:
-            Complete prompt string for the sub-agent
+            Complete prompt string for the sub-agent including Foundation Context
 
         Note:
-            Foundation Context is now written to /memories/foundation/context.md
-            and prompts instruct agents to read it directly. This is simpler and
-            more reliable than placeholder injection.
+            GAS TOWN ARCHITECTURE: We embed Foundation Context directly in the
+            system prompt because subagents run as separate `claude -p` processes
+            that cannot access:
+            - ContextVars (process boundary isolation)
+            - Virtual /memories/ filesystem (they run with cwd=repo_path)
+
+            By prepending the context to the prompt, subagents receive full
+            Foundation Context without needing to read any files.
+        """
+        # Get base prompt from prompting system or fallback
+        base_prompt = self._get_base_prompt(task)
+
+        # GAS TOWN: Embed Foundation Context directly in the system prompt
+        # This is critical - subagents CANNOT read /memories/ or access ContextVars
+        if foundation_context:
+            context_section = foundation_context.to_prompt_context()
+            prompt = f"""## Foundation Context (Pre-loaded)
+
+{context_section}
+
+---
+
+{base_prompt}"""
+            print(f"[Dispatcher] Embedded Foundation Context ({len(context_section)} chars) in {task.agent_type} prompt")
+        else:
+            prompt = base_prompt
+            print(f"[Dispatcher] No Foundation Context available for {task.agent_type}")
+
+        return prompt
+
+    def _get_base_prompt(self, task: DispatchTask) -> str:
+        """Get the base prompt template for an agent type.
+
+        Args:
+            task: The task containing agent type and context
+
+        Returns:
+            Base prompt string (without Foundation Context)
         """
         try:
             # Try to load from prompting system
@@ -779,23 +831,21 @@ Begin your analysis now."""
         self,
         agent_type: str,
         task: Optional[DispatchTask] = None,
-        foundation_context: Optional[FoundationContext] = None,
     ) -> str:
         """Get fallback prompt from Python templates.
 
         Args:
             agent_type: Type of agent
             task: Optional task for context injection
-            foundation_context: Optional Foundation Context (no longer used - context is in file)
 
         Returns:
-            Prompt string
+            Base prompt string (Foundation Context is added by _get_subagent_prompt)
         """
         from agents.deep_audit.subagents import get_prompt_for_agent_type
 
         # Get base prompt for agent type
-        # Note: Prompts now instruct agents to read /memories/foundation/context.md
-        # instead of using {{FOUNDATION_CONTEXT}} placeholder injection
+        # Note: Foundation Context is now embedded by _get_subagent_prompt()
+        # using the Gas Town approach (direct prompt injection)
         base = get_prompt_for_agent_type(agent_type)
 
         if task:

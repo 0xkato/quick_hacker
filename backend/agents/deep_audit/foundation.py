@@ -71,7 +71,12 @@ class FoundationContext:
     Complete foundation context for the security audit.
 
     Built during the Foundation Phase by RepoProfiler, ScopeMapper, and ThreatModeler.
-    Written to /memories/foundation/context.md for all downstream agents to read.
+
+    GAS TOWN ARCHITECTURE:
+    - Context is EMBEDDED directly in subagent system prompts by the dispatcher
+    - Subagents run as separate `claude -p` processes and cannot access ContextVars
+    - The to_prompt_context() method serializes context for prompt injection
+    - File /memories/foundation/context.md is still written for debugging/logging
 
     The context enables agents to:
     - Filter out test/vendor/generated code (is_in_scope)
@@ -88,8 +93,7 @@ class FoundationContext:
         >>> ctx = FoundationContext.from_dict(foundation_data)
         >>> if ctx.is_in_scope("src/api/auth.py"):
         ...     # Analyze this file
-        >>> # Context is written to /memories/foundation/context.md
-        >>> # Agents read it using: Read("/memories/foundation/context.md")
+        >>> prompt = ctx.to_prompt_context()  # Serialize for prompt injection
     """
     repo_profile: RepoProfile
     scope_map: ScopeMap

@@ -81,17 +81,19 @@ from agents.deep_audit.tools.finalize import UPDATE_CAMPAIGN_STATE_TOOL, FINALIZ
 from prompting_loader import load_prompt
 from services.observability_service import observability_service
 from services.flow_service import flow_service
+from services.findings_service import findings_service
 
 
-# Scan tier time budgets in seconds
+# Scan tier time budgets in seconds - aligned with scan_tier_service.py
+# NOTE: Authoritative values are in services/scan_tier_service.py:SCAN_TIER_BUDGET_SECONDS
 SCAN_TIER_BUDGETS = {
     "quick": 300,           # 5 minutes
     "medium": 900,          # 15 minutes
-    "standard": 900,        # 15 minutes (alias)
-    "advanced": 1800,       # 30 minutes
-    "deep": 1800,           # 30 minutes (alias)
-    "pro": 3600,            # 1 hour
-    "exhaustive": 3600,     # 1 hour (alias)
+    "standard": 900,        # 15 minutes (alias for medium)
+    "advanced": 2700,       # 45 minutes (was 30min - now matches scan_tier_service)
+    "deep": 2700,           # 45 minutes (alias for advanced)
+    "pro": 5400,            # 90 minutes (was 60min - now matches scan_tier_service)
+    "exhaustive": 5400,     # 90 minutes (alias for pro)
     "ultra": 14400,         # 4 hours
     "evil": 86400,          # 24 hours
 }
@@ -139,7 +141,12 @@ class Overseer(BaseAgent):
 
         # Determine time budget
         scan_tier = request.scan_tier or "quick"
-        self.time_budget = request.time_budget_seconds or SCAN_TIER_BUDGETS.get(scan_tier, 300)
+        # Use explicit None check to allow time_budget_seconds=0 (though unlikely)
+        self.time_budget = (
+            request.time_budget_seconds
+            if request.time_budget_seconds is not None
+            else SCAN_TIER_BUDGETS.get(scan_tier, 300)
+        )
 
         # Initialize campaign state
         self.campaign_state = CampaignState(
@@ -156,16 +163,25 @@ class Overseer(BaseAgent):
 
         # Initialize dispatcher with Claude Code auth mode (Gas Town approach)
         # ALWAYS use Claude CLI with subscription auth - NO API KEYS
-        # ALWAYS use Opus for all agents
+        # Default to Opus for quality, but allow user override via provider_config
+        default_model = "claude-opus-4-5-20251101"
+        user_model = (
+            request.provider_config.model
+            if request.provider_config and request.provider_config.model
+            else None
+        )
+        # Use user's model if provided, otherwise default to Opus
+        model_to_use = user_model or default_model
+
         provider_config = {
             "provider": request.provider_config.provider if request.provider_config else ProviderType.ANTHROPIC,
-            "model": "claude-opus-4-5-20251101",  # Opus for everything
+            "model": model_to_use,
             "use_claude_code_auth": True,  # ALWAYS use Claude CLI subscription auth
         }
         self.provider_config = provider_config  # Store for later use
 
-        # Model for Claude CLI calls - ALWAYS use Opus for Overseer orchestration
-        self.model = "claude-opus-4-5-20251101"
+        # Model for Claude CLI calls
+        self.model = model_to_use
 
         self.dispatcher = WaveDispatcher(
             repo_path=repo_path,
@@ -640,6 +656,9 @@ Continue the investigation. What should the next wave focus on?"""
 
             # Get foundation context from dispatch_tools (set during Foundation Phase)
             foundation_ctx = dispatch_tools.get_foundation_context()
+            if foundation_ctx is None:
+                print("[Overseer] WARNING: Foundation Context not available - Hunting agents will run without context")
+                await self.emit_log("WARNING: Foundation Context not available - analysis may be less accurate")
             hunting_result = await self.dispatcher.dispatch_wave(hunting_wave, foundation_context=foundation_ctx)
             self.waves_completed = 1
             self.campaign_state.current_wave = 1
@@ -669,9 +688,20 @@ Continue the investigation. What should the next wave focus on?"""
 
             # === PHASE 3: WAVE LOOP ===
             # Continue dispatching waves until time budget is exhausted
-            # Minimum time to dispatch another wave (2 minutes)
-            MIN_TIME_FOR_WAVE = 120
+            # CRITICAL: Reserve time for Phase 4 (specialist routing)
+            # Each signal routing can take 30-60s, and we need at least 60s minimum
+            # Reserve 20% of total budget OR 120s minimum for routing
+            TIME_RESERVED_FOR_ROUTING = max(120, int(self.time_budget * 0.20))
+            # Minimum time to run one wave (subagent execution + overhead)
+            MIN_WAVE_EXECUTION_TIME = 60
+            # Exit wave loop when we have less than reserved + one wave worth of time
+            MIN_TIME_FOR_WAVE = TIME_RESERVED_FOR_ROUTING + MIN_WAVE_EXECUTION_TIME
             MAX_WAVES = 50  # Safety limit
+            # Also limit waves based on time: at most 1 wave per 2 minutes of budget
+            MAX_WAVES_BY_TIME = max(1, self.time_budget // 120)
+            EFFECTIVE_MAX_WAVES = min(MAX_WAVES, MAX_WAVES_BY_TIME)
+
+            print(f"[Overseer] Time budget: {self.time_budget}s, reserving {TIME_RESERVED_FOR_ROUTING}s for routing, max waves: {EFFECTIVE_MAX_WAVES}")
 
             # Different vulnerability types to hunt for in rotation
             HUNT_FOCUSES = [
@@ -686,15 +716,16 @@ Continue the investigation. What should the next wave focus on?"""
             ]
 
             while (self.campaign_state.time_remaining() > MIN_TIME_FOR_WAVE
-                   and self.waves_completed < MAX_WAVES
+                   and self.waves_completed < EFFECTIVE_MAX_WAVES
                    and not self._cancelled):
 
                 self.waves_completed += 1
-                wave_num = self.waves_completed + 1
+                wave_num = self.waves_completed  # Wave number matches completed count
                 remaining = self.campaign_state.time_remaining()
 
                 # Pick a hunt focus based on wave number (rotate through focuses)
-                focus_idx = (wave_num - 2) % len(HUNT_FOCUSES)
+                # Wave 1 uses focus index 0, wave 2 uses index 1, etc.
+                focus_idx = (wave_num - 1) % len(HUNT_FOCUSES)
                 hunt_focus, focus_name = HUNT_FOCUSES[focus_idx]
 
                 await self.emit_log(f"Wave {wave_num}: {remaining:.0f}s remaining - hunting for {focus_name} vulnerabilities")
@@ -824,9 +855,10 @@ Output JSON with your analysis for each signal.""",
             if self._cancelled:
                 await self.emit_log("Scan cancelled by user.")
             elif self.campaign_state.time_remaining() <= MIN_TIME_FOR_WAVE:
-                await self.emit_log(f"Time budget nearly exhausted ({self.campaign_state.time_remaining():.0f}s remaining)")
-            elif self.waves_completed >= MAX_WAVES:
-                await self.emit_log(f"Maximum waves reached ({MAX_WAVES})")
+                await self.emit_log(f"Reserving time for Phase 4 routing ({self.campaign_state.time_remaining():.0f}s remaining, reserved {TIME_RESERVED_FOR_ROUTING}s)")
+                print(f"[Overseer] Exiting wave loop to reserve time for routing: {self.campaign_state.time_remaining():.0f}s remaining")
+            elif self.waves_completed >= EFFECTIVE_MAX_WAVES:
+                await self.emit_log(f"Maximum waves reached ({EFFECTIVE_MAX_WAVES} for {self.time_budget}s budget)")
 
             # === PHASE 4: SIGNAL ROUTING ===
             # Route each signal through: Decider → FamilyCoordinator → Specialist → Triager
@@ -931,12 +963,16 @@ Output JSON with your analysis for each signal.""",
                             if isinstance(signal, dict):
                                 # Convert signal to finding format
                                 # CRITICAL: Preserve signal_id for downstream routing
+                                # Generate title from category if no explicit title
+                                category = signal.get("category", signal.get("vulnerability_type", "unknown"))
+                                default_title = f"Potential {category.replace('_', ' ').title()}"
+                                raw_sev = signal.get("severity", "medium")
                                 finding = {
-                                    "signal_id": signal.get("signal_id", f"sig-{hash(str(signal)) % 10000}"),
-                                    "title": signal.get("title", signal.get("type", "Potential Vulnerability")),
+                                    "signal_id": signal.get("signal_id", f"sig-{uuid.uuid4().hex[:8]}"),
+                                    "title": signal.get("title", signal.get("type", default_title)),
                                     "description": signal.get("description", signal.get("reasoning", signal.get("why_suspicious", ""))),
-                                    "severity": signal.get("severity", "MEDIUM"),
-                                    "category": signal.get("category", signal.get("vulnerability_type", "unknown")),
+                                    "severity": raw_sev.lower() if isinstance(raw_sev, str) else "medium",
+                                    "category": category,
                                     "vulnerability_type": signal.get("type", signal.get("sink_type", "unknown")),
                                     "location": signal.get("location", signal.get("file_path", "")),
                                     "file_path": signal.get("file_path", signal.get("location", "")),
@@ -1032,11 +1068,15 @@ Output JSON with your analysis for each signal.""",
                             for signal in signals:
                                 if isinstance(signal, dict):
                                     # CRITICAL: Preserve signal_id for downstream routing
+                                    # Generate title from category if no explicit title (SinkHunter outputs category, not title)
+                                    category = signal.get("category", signal.get("vulnerability_type", "unknown"))
+                                    default_title = f"Potential {category.replace('_', ' ').title()}"
+                                    raw_severity = signal.get("severity", "medium")
                                     finding = {
-                                        "signal_id": signal.get("signal_id", f"sig-{hash(str(signal)) % 10000}"),
-                                        "title": signal.get("title", signal.get("type", "Potential Vulnerability")),
+                                        "signal_id": signal.get("signal_id", f"sig-{uuid.uuid4().hex[:8]}"),
+                                        "title": signal.get("title", signal.get("type", default_title)),
                                         "description": signal.get("description", signal.get("reasoning", signal.get("why_suspicious", ""))),
-                                        "severity": signal.get("severity", "MEDIUM"),
+                                        "severity": raw_severity.lower() if isinstance(raw_severity, str) else "medium",
                                         "category": signal.get("category", signal.get("vulnerability_type", "unknown")),
                                         "vulnerability_type": signal.get("type", signal.get("sink_type", "unknown")),
                                         "location": signal.get("location", signal.get("file_path", "")),
@@ -1219,16 +1259,29 @@ Output your verdict as JSON.""",
                         if verdict_data:
                             verdict = verdict_data.get("verdict", "unknown")
                             signal_id = verdict_data.get("signal_id", "")
+
+                            # Skip if no signal_id - can't match to a finding
+                            if not signal_id:
+                                print(f"[Overseer] WARNING: Verdict in {filename} has no signal_id, cannot match")
+                                continue
+
                             print(f"[Overseer] Specialist verdict: {signal_id} -> {verdict}")
 
-                            # If verified as vulnerable, update confidence
-                            if verdict == "vulnerable":
-                                # Find and update the signal
-                                for finding in self.campaign_state.confirmed_findings:
-                                    if finding.get("signal_id") == signal_id:
+                            # Find and update the signal
+                            matched = False
+                            for finding in self.campaign_state.confirmed_findings:
+                                if finding.get("signal_id") == signal_id:
+                                    matched = True
+                                    if verdict == "vulnerable":
                                         finding["verified"] = True
                                         finding["confidence"] = verdict_data.get("confidence", 0.9)
-                                        break
+                                    elif verdict == "not_vulnerable":
+                                        finding["dismissed_by_specialist"] = True
+                                        finding["specialist_reasoning"] = verdict_data.get("reasoning", "")
+                                    break
+
+                            if not matched:
+                                print(f"[Overseer] WARNING: Verdict for signal {signal_id} not found in confirmed_findings")
         except Exception as e:
             print(f"[Overseer] Error collecting specialist verdicts: {e}")
 
@@ -1245,7 +1298,7 @@ Output your verdict as JSON.""",
         Returns:
             Finding dict if signal is verified as vulnerability, None if dismissed.
         """
-        signal_id = signal.get("signal_id", f"sig-{hash(str(signal)) % 10000}")
+        signal_id = signal.get("signal_id", f"sig-{uuid.uuid4().hex[:8]}")
         signal_severity = signal.get("severity", "MEDIUM").upper()
 
         # Stage 1: Decider - Should we investigate?
@@ -1258,7 +1311,8 @@ Output your verdict as JSON.""",
         coordinator_result = await self._run_family_coordinator(signal, decider_result)
         if not coordinator_result:
             print(f"[Overseer] Signal {signal_id}: FamilyCoordinator failed, using defaults")
-            coordinator_result = {"primary_specialist": "generic_auditor", "context_for_specialist": ""}
+            # Use mass_assignment_auditor as fallback (API_DESIGN family catchall)
+            coordinator_result = {"primary_specialist": "mass_assignment_auditor", "family": "api_design", "context_for_specialist": ""}
 
         # Stage 3: Specialist - Technical validation
         specialist_start = time.time()
@@ -1285,6 +1339,10 @@ Output your verdict as JSON.""",
 
         return finding
 
+    # Threshold for considering a specialist dismissal "quick" (seconds)
+    # Complex files may legitimately take longer to analyze, so set higher than typical
+    QUICK_DISMISSAL_THRESHOLD_SECONDS = 60
+
     def _should_challenge_specialist(
         self,
         signal_severity: str,
@@ -1294,7 +1352,7 @@ Output your verdict as JSON.""",
         """Determine if specialist result should be challenged by Devil's Advocate.
 
         Triggers:
-        - High-severity signal dismissed quickly (< 30 seconds)
+        - High-severity signal dismissed quickly (< QUICK_DISMISSAL_THRESHOLD_SECONDS)
         - Low confidence dismissal of critical signal
         - Generic reasoning for dismissal
         """
@@ -1305,8 +1363,8 @@ Output your verdict as JSON.""",
 
         # Always challenge quick dismissals of critical/high severity
         if signal_severity in ("CRITICAL", "HIGH"):
-            # Quick dismissal (< 30 seconds)
-            if duration_seconds < 30:
+            # Quick dismissal (< threshold seconds)
+            if duration_seconds < self.QUICK_DISMISSAL_THRESHOLD_SECONDS:
                 return True
             # Low confidence
             confidence = specialist_result.get("confidence", 100)
@@ -1325,10 +1383,11 @@ Output your verdict as JSON.""",
         """
         from agents.deep_audit.subagents import get_devils_advocate_prompt
 
+        signal_id = signal.get("signal_id", "unknown")
         signal_context = json.dumps(signal, indent=2)
         dismissal_verdict = json.dumps(specialist_result, indent=2)
 
-        prompt = get_devils_advocate_prompt(signal_context, dismissal_verdict)
+        prompt = get_devils_advocate_prompt(signal_context, dismissal_verdict, signal_id)
 
         try:
             foundation_ctx = dispatch_tools.get_foundation_context()
@@ -1389,8 +1448,14 @@ Output your decision as JSON with keys: decision, rationale"""
             )
 
             if result and result.output:
-                return self._extract_json_from_output(result.output)
-            return None
+                parsed = self._extract_json_from_output(result.output)
+                if parsed:
+                    return parsed
+                # JSON parse failed - default to investigate (don't drop signals)
+                print(f"[Overseer] Decider JSON parse failed, defaulting to investigate")
+                return {"decision": "investigate", "parse_error": "Could not parse Decider output"}
+            # No output - default to investigate
+            return {"decision": "investigate", "no_output": True}
 
         except Exception as e:
             print(f"[Overseer] Decider failed for signal: {e}")
@@ -1471,7 +1536,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
             except (ValueError, KeyError):
                 specialists = []
             return {
-                "primary_specialist": specialists[0] if specialists else "generic_auditor",
+                "primary_specialist": specialists[0] if specialists else "mass_assignment_auditor",
                 "family": family.value,
                 "context_for_specialist": "Error getting coordinator context",
                 "error": str(e),
@@ -1507,7 +1572,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
 
     async def _run_single_specialist(self, signal: dict, coordinator_result: dict) -> Optional[dict]:
         """Run a single specialist for standard validation."""
-        specialist_id = coordinator_result.get("primary_specialist", "generic_auditor")
+        specialist_id = coordinator_result.get("primary_specialist", "mass_assignment_auditor")
         context = coordinator_result.get("context_for_specialist", "")
         signal_id = signal.get('signal_id', 'unknown')
 
@@ -1620,7 +1685,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
         print(f"[Overseer] Signal {signal_id}: Running cross-validation (CRITICAL severity)")
 
         # Get primary and secondary specialists
-        primary_id = coordinator_result.get("primary_specialist", "generic_auditor")
+        primary_id = coordinator_result.get("primary_specialist", "mass_assignment_auditor")
         secondary_id = coordinator_result.get("secondary_specialist")
 
         # If no secondary, get another from the same family
@@ -1810,11 +1875,14 @@ Output as JSON with: classification, severity, title, description, recommendatio
 
                     if classification == "SECURITY_VULNERABILITY":
                         # Build finding from triage result
+                        # Normalize severity to lowercase for Severity enum
+                        raw_severity = triage_result.get("severity", "medium")
+                        normalized_severity = raw_severity.lower() if isinstance(raw_severity, str) else "medium"
                         return {
                             "signal_id": signal.get("signal_id"),
                             "title": triage_result.get("title", signal.get("title", "Untitled")),
                             "description": triage_result.get("description", ""),
-                            "severity": triage_result.get("severity", "MEDIUM"),
+                            "severity": normalized_severity,
                             "vulnerability_type": signal.get("category", signal.get("vulnerability_type", "unknown")),
                             "location": signal.get("file_path", signal.get("location", "")),
                             "file_path": signal.get("file_path", ""),
@@ -1831,7 +1899,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                             "signal_id": signal.get("signal_id"),
                             "title": f"[Hardening] {triage_result.get('title', signal.get('title', 'Untitled'))}",
                             "description": triage_result.get("description", ""),
-                            "severity": "LOW",  # Hardening items are always low
+                            "severity": "low",  # Hardening items are always low (lowercase for Severity enum)
                             "vulnerability_type": signal.get("category", "hardening"),
                             "location": signal.get("file_path", ""),
                             "file_path": signal.get("file_path", ""),
@@ -1843,11 +1911,47 @@ Output as JSON with: classification, severity, title, description, recommendatio
                         }
                     # BY_DESIGN and DISMISSED return None
                     return None
-            return None
+            # JSON parse failure - preserve signal as unverified finding instead of losing it
+            print(f"[Overseer] Triager returned unparseable output for {signal.get('signal_id')} - preserving as UNVERIFIED")
+            return self._build_unverified_finding(signal, specialist_result, "triager_parse_failure")
 
         except Exception as e:
-            print(f"[Overseer] Triager failed: {e}")
-            return None
+            print(f"[Overseer] Triager failed: {e} - preserving signal as UNVERIFIED")
+            return self._build_unverified_finding(signal, specialist_result, f"triager_error: {e}")
+
+    def _build_unverified_finding(
+        self, signal: dict, specialist_result: Optional[dict], reason: str
+    ) -> dict:
+        """Build an unverified finding from a signal when routing fails.
+
+        This preserves the signal as a finding for manual review rather than
+        silently dropping it when Triager/Specialist fails to classify.
+
+        Args:
+            signal: Original signal from hunter
+            specialist_result: Result from specialist (may be None)
+            reason: Why the finding is unverified
+
+        Returns:
+            Finding dict marked as UNVERIFIED
+        """
+        category = signal.get("category", signal.get("vulnerability_type", "unknown"))
+        return {
+            "signal_id": signal.get("signal_id"),
+            "title": f"[Unverified] {signal.get('title', category.replace('_', ' ').title())}",
+            "description": signal.get("why_suspicious", signal.get("description", "")),
+            "severity": signal.get("severity", "medium").lower(),  # Use lowercase for Severity enum
+            "vulnerability_type": category,
+            "location": signal.get("file_path", signal.get("location", "")),
+            "file_path": signal.get("file_path", ""),
+            "line_start": signal.get("line_start", signal.get("line_number")),
+            "code_snippet": signal.get("code_snippet", ""),
+            "remediation": "Manual review required - automated triage failed.",
+            "confidence": 0.3,  # Low confidence since unverified
+            "verified_by": specialist_result.get("specialist_id") if specialist_result else None,
+            "classification": "UNVERIFIED",
+            "unverified_reason": reason,
+        }
 
     async def _route_all_signals(self):
         """Route all collected signals through the verification pipeline.
@@ -1891,7 +1995,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
         await self.emit_flow_update()
 
         verified_findings = []
-        dismissed_count = 0
+        dismissed_signal_ids = set()  # Track actually dismissed signals, not just count
         error_count = 0
 
         for i, signal in enumerate(signals):
@@ -1935,7 +2039,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                         }
                     )
                 else:
-                    dismissed_count += 1
+                    dismissed_signal_ids.add(signal_id)  # Track the actual signal ID
                     await self.emit_log(f"  → Dismissed")
                     # Emit dismissed event
                     await self.emit(
@@ -1943,7 +2047,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                         {
                             "type": "signal_dismissed",
                             "signal_id": signal_id,
-                            "dismissed_count": dismissed_count,
+                            "dismissed_count": len(dismissed_signal_ids),
                         }
                     )
             except Exception as e:
@@ -1952,21 +2056,50 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 await self.emit_log(f"  → Error: {e}")
 
         # Update confirmed findings with verified ones
-        # If routing produced no results, keep original signals as fallback
+        # Preserve errored signals as unverified to avoid data loss
+        verified_ids = {f.get("signal_id") for f in verified_findings}
         if verified_findings:
-            self.campaign_state.confirmed_findings = verified_findings
+            # Include verified findings plus any errored signals (marked as unverified)
+            # Errored signals = original signals NOT verified AND NOT dismissed
+            errored_signals = [
+                s for s in original_signals
+                if s.get("signal_id") not in verified_ids
+                and s.get("signal_id") not in dismissed_signal_ids
+            ]
+            for sig in errored_signals:
+                sig["unverified"] = True
+                sig["routing_error"] = True
+            self.campaign_state.confirmed_findings = verified_findings + errored_signals
         elif error_count == len(signals):
-            # All signals errored - keep originals
+            # All signals errored - keep originals marked as unverified
+            for sig in original_signals:
+                sig["unverified"] = True
+                sig["routing_error"] = True
             self.campaign_state.confirmed_findings = original_signals
             await self.emit_log("WARNING: All routing failed, keeping original signals as unverified findings")
+        elif error_count > 0:
+            # Some dismissed, some errored, none verified - preserve errored ones
+            # (dismissed ones were intentionally dismissed, but errors need investigation)
+            # Find signals that errored (not verified AND not dismissed)
+            errored_signals = [
+                s for s in original_signals
+                if s.get("signal_id") not in verified_ids
+                and s.get("signal_id") not in dismissed_signal_ids
+            ]
+            for sig in errored_signals:
+                sig["unverified"] = True
+                sig["routing_error"] = True
+            await self.emit_log(f"WARNING: {len(errored_signals)} signals failed routing - preserving as unverified")
+            self.campaign_state.confirmed_findings = errored_signals
         else:
-            # Some dismissed, some errored, none verified - clear (all were intentionally dismissed)
+            # All intentionally dismissed - clear
             self.campaign_state.confirmed_findings = []
 
         if routing_node:
             flow_service.update_node_status(self.id, routing_node.id, "completed")
         await self.emit_flow_update()
 
+        dismissed_count = len(dismissed_signal_ids)
         await self.emit_log(f"Routing complete: {len(verified_findings)} verified, {dismissed_count} dismissed, {error_count} errors")
         print(f"[Overseer] Routing complete: {len(verified_findings)} verified, {dismissed_count} dismissed, {error_count} errors")
 
@@ -2009,10 +2142,18 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 file_path = location.split(":")[0] if ":" in location else location
                 line_start = self._extract_line_number(location) or 1
 
-                # Normalize severity to uppercase enum value
-                severity = finding_data.get("severity", "MEDIUM")
+                # Normalize severity to lowercase enum value (Severity enum uses lowercase: "critical", "high", etc.)
+                severity = finding_data.get("severity", "medium")
                 if isinstance(severity, str):
-                    severity = severity.upper()
+                    severity = severity.lower()
+
+                # Preserve signal_id for traceability back to original hunter output
+                signal_id = finding_data.get("signal_id")
+                metadata = finding_data.get("metadata", {})
+                if signal_id:
+                    metadata["signal_id"] = signal_id
+                    metadata["category"] = finding_data.get("category", "unknown")
+                    metadata["why_suspicious"] = finding_data.get("why_suspicious", "")
 
                 finding_create = FindingCreate(
                     title=finding_data.get("title", "Untitled Finding"),
@@ -2025,9 +2166,16 @@ Output as JSON with: classification, severity, title, description, recommendatio
                     code_snippet=finding_data.get("code_snippet"),
                     recommended_fix=finding_data.get("remediation") or finding_data.get("recommendation"),
                     confidence=finding_data.get("confidence", 0.8),
+                    metadata=metadata,
                 )
                 finding = self.add_finding(finding_create)
                 if finding:
+                    # Save to database for persistence (critical for UI to show findings after refresh)
+                    try:
+                        await findings_service.save_finding(finding)
+                    except Exception as db_err:
+                        print(f"[Overseer] Failed to save finding to database: {db_err}")
+                        # Continue even if DB save fails - finding is still in memory
                     await self.emit_finding(finding)
                     processed_count += 1
                 else:

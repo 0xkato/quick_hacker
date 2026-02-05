@@ -1,6 +1,11 @@
-"""Dispatch tools for Overseer to spawn sub-agents."""
+"""Dispatch tools for Overseer to spawn sub-agents.
+
+Uses contextvars for async-safe state management, allowing multiple concurrent
+Overseer instances without race conditions.
+"""
 
 import json
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -8,33 +13,40 @@ if TYPE_CHECKING:
     from agents.deep_audit.foundation import FoundationContext
 
 
-# These will be set by the Overseer when initializing tools
-_dispatcher: "WaveDispatcher" = None
-_current_wave_id: int = 0
-_foundation_context: Optional["FoundationContext"] = None
+# Context variables for async-safe state (each async context gets its own copy)
+_dispatcher_var: ContextVar[Optional["WaveDispatcher"]] = ContextVar("dispatcher", default=None)
+_current_wave_id_var: ContextVar[int] = ContextVar("wave_id", default=0)
+_foundation_context_var: ContextVar[Optional["FoundationContext"]] = ContextVar("foundation_context", default=None)
 
 
 def set_dispatcher(dispatcher: "WaveDispatcher"):
-    """Set the dispatcher instance for tools to use."""
-    global _dispatcher
-    _dispatcher = dispatcher
+    """Set the dispatcher instance for tools to use (async-safe)."""
+    _dispatcher_var.set(dispatcher)
 
 
 def set_wave_id(wave_id: int):
-    """Set the current wave ID."""
-    global _current_wave_id
-    _current_wave_id = wave_id
+    """Set the current wave ID (async-safe)."""
+    _current_wave_id_var.set(wave_id)
 
 
 def set_foundation_context(context: "FoundationContext"):
-    """Set the Foundation Context from Foundation Phase."""
-    global _foundation_context
-    _foundation_context = context
+    """Set the Foundation Context from Foundation Phase (async-safe)."""
+    _foundation_context_var.set(context)
 
 
 def get_foundation_context() -> Optional["FoundationContext"]:
-    """Get the current Foundation Context."""
-    return _foundation_context
+    """Get the current Foundation Context (async-safe)."""
+    return _foundation_context_var.get()
+
+
+def get_dispatcher() -> Optional["WaveDispatcher"]:
+    """Get the current dispatcher (async-safe)."""
+    return _dispatcher_var.get()
+
+
+def get_wave_id() -> int:
+    """Get the current wave ID (async-safe)."""
+    return _current_wave_id_var.get()
 
 
 async def dispatch_wave(wave_plan_json: str) -> str:
@@ -64,7 +76,8 @@ async def dispatch_wave(wave_plan_json: str) -> str:
     Returns:
         JSON string with results for all tasks
     """
-    if _dispatcher is None:
+    dispatcher = _dispatcher_var.get()
+    if dispatcher is None:
         return json.dumps({"error": "Dispatcher not initialized"})
 
     try:
@@ -87,17 +100,19 @@ async def dispatch_wave(wave_plan_json: str) -> str:
             for t in plan_data.get("tasks", [])
         ]
 
+        current_wave_id = _current_wave_id_var.get()
         wave_plan = WavePlan(
-            wave_id=plan_data.get("wave_id", _current_wave_id),
+            wave_id=plan_data.get("wave_id", current_wave_id),
             tasks=tasks,
             rationale=plan_data.get("rationale", ""),
         )
 
         # Dispatch and wait - pass Foundation Context if available
-        result = await _dispatcher.dispatch_wave(wave_plan, foundation_context=_foundation_context)
+        foundation_context = _foundation_context_var.get()
+        result = await dispatcher.dispatch_wave(wave_plan, foundation_context=foundation_context)
 
         # Format results
-        context_applied = _foundation_context is not None
+        context_applied = foundation_context is not None
         return json.dumps({
             "foundation_context_applied": context_applied,
             "wave_id": result.wave_id,
@@ -144,7 +159,8 @@ async def dispatch_agent(
     Returns:
         JSON string with task result
     """
-    if _dispatcher is None:
+    dispatcher = _dispatcher_var.get()
+    if dispatcher is None:
         return json.dumps({"error": "Dispatcher not initialized"})
 
     try:
@@ -160,7 +176,8 @@ async def dispatch_agent(
         )
 
         # Pass Foundation Context if available
-        result = await _dispatcher.dispatch_single(task, foundation_context=_foundation_context)
+        foundation_context = _foundation_context_var.get()
+        result = await dispatcher.dispatch_single(task, foundation_context=foundation_context)
 
         return json.dumps({
             "task_id": result.task_id,
@@ -169,7 +186,7 @@ async def dispatch_agent(
             "output_path": result.output_path,
             "error": result.error,
             "tokens_used": result.tokens_used,
-            "foundation_context_applied": _foundation_context is not None,
+            "foundation_context_applied": foundation_context is not None,
         }, indent=2)
 
     except Exception as e:
@@ -211,11 +228,12 @@ async def dispatch_foundation_phase() -> str:
     Returns:
         JSON string with Foundation Phase results and context summary
     """
-    if _dispatcher is None:
+    dispatcher = _dispatcher_var.get()
+    if dispatcher is None:
         return json.dumps({"error": "Dispatcher not initialized"})
 
     try:
-        result, foundation_context = await _dispatcher.dispatch_foundation_phase()
+        result, foundation_context = await dispatcher.dispatch_foundation_phase()
 
         response = {
             "wave_id": result.wave_id,
@@ -236,9 +254,8 @@ async def dispatch_foundation_phase() -> str:
         }
 
         if foundation_context:
-            # Store Foundation Context for subsequent waves
-            global _foundation_context
-            _foundation_context = foundation_context
+            # Store Foundation Context for subsequent waves (async-safe)
+            _foundation_context_var.set(foundation_context)
             print(f"[Foundation] SUCCESS: Foundation Context built and stored")
             print(f"[Foundation] Languages: {foundation_context.repo_profile.languages}")
             print(f"[Foundation] Frameworks: {foundation_context.repo_profile.frameworks}")

@@ -327,6 +327,136 @@ async def get_all_findings(
     return findings
 
 
+@router.post("/findings/triage")
+async def triage_all_findings(
+    repo_id: str = Query(..., description="Repository ID to triage findings for"),
+    request: LLMTriageRequest = LLMTriageRequest(),
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """
+    Triage all findings for a repository without requiring a specific agent.
+
+    Use this when you want to triage from the "All Agents" view.
+    """
+    from models.schemas import Disposition
+
+    # Get repo path from project
+    repo_path = project_service.get_project_repo_path(repo_id)
+    if not repo_path:
+        repo_path = project_service.get_project_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=400, detail="Could not determine repository path")
+
+    # Get all findings for this repo
+    all_findings = await get_all_findings(repo_id=repo_id)
+
+    if not all_findings:
+        return LLMTriageResponse(triaged_count=0, results=[], findings=[])
+
+    print(f"[Triage All] Processing {len(all_findings)} findings for repo {repo_id}")
+
+    # Select findings to triage
+    findings_to_triage = list(all_findings)
+
+    # Filter to specific IDs if requested
+    if request.finding_ids:
+        finding_id_set = set(request.finding_ids)
+        findings_to_triage = [f for f in findings_to_triage if f.id in finding_id_set]
+
+    # Sort by severity
+    severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, None: 5}
+    findings_to_triage.sort(key=lambda f: severity_order.get(f.severity, 5))
+
+    # Apply limit if specified
+    if request.max_findings is not None and len(findings_to_triage) > request.max_findings:
+        findings_to_triage = findings_to_triage[:request.max_findings]
+
+    # Get API key from settings if not provided
+    api_key = request.api_key
+    if not api_key and request.provider == "anthropic" and not request.use_claude_code_auth:
+        try:
+            app_settings = await settings_service.get_settings()
+            provider_settings = app_settings.providers.get("anthropic")
+            if provider_settings and provider_settings.api_key:
+                api_key = provider_settings.api_key
+        except Exception as e:
+            print(f"[Triage All] Could not get API key from settings: {e}")
+
+    # Use triage agent if available
+    if request.use_claude_sdk and request.provider == "anthropic":
+        try:
+            from services.triage_agent_service import run_triage_agent
+
+            triage_agent, triage_result = await run_triage_agent(
+                findings=findings_to_triage,
+                repo_id=repo_id,
+                repo_path=repo_path,
+                api_key=api_key,
+                model=request.model or "claude-sonnet-4-20250514",
+                use_claude_code_auth=request.use_claude_code_auth,
+                on_message=lambda msg: orchestrator._broadcast_message(msg),
+            )
+
+            # Build results
+            results = []
+            for decision in triage_result.decisions:
+                results.append(LLMTriageResult(
+                    finding_id=decision.finding_id,
+                    decision=decision.decision,
+                    confidence=decision.confidence,
+                    reasoning=decision.reasoning,
+                ))
+
+            # Merge triaged findings back
+            triaged_by_id = {f.id: f for f in triage_result.triaged_findings}
+            merged_findings = []
+            for f in all_findings:
+                if f.id in triaged_by_id:
+                    merged_findings.append(triaged_by_id[f.id])
+                else:
+                    merged_findings.append(f)
+
+            # Persist to database
+            for finding in triage_result.triaged_findings:
+                try:
+                    await findings_service.save_finding(finding)
+                except Exception as e:
+                    print(f"[Triage All] Failed to persist finding {finding.id}: {e}")
+
+            return LLMTriageResponse(
+                triaged_count=len(results),
+                results=results,
+                findings=merged_findings,
+                triage_agent_id=triage_agent.id,
+            )
+
+        except Exception as e:
+            print(f"[Triage All] Triage agent failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Triage failed: {str(e)}")
+
+    # Fallback to simple rule-based triage
+    results = []
+    for finding in findings_to_triage:
+        finding.disposition = Disposition.SPECULATIVE
+        finding.classification_confidence = 50
+        finding.reasoning = ["Rule-based triage - needs manual review"]
+        results.append(LLMTriageResult(
+            finding_id=finding.id,
+            decision="speculative",
+            confidence=50,
+            reasoning=["Rule-based triage - needs manual review"],
+        ))
+
+    return LLMTriageResponse(
+        triaged_count=len(results),
+        results=results,
+        findings=all_findings,
+    )
+
+
 # === Observability Endpoints ===
 
 @router.get("/{agent_id}/llm-interactions")

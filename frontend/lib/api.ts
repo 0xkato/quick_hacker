@@ -366,6 +366,46 @@ export const agents = {
     return request(`/api/agents/${agentId}/load`, { method: 'POST' });
   },
 
+  /**
+   * Triage all findings for a repository without requiring a specific agent.
+   * Use this from the "All Agents" view.
+   */
+  async llmTriageByRepo(
+    repoId: string,
+    findingIds?: string[],
+    config?: {
+      provider: string;
+      model: string;
+      apiKey?: string;
+      useClaudeSDK: boolean;
+      useClaudeCodeAuth: boolean;
+      maxFindings?: number;
+    }
+  ): Promise<{
+    triaged_count: number;
+    results: Array<{
+      finding_id: string;
+      decision: string;
+      confidence: number;
+      reasoning: string[];
+    }>;
+    findings: Finding[];
+    triage_agent_id?: string;
+  }> {
+    return request(`/api/agents/findings/triage?repo_id=${encodeURIComponent(repoId)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        finding_ids: findingIds,
+        provider: config?.provider,
+        model: config?.model,
+        api_key: config?.apiKey,
+        use_claude_sdk: config?.useClaudeSDK,
+        use_claude_code_auth: config?.useClaudeCodeAuth,
+        max_findings: config?.maxFindings,
+      }),
+    }, 3600000);
+  },
+
   async getStats(): Promise<AgentStats> {
     return request<AgentStats>('/api/agents/stats');
   },

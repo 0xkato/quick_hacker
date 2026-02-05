@@ -61,6 +61,7 @@ const REPORTABLE_DISPOSITIONS = new Set<Disposition>(['valid_security_issue', 'b
 interface FindingsListProps {
   findings: Finding[];
   agentId?: string | null;
+  repoId?: string | null;  // For triaging all findings when no agent selected
   allAgents?: Array<{ id: string; status: string; agent_type: string }>;  // To check triage agent status
   onFindingClick?: (finding: Finding) => void;
   onNavigateToFile?: (finding: Finding) => void;
@@ -228,7 +229,7 @@ function clearStoredTriageState(): void {
   localStorage.removeItem(TRIAGE_STORAGE_KEY);
 }
 
-export function FindingsList({ findings, agentId, allAgents, onFindingClick, onNavigateToFile, onFindingsUpdated }: FindingsListProps) {
+export function FindingsList({ findings, agentId, repoId, allAgents, onFindingClick, onNavigateToFile, onFindingsUpdated }: FindingsListProps) {
   const [filterSeverity, setFilterSeverity] = useState<Severity | 'all'>('all');
   const [showReportView, setShowReportView] = useState(false);
   const [isTriaging, setIsTriaging] = useState(false);
@@ -285,17 +286,21 @@ export function FindingsList({ findings, agentId, allAgents, onFindingClick, onN
   }, [agentId, allAgents]);
 
   const handleStartTriage = async (config: TriageConfig) => {
-    if (!agentId) return;
+    // Need either agentId or repoId to triage
+    if (!agentId && !repoId) return;
 
     setShowTriageModal(false);
     setIsTriaging(true);
     setTriageMessage(null);
 
     // Store triage state so we can recover if user navigates away
-    setStoredTriageState(agentId);
+    setStoredTriageState(agentId || repoId || 'all');
 
     try {
-      const result = await agents.llmTriage(agentId, undefined, config);
+      // Use repo-level triage when no specific agent, otherwise use agent-level
+      const result = agentId
+        ? await agents.llmTriage(agentId, undefined, config)
+        : await agents.llmTriageByRepo(repoId!, undefined, config);
 
       // Update stored state with triage agent ID if provided
       if (result.triage_agent_id) {
@@ -391,8 +396,8 @@ export function FindingsList({ findings, agentId, allAgents, onFindingClick, onN
           </span>
           {/* Right side controls */}
           <div className="flex items-center gap-2">
-            {/* LLM Triage Button */}
-            {agentId && findings.length > 0 && (
+            {/* LLM Triage Button - works with agent or repo */}
+            {(agentId || repoId) && findings.length > 0 && (
               <button
                 onClick={() => setShowTriageModal(true)}
                 disabled={isTriaging}

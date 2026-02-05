@@ -864,6 +864,7 @@ export default function Home() {
 	                    <FindingsList
 	                      key={findingsMgmt.selectedFindingsAgentId || 'all'}
 	                      agentId={findingsMgmt.selectedFindingsAgentId}
+	                      repoId={currentProject?.id}
 	                      allAgents={agentMgmt.agents}
 	                      findings={
 	                        findingsMgmt.selectedFindingsAgentId
@@ -993,6 +994,7 @@ export default function Home() {
                   <FindingsList
                     key={findingsMgmt.selectedFindingsAgentId || 'all'}
                     agentId={findingsMgmt.selectedFindingsAgentId}
+                    repoId={currentProject?.id}
                     allAgents={agentMgmt.agents}
                     findings={
                       findingsMgmt.selectedFindingsAgentId
@@ -1088,6 +1090,7 @@ export default function Home() {
             <div className="flex-1 overflow-auto">
               <FindingsList
                 findings={findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path)}
+                repoId={currentProject?.id}
                 onFindingClick={handleFindingClick}
                 onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
               />

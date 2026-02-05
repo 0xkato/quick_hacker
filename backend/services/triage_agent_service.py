@@ -173,24 +173,54 @@ def _parse_decisions_from_text(text: str) -> list[TriageDecision]:
     """Parse triage decisions from Claude's text output."""
     decisions = []
 
-    # Look for decision blocks
+    # Strategy 1: Look for ```decision blocks
     pattern = r"```decision\s*\n(.*?)\n```"
     blocks = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
 
-    # Also try without code blocks
+    # Strategy 2: Look for any code blocks that contain FINDING_ID
     if not blocks:
-        pattern = r"FINDING_ID:\s*([^\n]+)\s*\nDECISION:\s*([^\n]+)\s*\nCONFIDENCE:\s*(\d+)\s*\nREASONING:\s*([^\n]+)"
+        pattern = r"```(?:\w*)?\s*\n(.*?FINDING_ID.*?)\n```"
+        blocks = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+
+    # Strategy 3: Look for FINDING_ID patterns in raw text (flexible whitespace)
+    if not blocks:
+        # More flexible pattern - allow any whitespace between fields
+        pattern = r"FINDING_ID:\s*`?([^`\n]+)`?\s*\n\s*DECISION:\s*([^\n]+)\s*\n\s*CONFIDENCE:\s*(\d+)"
         matches = re.findall(pattern, text, re.IGNORECASE)
         for match in matches:
-            finding_id, decision, confidence, reasoning = match
+            finding_id, decision, confidence = match
+            # Try to find reasoning nearby
+            reasoning_match = re.search(
+                rf"FINDING_ID:\s*`?{re.escape(finding_id.strip())}`?.*?REASONING:\s*([^\n]+)",
+                text, re.IGNORECASE | re.DOTALL
+            )
+            reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
+            decisions.append(TriageDecision(
+                finding_id=finding_id.strip().strip('`'),
+                decision=decision.strip().lower(),
+                confidence=min(100, max(0, int(confidence))),
+                reasoning=[reasoning] if reasoning else [],
+            ))
+        if decisions:
+            return decisions
+
+    # Strategy 4: Look for UUID-like patterns followed by decision keywords
+    if not blocks:
+        # Pattern for: finding ID followed somewhere by valid_security_issue, speculative, etc.
+        uuid_pattern = r'`([a-f0-9]{8}-[a-f0-9]{3,})`[^`]*?(valid_security_issue|speculative|hardening|by_design|bug|misconfiguration)'
+        matches = re.findall(uuid_pattern, text, re.IGNORECASE)
+        for match in matches:
+            finding_id, decision = match
             decisions.append(TriageDecision(
                 finding_id=finding_id.strip(),
                 decision=decision.strip().lower(),
-                confidence=min(100, max(0, int(confidence))),
-                reasoning=[reasoning.strip()],
+                confidence=50,
+                reasoning=[],
             ))
-        return decisions
+        if decisions:
+            return decisions
 
+    # Parse code blocks if found
     for block in blocks:
         try:
             finding_id = ""
@@ -201,12 +231,14 @@ def _parse_decisions_from_text(text: str) -> list[TriageDecision]:
             for line in block.strip().split("\n"):
                 line = line.strip()
                 if line.upper().startswith("FINDING_ID:"):
-                    finding_id = line.split(":", 1)[1].strip()
+                    finding_id = line.split(":", 1)[1].strip().strip('`')
                 elif line.upper().startswith("DECISION:"):
                     decision = line.split(":", 1)[1].strip().lower()
                 elif line.upper().startswith("CONFIDENCE:"):
                     try:
-                        confidence = min(100, max(0, int(line.split(":", 1)[1].strip())))
+                        conf_str = re.search(r'\d+', line.split(":", 1)[1])
+                        if conf_str:
+                            confidence = min(100, max(0, int(conf_str.group())))
                     except ValueError:
                         pass
                 elif line.upper().startswith("REASONING:"):
@@ -378,8 +410,21 @@ Remember: Output one ```decision``` block for EACH finding above. Use the EXACT 
 
         # Parse decisions from collected text
         full_response = "".join(collected_text)
+
+        # Debug: log what we received
+        if full_response:
+            # Log first 2000 chars for debugging
+            preview = full_response[:2000].replace('\n', '\\n')
+            print(f"[TriageAgent] Response ({len(full_response)} chars): {preview}")
+        else:
+            print(f"[TriageAgent] WARNING: Empty response from SDK")
+
         batch_decisions = _parse_decisions_from_text(full_response)
         print(f"[TriageAgent] Parsed {len(batch_decisions)} decisions from batch")
+
+        # If parsing failed, log more details
+        if not batch_decisions and full_response:
+            print(f"[TriageAgent] PARSE FAILED - Full response:\n{full_response}")
 
         all_decisions.extend(batch_decisions)
 

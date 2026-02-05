@@ -388,8 +388,8 @@ async def triage_all_findings(
     if not repo_path:
         raise HTTPException(status_code=400, detail="Could not determine repository path")
 
-    # Get all findings for this repo
-    all_findings = await get_all_findings(repo_id=repo_id)
+    # Get all findings for this repo (pass explicit limit since internal call)
+    all_findings = await get_all_findings(repo_id=repo_id, limit=500)
 
     if not all_findings:
         return LLMTriageResponse(triaged_count=0, results=[], findings=[])

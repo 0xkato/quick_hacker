@@ -273,53 +273,63 @@ async def get_agent_findings(agent_id: str):
 @router.get("/findings/all", response_model=list[Finding])
 async def get_all_findings(
     repo_id: Optional[str] = Query(None, description="Filter by repository"),
+    limit: int = Query(500, description="Maximum findings to return"),
 ):
-    """Get all findings with optional filtering (from memory, persisted states, and database)."""
+    """Get all findings with optional filtering (from memory and persisted states)."""
     # Track findings by (agent_id, id) to avoid duplicates
     finding_ids: set[tuple[str, str]] = set()
     findings: list[Finding] = []
 
-    # 1. Get in-memory findings (most recent state)
-    memory_findings = await orchestrator.get_findings(repo_id=repo_id)
-    for f in memory_findings:
-        f_key = (f.agent_id, f.id)
-        if f_key not in finding_ids:
-            findings.append(f)
-            finding_ids.add(f_key)
-
-    # 2. Get findings from persisted JSON states
-    saved_states = persistence_service.list_saved_states()
-    for state_meta in saved_states:
-        if repo_id and state_meta.get("repo_id") != repo_id:
-            continue
-        snapshot = persistence_service.load_agent_state(state_meta.get("agent_id"))
-        if snapshot and snapshot.findings:
-            for f_data in snapshot.findings:
-                f_key = (f_data.get("agent_id"), f_data.get("id"))
-                if f_key not in finding_ids:
-                    findings.append(Finding(**f_data))
-                    finding_ids.add(f_key)
-
-    # 3. Get findings from database (survives restarts)
+    # 1. Get in-memory findings (most recent state) - fast
     try:
-        if repo_id:
-            db_findings = await findings_service.get_findings_by_repo(repo_id)
-        else:
-            # Get all findings from database - query all known repos
-            db_findings = []
-            for state_meta in saved_states:
-                rid = state_meta.get("repo_id")
-                if rid:
-                    db_findings.extend(await findings_service.get_findings_by_repo(rid))
-
-        for f in db_findings:
+        memory_findings = await orchestrator.get_findings(repo_id=repo_id)
+        for f in memory_findings:
+            if len(findings) >= limit:
+                break
             f_key = (f.agent_id, f.id)
             if f_key not in finding_ids:
                 findings.append(f)
                 finding_ids.add(f_key)
     except Exception as e:
-        print(f"[Findings] Error loading from database: {e}")
-        # Continue without database findings
+        print(f"[Findings] Error loading from memory: {e}")
+
+    # 2. Get findings from persisted JSON states - only if we need more
+    if len(findings) < limit:
+        try:
+            saved_states = persistence_service.list_saved_states()
+            for state_meta in saved_states:
+                if len(findings) >= limit:
+                    break
+                if repo_id and state_meta.get("repo_id") != repo_id:
+                    continue
+                # Only load if we have findings count > 0 in metadata
+                if state_meta.get("findings_count", 0) == 0:
+                    continue
+                snapshot = persistence_service.load_agent_state(state_meta.get("agent_id"))
+                if snapshot and snapshot.findings:
+                    for f_data in snapshot.findings:
+                        if len(findings) >= limit:
+                            break
+                        f_key = (f_data.get("agent_id"), f_data.get("id"))
+                        if f_key not in finding_ids:
+                            findings.append(Finding(**f_data))
+                            finding_ids.add(f_key)
+        except Exception as e:
+            print(f"[Findings] Error loading from snapshots: {e}")
+
+    # 3. Get findings from database - only if repo_id specified and we need more
+    if repo_id and len(findings) < limit:
+        try:
+            db_findings = await findings_service.get_findings_by_repo(repo_id)
+            for f in db_findings:
+                if len(findings) >= limit:
+                    break
+                f_key = (f.agent_id, f.id)
+                if f_key not in finding_ids:
+                    findings.append(f)
+                    finding_ids.add(f_key)
+        except Exception as e:
+            print(f"[Findings] Error loading from database: {e}")
 
     # Sort by severity
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}

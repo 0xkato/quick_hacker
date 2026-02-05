@@ -337,6 +337,36 @@ async def get_all_findings(
     return findings
 
 
+# === Triage Models (defined here for use by /findings/triage endpoint) ===
+
+class LLMTriageRequest(BaseModel):
+    """Request for LLM-based triage."""
+    finding_ids: Optional[list[str]] = None  # If None, triage all findings
+    max_findings: Optional[int] = None  # No limit by default - user controls via UI slider
+    # Provider configuration (same as scan)
+    provider: Optional[str] = "anthropic"
+    model: Optional[str] = "claude-sonnet-4-20250514"
+    api_key: Optional[str] = None
+    use_claude_sdk: bool = True
+    use_claude_code_auth: bool = False
+
+
+class LLMTriageResult(BaseModel):
+    """Result for a single finding triage."""
+    finding_id: str
+    decision: str  # "valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"
+    confidence: int  # 0-100
+    reasoning: list[str]
+
+
+class LLMTriageResponse(BaseModel):
+    """Response from LLM triage."""
+    triaged_count: int
+    results: list[LLMTriageResult]
+    findings: list[Finding]
+    triage_agent_id: Optional[str] = None  # ID of triage agent for tracking in UI
+
+
 @router.post("/findings/triage")
 async def triage_all_findings(
     repo_id: str = Query(..., description="Repository ID to triage findings for"),
@@ -1009,34 +1039,6 @@ def _rule_based_triage(finding: Finding) -> tuple[bool, str]:
 
     # Not filtered - likely a real security issue
     return False, ""
-
-
-class LLMTriageRequest(BaseModel):
-    """Request for LLM-based triage."""
-    finding_ids: Optional[list[str]] = None  # If None, triage all findings
-    max_findings: Optional[int] = None  # No limit by default - user controls via UI slider
-    # Provider configuration (same as scan)
-    provider: Optional[str] = "anthropic"
-    model: Optional[str] = "claude-sonnet-4-20250514"
-    api_key: Optional[str] = None
-    use_claude_sdk: bool = True
-    use_claude_code_auth: bool = False
-
-
-class LLMTriageResult(BaseModel):
-    """Result for a single finding triage."""
-    finding_id: str
-    decision: str  # "valid_security_issue", "bug", "misconfiguration", "hardening", "by_design", "speculative"
-    confidence: int  # 0-100
-    reasoning: list[str]
-
-
-class LLMTriageResponse(BaseModel):
-    """Response from LLM triage."""
-    triaged_count: int
-    results: list[LLMTriageResult]
-    findings: list[Finding]
-    triage_agent_id: Optional[str] = None  # ID of triage agent for tracking in UI
 
 
 @router.post("/{agent_id}/llm-triage", response_model=LLMTriageResponse)

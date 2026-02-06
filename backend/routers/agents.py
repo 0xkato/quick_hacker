@@ -335,6 +335,59 @@ async def get_all_findings(
     return findings
 
 
+@router.delete("/findings/all")
+async def delete_all_findings(
+    repo_id: Optional[str] = Query(None, description="Filter by repository (optional)"),
+):
+    """Clear all findings from memory, JSON snapshots, and database."""
+    deleted_count = 0
+
+    # 1. Clear in-memory findings
+    try:
+        memory_findings = await orchestrator.get_findings(repo_id=repo_id)
+        for f in memory_findings:
+            # Remove from orchestrator's internal state
+            if hasattr(orchestrator, '_findings'):
+                orchestrator._findings = [x for x in orchestrator._findings if x.id != f.id]
+        deleted_count += len(memory_findings)
+    except Exception as e:
+        print(f"[Findings] Error clearing memory: {e}")
+
+    # 2. Clear orchestrator agent findings
+    try:
+        for agent_id, agent in list(orchestrator.agents.items()):
+            if repo_id and agent.repo_id != repo_id:
+                continue
+            if hasattr(agent, 'findings'):
+                deleted_count += len(agent.findings)
+                agent.findings = []
+    except Exception as e:
+        print(f"[Findings] Error clearing agent findings: {e}")
+
+    # 3. Clear JSON snapshots
+    try:
+        saved_states = persistence_service.list_saved_states()
+        for state_meta in saved_states:
+            if repo_id and state_meta.get("repo_id") != repo_id:
+                continue
+            agent_id = state_meta.get("agent_id")
+            if agent_id:
+                persistence_service.delete_agent_state(agent_id)
+    except Exception as e:
+        print(f"[Findings] Error clearing snapshots: {e}")
+
+    # 4. Clear database
+    try:
+        if repo_id:
+            await findings_service.delete_findings_by_repo(repo_id)
+        else:
+            await findings_service.delete_all_findings()
+    except Exception as e:
+        print(f"[Findings] Error clearing database: {e}")
+
+    return {"deleted": deleted_count, "message": f"Cleared findings" + (f" for repo {repo_id}" if repo_id else "")}
+
+
 # === Triage Models (defined here for use by /findings/triage endpoint) ===
 
 class LLMTriageRequest(BaseModel):

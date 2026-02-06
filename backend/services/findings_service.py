@@ -165,6 +165,34 @@ class FindingsService:
             await session.commit()
             return count
 
+    async def delete_findings_by_repo(self, repo_id: str) -> int:
+        """Delete all findings for a specific repository."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(DBFinding).where(DBFinding.repo_id == repo_id)
+            )
+            findings = result.scalars().all()
+            count = len(findings)
+
+            for finding in findings:
+                await session.delete(finding)
+
+            await session.commit()
+            return count
+
+    async def delete_all_findings(self) -> int:
+        """Delete all findings from the database."""
+        async with get_session() as session:
+            result = await session.execute(select(DBFinding))
+            findings = result.scalars().all()
+            count = len(findings)
+
+            for finding in findings:
+                await session.delete(finding)
+
+            await session.commit()
+            return count
+
     def _to_pydantic(self, db_finding: DBFinding) -> Finding:
         """
         Convert SQLAlchemy model to Pydantic model.

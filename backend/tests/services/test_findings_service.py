@@ -76,3 +76,10 @@ async def test_create_finding_raises_on_db_failure():
 
     # Finding should NOT be in memory if DB save failed
     assert len(agent.findings) == 0
+
+
+def test_findings_service_has_count_method():
+    """FindingsService exposes get_findings_count_by_agent for efficient counting."""
+    from services.findings_service import findings_service
+    assert hasattr(findings_service, "get_findings_count_by_agent")
+    assert callable(findings_service.get_findings_count_by_agent)

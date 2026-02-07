@@ -6,7 +6,7 @@ across restarts and page refreshes.
 """
 
 from typing import List, Optional
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.connection import get_session
@@ -141,6 +141,14 @@ class FindingsService:
             if not db_finding:
                 return None
             return self._to_pydantic(db_finding)
+
+    async def get_findings_count_by_agent(self, agent_id: str) -> int:
+        """Get count of findings for a specific agent (efficient — no model loading)."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(func.count()).select_from(DBFinding).where(DBFinding.agent_id == agent_id)
+            )
+            return result.scalar() or 0
 
     async def delete_findings_by_agent(self, agent_id: str) -> int:
         """

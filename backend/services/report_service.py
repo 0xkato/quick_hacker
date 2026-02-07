@@ -64,9 +64,14 @@ class ReportService:
             except Exception as e:
                 print(f"[Report] Broadcast error: {e}")
 
-    def generate_report(self, agent: "ReActSecurityAgent") -> InvestigationReport:
+    def generate_report(self, agent: "ReActSecurityAgent", findings: list = None) -> InvestigationReport:
         """
         Generate a comprehensive investigation report for an agent.
+
+        Args:
+            agent: The agent that ran the investigation.
+            findings: Optional list of Finding objects. If provided, used instead
+                      of agent.findings. Pass DB-loaded findings for crash recovery.
 
         Returns the report object and saves it to disk.
         """
@@ -79,13 +84,16 @@ class ReportService:
         obs_stats = observability_service.get_stats(agent.id)
         usage = observability_service.get_token_usage(agent.id)
 
+        # Use provided findings or fall back to agent memory
+        source_findings = findings if findings is not None else agent.findings
+
         # Build findings summary
         findings_summary = []
         findings_by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         findings_by_type = {}
         files_with_findings = set()
 
-        for finding in agent.findings:
+        for finding in source_findings:
             findings_summary.append(FindingSummary(
                 id=finding.id,
                 severity=finding.severity.value,

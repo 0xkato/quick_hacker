@@ -59,6 +59,7 @@ from services.flow_service import flow_service
 from services.span_service import span_service
 from services.observability_service import observability_service
 from services.finding_triage_service import triage_service
+from services.findings_service import findings_service
 from services.threat_model_prompt_block import build_threat_model_prompt_block
 from prompting_loader import load_prompt, render_prompt
 
@@ -456,7 +457,11 @@ class AgentOrchestrator:
             # Generate report on successful completion (for ReAct agents)
             if hasattr(agent, 'get_state_snapshot'):
                 try:
-                    report_service.generate_report(agent)
+                    try:
+                        db_findings = await findings_service.get_findings_by_agent(agent.id)
+                    except Exception:
+                        db_findings = None
+                    report_service.generate_report(agent, findings=db_findings)
                 except Exception as e:
                     print(f"[Orchestrator] Failed to generate report: {e}")
         except asyncio.CancelledError:
@@ -1379,7 +1384,11 @@ class AgentOrchestrator:
             # === Generate report on successful completion ===
             if result.get("success", True):
                 try:
-                    report_service.generate_report(agent)
+                    try:
+                        db_findings = await findings_service.get_findings_by_agent(agent.id)
+                    except Exception:
+                        db_findings = None
+                    report_service.generate_report(agent, findings=db_findings)
                     print(f"[Orchestrator] Generated report for SDK agent {agent.id}")
 
                     # Broadcast REPORT_READY so frontend knows report is available
@@ -2229,7 +2238,11 @@ class AgentOrchestrator:
 
             # Best-effort report generation.
             try:
-                report_service.generate_report(agent)
+                try:
+                    db_findings = await findings_service.get_findings_by_agent(agent.id)
+                except Exception:
+                    db_findings = None
+                report_service.generate_report(agent, findings=db_findings)
                 print(f"[Orchestrator] Generated report for Codex agent {agent.id}")
                 self._broadcast_message(
                     WSMessage(

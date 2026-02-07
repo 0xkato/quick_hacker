@@ -1957,59 +1957,51 @@ class ReActSecurityAgent:
 
     async def _create_finding(self, data: dict):
         """Create a Finding from reported data and save to database."""
-        try:
-            # Check for duplicates before creating
-            file_path = data.get("file_path", "")
-            vuln_type = data.get("vulnerability_type", "Unknown")
-            line_start = data.get("line_start", 0)
-            line_end = data.get("line_end")
+        # Check for duplicates before creating
+        file_path = data.get("file_path", "")
+        vuln_type = data.get("vulnerability_type", "Unknown")
+        line_start = data.get("line_start", 0)
+        line_end = data.get("line_end")
 
-            if self._is_duplicate_finding(file_path, vuln_type, line_start, line_end):
-                self._log(f"Skipping duplicate finding: {data.get('title', 'Untitled')} at {file_path}:{line_start}")
-                return None
-
-            finding = Finding(
-                id=str(uuid.uuid4())[:8],
-                agent_id=self.id,
-                repo_id=self.repo_id,
-                severity=Severity(data.get("severity", "medium")),
-                title=data.get("title", "Untitled Finding"),
-                description=data.get("description", ""),
-                file_path=file_path,
-                line_start=line_start,
-                line_end=line_end,
-                code_snippet=data.get("vulnerable_code"),
-                vulnerable_code=data.get("vulnerable_code"),
-                vulnerability_type=vuln_type,
-                cwe_id=data.get("cwe_id"),
-                attack_scenario=data.get("attack_scenario"),
-                proof_of_concept=data.get("proof_of_concept"),
-                recommended_fix=data.get("recommended_fix"),
-                confidence=data.get("confidence", 0.8),
-                source_trace=data.get("source_trace"),
-                created_at=datetime.utcnow(),
-                metadata={"agent_type": self.agent_type.value}
-            )
-
-            # Save to in-memory list (for backward compatibility)
-            self.findings.append(finding)
-
-            # Save to database (for persistence)
-            try:
-                await findings_service.save_finding(finding)
-                self._log(f"Finding saved to database: {finding.id}")
-            except Exception as db_err:
-                self._log(f"Failed to save finding to database: {db_err}", "error")
-                # Continue anyway - finding is still in memory and will be in snapshot
-
-            # Broadcast to WebSocket
-            self._broadcast(WSMessageType.FINDING, finding.model_dump(mode='json'))
-            self._log(f"Finding reported: {finding.title} ({finding.severity.value})")
-
-            return finding
-        except Exception as e:
-            self._log(f"Failed to create finding: {e}", "error")
+        if self._is_duplicate_finding(file_path, vuln_type, line_start, line_end):
+            self._log(f"Skipping duplicate finding: {data.get('title', 'Untitled')} at {file_path}:{line_start}")
             return None
+
+        finding = Finding(
+            id=str(uuid.uuid4())[:8],
+            agent_id=self.id,
+            repo_id=self.repo_id,
+            severity=Severity(data.get("severity", "medium")),
+            title=data.get("title", "Untitled Finding"),
+            description=data.get("description", ""),
+            file_path=file_path,
+            line_start=line_start,
+            line_end=line_end,
+            code_snippet=data.get("vulnerable_code"),
+            vulnerable_code=data.get("vulnerable_code"),
+            vulnerability_type=vuln_type,
+            cwe_id=data.get("cwe_id"),
+            attack_scenario=data.get("attack_scenario"),
+            proof_of_concept=data.get("proof_of_concept"),
+            recommended_fix=data.get("recommended_fix"),
+            confidence=data.get("confidence", 0.8),
+            source_trace=data.get("source_trace"),
+            created_at=datetime.utcnow(),
+            metadata={"agent_type": self.agent_type.value}
+        )
+
+        # DB save MUST succeed — a finding that isn't persisted doesn't exist
+        await findings_service.save_finding(finding)
+        self._log(f"Finding saved to database: {finding.id}")
+
+        # Only add to in-memory list after DB persistence succeeds
+        self.findings.append(finding)
+
+        # Broadcast to WebSocket
+        self._broadcast(WSMessageType.FINDING, finding.model_dump(mode='json'))
+        self._log(f"Finding reported: {finding.title} ({finding.severity.value})")
+
+        return finding
 
     def _compact_messages(self):
         """Compact conversation history to stay within limits.

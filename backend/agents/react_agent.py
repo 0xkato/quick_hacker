@@ -164,6 +164,7 @@ class ReActSecurityAgent:
 
         # State
         self.findings: list[Finding] = []
+        self._db_findings_count: int = 0
         self.thoughts: list[AgentThought] = []
         self.investigation_notes: list[dict] = []
         self.files_examined: set[str] = set()
@@ -1266,7 +1267,7 @@ class ReActSecurityAgent:
             self._broadcast(WSMessageType.PROGRESS, {
                 "iteration": iteration,
                 "max_iterations": self.max_iterations,
-                "findings_count": len(self.findings),
+                "findings_count": self._db_findings_count,
                 "files_examined": len(self.files_examined),
                 "phase": self._current_phase if self._is_dual_mode else "single"
             })
@@ -1993,6 +1994,7 @@ class ReActSecurityAgent:
         # DB save MUST succeed — a finding that isn't persisted doesn't exist
         await findings_service.save_finding(finding)
         self._log(f"Finding saved to database: {finding.id}")
+        self._db_findings_count += 1
 
         # Only add to in-memory list after DB persistence succeeds
         self.findings.append(finding)

@@ -145,3 +145,18 @@ def test_report_service_uses_findings_param_over_agent_findings():
     assert len(report.findings_summary) == 1
     assert report.findings_summary[0].id == "db-f1"
     assert report.findings_summary[0].title == "DB Finding"
+
+
+def test_progress_broadcast_uses_db_count():
+    """Progress broadcast should report findings_count from DB, not len(self.findings)."""
+    with open("agents/react_agent.py") as f:
+        source = f.read()
+
+    # Find the iteration PROGRESS broadcast (contains "iteration" and "findings_count")
+    # This is the broadcast with "max_iterations" — the one we need to fix
+    marker = '"max_iterations"'
+    idx = source.index(marker)
+    # Get surrounding context (the full broadcast dict)
+    progress_section = source[max(0, idx - 200):idx + 300]
+    assert "len(self.findings)" not in progress_section, \
+        "Progress broadcast still uses len(self.findings) — should use self._db_findings_count"

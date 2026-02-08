@@ -98,6 +98,28 @@ SCAN_TIER_BUDGETS = {
     "evil": 86400,          # 24 hours
 }
 
+# Phase budget allocation percentages (v2 pipeline)
+# Total must sum to 1.0
+PHASE_BUDGET_PCTS = {
+    "orientation": 0.10,     # Phase 1: Foundation (RepoProfiler, ScopeMapper, ThreatModeler)
+    "understanding": 0.35,   # Phase 2: Deep Understanding (ModuleAnalyzer, TrustBoundaryMapper, DataFlowMapper, InvariantExtractor)
+    "hunting": 0.30,         # Phase 3: Targeted Hunting (SinkHunter, InvariantViolationHunter, TrustBoundaryGapHunter)
+    "verification": 0.20,    # Phase 4: Specialist routing + Triager
+    "finalize": 0.05,        # Phase 5: Report generation
+}
+
+# Minimum time (seconds) for each phase regardless of budget percentage
+PHASE_MIN_SECONDS = {
+    "orientation": 60,
+    "understanding": 90,
+    "hunting": 60,
+    "verification": 60,
+    "finalize": 10,
+}
+
+# Tiers where understanding phase is skipped (too short)
+SKIP_UNDERSTANDING_TIERS = {"quick"}
+
 
 class Overseer(BaseAgent):
     """Strategic orchestrator for Deep Audit campaigns.
@@ -208,6 +230,43 @@ class Overseer(BaseAgent):
         calibration_path = str(self.filesystem.memory_root / "calibration")
         self.calibration_store = CalibrationStore(calibration_path)
         self.calibrator = ConfidenceCalibrator(self.calibration_store)
+
+        # Security Map from understanding phase (v2)
+        self.security_map: Optional[dict] = None
+
+        # Phase budget allocation (v2)
+        self.phase_budgets = self._calculate_phase_budgets()
+
+    def _calculate_phase_budgets(self) -> dict[str, float]:
+        """Calculate time budget for each phase based on total budget and tier.
+
+        Returns:
+            Dict mapping phase name to seconds allocated.
+        """
+        budgets = {}
+        scan_tier = self.campaign_state.scan_tier
+
+        for phase, pct in PHASE_BUDGET_PCTS.items():
+            # Skip understanding for quick tier
+            if phase == "understanding" and scan_tier in SKIP_UNDERSTANDING_TIERS:
+                budgets[phase] = 0
+                continue
+
+            allocated = self.time_budget * pct
+            minimum = PHASE_MIN_SECONDS.get(phase, 30)
+            budgets[phase] = max(allocated, minimum)
+
+        # If understanding is skipped, redistribute its budget to hunting + verification
+        if budgets.get("understanding", 0) == 0:
+            extra = self.time_budget * PHASE_BUDGET_PCTS["understanding"]
+            budgets["hunting"] = budgets.get("hunting", 0) + extra * 0.6
+            budgets["verification"] = budgets.get("verification", 0) + extra * 0.4
+
+        print(f"[Overseer] Phase budgets (total={self.time_budget}s, tier={scan_tier}):")
+        for phase, secs in budgets.items():
+            print(f"[Overseer]   {phase}: {secs:.0f}s ({secs/self.time_budget*100:.0f}%)")
+
+        return budgets
 
     def _init_tools(self):
         """Initialize tools with filesystem and state references."""
@@ -536,15 +595,19 @@ Continue the investigation. What should the next wave focus on?"""
         return {"text": text, "tool_calls": tool_calls}
 
     async def analyze(self):
-        """Run the Overseer orchestration loop.
+        """Run the Overseer orchestration loop (v2 pipeline).
 
-        Uses a direct dispatch approach:
-        1. Run Foundation Phase (RepoProfiler, ScopeMapper, ThreatModeler)
-        2. Run Hunting Phase (SinkHunter, EntrypointHunter)
-        3. Route signals to specialists
-        4. Generate final report
+        Uses a phased dispatch approach with percentage-based budget allocation:
+        1. Orientation Phase (10%): RepoProfiler, ScopeMapper, ThreatModeler
+        2. Deep Understanding Phase (35%): ModuleAnalyzer, TrustBoundaryMapper,
+           DataFlowMapper, InvariantExtractor → builds Security Map
+        3. Targeted Hunting Phase (30%): SinkHunter, EntrypointHunter +
+           InvariantViolationHunter, TrustBoundaryGapHunter (from Security Map)
+        4. Verification Phase (20%): Specialist routing + invariant-aware Triager
+        5. Finalize Phase (5%): Report generation
 
         All sub-agents use Claude CLI with Claude Code subscription auth.
+        Phase 2 is skipped for 'quick' tier scans.
         """
         print("=" * 60)
         print("[Overseer] STARTING PARALLEL SUB-AGENT ORCHESTRATION")
@@ -620,8 +683,70 @@ Continue the investigation. What should the next wave focus on?"""
                 await self._process_findings()
                 return
 
-            # === PHASE 2: HUNTING ===
-            await self.emit_log("Phase 2: Running Hunting Phase...")
+            # === PHASE 2: DEEP UNDERSTANDING (v2) ===
+            # Build Security Map: trust boundaries, invariants, data flows, module analysis
+            # Skip for quick tier (not enough time budget)
+            scan_tier = self.campaign_state.scan_tier
+            if scan_tier not in SKIP_UNDERSTANDING_TIERS and self.phase_budgets.get("understanding", 0) > 0:
+                await self.emit_log("Phase 2: Running Deep Understanding Phase...")
+                print("[Overseer] Dispatching Understanding Phase sub-agents...")
+
+                # Create flow node for Understanding Phase
+                understanding_node = flow_service.add_node(
+                    self.id,
+                    node_type="analysis",
+                    label="Phase 2: Deep Understanding",
+                    parent_id=root_node.id if root_node else None,
+                    data={"phase": "understanding", "agents": ["ModuleAnalyzer", "TrustBoundaryMapper", "DataFlowMapper", "InvariantExtractor"]},
+                )
+                if understanding_node:
+                    flow_service.update_node_status(self.id, understanding_node.id, "running")
+                await self.emit_flow_update()
+
+                # Calculate per-agent budget from phase budget (4 agents run in parallel)
+                understanding_budget = self.phase_budgets["understanding"]
+                per_agent_budget = max(60, min(1800, int(understanding_budget * 0.8)))  # 80% to agents, 20% overhead
+
+                understanding_result, security_map = await self.dispatcher.dispatch_understanding_phase(
+                    foundation_context=foundation_ctx,
+                    time_budget_per_agent=per_agent_budget,
+                )
+
+                # Store security map for use by hunting and verification phases
+                self.security_map = security_map
+
+                # Update flow node status
+                if understanding_node:
+                    understanding_status = "completed" if understanding_result.all_succeeded else "failed"
+                    flow_service.update_node_status(self.id, understanding_node.id, understanding_status)
+                await self.emit_flow_update()
+
+                if security_map:
+                    n_invariants = len(security_map.get("invariants", {}).get("invariants", []))
+                    n_boundaries = len(security_map.get("trust_boundaries", {}).get("boundaries", security_map.get("trust_boundaries", {}).get("trust_boundaries", [])))
+                    n_flows = len(security_map.get("data_flows", {}).get("flows", security_map.get("data_flows", {}).get("data_flows", [])))
+                    print(f"[Overseer] Security Map: {n_invariants} invariants, {n_boundaries} boundaries, {n_flows} flows")
+                    await self.emit_log(f"Understanding Phase complete: {n_invariants} invariants, {n_boundaries} boundaries, {n_flows} data flows")
+                else:
+                    print("[Overseer] WARNING: Security Map not available")
+                    await self.emit_log("Understanding Phase complete (no Security Map built)")
+
+                # Check for cancellation
+                if self._cancelled:
+                    return
+
+                # Check time budget
+                if self.campaign_state.time_remaining() <= 0:
+                    await self.emit_log("Time budget exhausted after Understanding Phase.")
+                    finalize_tools.finalize_report("Time budget exhausted after Understanding Phase.")
+                    await self._process_findings()
+                    return
+            else:
+                print(f"[Overseer] Skipping Understanding Phase (tier={scan_tier})")
+                await self.emit_log(f"Skipping Understanding Phase (tier={scan_tier})")
+
+            # === PHASE 3: HUNTING ===
+            await self.emit_log("Phase 3: Running Hunting Phase...")
             print("[Overseer] Dispatching Hunting Phase sub-agents...")
 
             # Create flow node for Hunting Phase
@@ -638,30 +763,39 @@ Continue the investigation. What should the next wave focus on?"""
 
             from agents.deep_audit.dispatcher import WavePlan, DispatchTask
 
-            # Calculate sub-agent time budget based on remaining time
-            # Give each hunting agent 20% of remaining time, min 60s, max 1800s
+            # Calculate sub-agent time budget from hunting phase budget
+            hunting_phase_budget = self.phase_budgets.get("hunting", self.campaign_state.time_remaining() * 0.3)
             remaining = self.campaign_state.time_remaining()
-            subagent_budget = max(60, min(1800, int(remaining * 0.2)))
+            subagent_budget = max(60, min(1800, int(min(remaining, hunting_phase_budget) * 0.2)))
+
+            # Build hunting tasks — standard SinkHunter + EntrypointHunter
+            hunting_tasks = [
+                DispatchTask(
+                    agent_type="SinkHunter",
+                    objective="Find dangerous sinks (SQL, command injection, SSRF, etc.)",
+                    scope=self.repo_path_str,
+                    deliverable="/memories/signals/sinks.json",
+                    time_budget=subagent_budget,
+                ),
+                DispatchTask(
+                    agent_type="EntrypointHunter",
+                    objective="Find all entry points (HTTP routes, CLI handlers, etc.)",
+                    scope=self.repo_path_str,
+                    deliverable="/memories/signals/entrypoints.json",
+                    time_budget=subagent_budget,
+                ),
+            ]
+
+            # v2: Add targeted hunters if Security Map is available
+            if self.security_map:
+                targeted_tasks = self._build_targeted_hunting_tasks(subagent_budget)
+                hunting_tasks.extend(targeted_tasks)
+                print(f"[Overseer] Added {len(targeted_tasks)} targeted hunters from Security Map")
 
             hunting_wave = WavePlan(
                 wave_id=1,
-                tasks=[
-                    DispatchTask(
-                        agent_type="SinkHunter",
-                        objective="Find dangerous sinks (SQL, command injection, SSRF, etc.)",
-                        scope=self.repo_path_str,
-                        deliverable="/memories/signals/sinks.json",
-                        time_budget=subagent_budget,
-                    ),
-                    DispatchTask(
-                        agent_type="EntrypointHunter",
-                        objective="Find all entry points (HTTP routes, CLI handlers, etc.)",
-                        scope=self.repo_path_str,
-                        deliverable="/memories/signals/entrypoints.json",
-                        time_budget=subagent_budget,
-                    ),
-                ],
-                rationale="Hunting Phase: Find signals for verification",
+                tasks=hunting_tasks,
+                rationale="Hunting Phase: Find signals for verification (+ targeted hunters from Security Map)",
             )
 
             # Use foundation_ctx from Foundation Phase (already available in local scope)
@@ -696,12 +830,12 @@ Continue the investigation. What should the next wave focus on?"""
                 await self._process_findings()
                 return
 
-            # === PHASE 3: WAVE LOOP ===
-            # Continue dispatching waves until time budget is exhausted
-            # CRITICAL: Reserve time for Phase 4 (specialist routing)
-            # Each signal routing can take 30-60s, and we need at least 60s minimum
-            # Reserve 20% of total budget OR 120s minimum for routing
-            TIME_RESERVED_FOR_ROUTING = max(120, int(self.time_budget * 0.20))
+            # === PHASE 3b: WAVE LOOP ===
+            # Continue dispatching waves until hunting budget is exhausted
+            # Use percentage-based budget: reserve verification + finalize time
+            verification_budget = self.phase_budgets.get("verification", max(60, self.time_budget * 0.20))
+            finalize_budget = self.phase_budgets.get("finalize", max(10, self.time_budget * 0.05))
+            TIME_RESERVED_FOR_ROUTING = max(120, int(verification_budget + finalize_budget))
             # Minimum time to run one wave (subagent execution + overhead)
             MIN_WAVE_EXECUTION_TIME = 60
             # Exit wave loop when we have less than reserved + one wave worth of time
@@ -876,12 +1010,13 @@ Output JSON with your analysis for each signal.""",
             elif self.waves_completed >= EFFECTIVE_MAX_WAVES:
                 await self.emit_log(f"Maximum waves reached ({EFFECTIVE_MAX_WAVES} for {self.time_budget}s budget)")
 
-            # === PHASE 4: SIGNAL ROUTING ===
+            # === PHASE 4: VERIFICATION (Signal Routing) ===
             # Route each signal through: Decider → FamilyCoordinator → Specialist → Triager
+            # v2: Triager now has invariant awareness from Security Map
             findings_count = len(self.campaign_state.confirmed_findings)
             time_remaining = self.campaign_state.time_remaining()
-            print(f"[Overseer] Phase 4 check: {findings_count} findings, {time_remaining:.0f}s remaining")
-            await self.emit_log(f"Phase 4 check: {findings_count} findings, {time_remaining:.0f}s remaining")
+            print(f"[Overseer] Phase 4 (Verification) check: {findings_count} findings, {time_remaining:.0f}s remaining")
+            await self.emit_log(f"Phase 4 (Verification) check: {findings_count} findings, {time_remaining:.0f}s remaining")
 
             if findings_count > 0 and time_remaining > 60:
                 await self._route_all_signals()
@@ -955,6 +1090,73 @@ Output JSON with your analysis for each signal.""",
             lines.append("")
 
         return "\n".join(lines)
+
+    def _build_targeted_hunting_tasks(self, base_budget: int) -> list:
+        """Build targeted hunting tasks from Security Map invariants and trust boundary gaps.
+
+        Creates InvariantViolationHunter and TrustBoundaryGapHunter tasks
+        based on what the understanding phase discovered.
+
+        Args:
+            base_budget: Base time budget per agent in seconds
+
+        Returns:
+            List of DispatchTask for targeted hunters
+        """
+        from agents.deep_audit.dispatcher import DispatchTask
+        from agents.deep_audit.subagents import (
+            get_invariant_violation_hunter_prompt,
+            get_trust_boundary_gap_hunter_prompt,
+        )
+
+        tasks = []
+
+        if not self.security_map:
+            return tasks
+
+        # Extract invariants to verify
+        invariants_data = self.security_map.get("invariants", {})
+        invariants = invariants_data.get("invariants", [])
+
+        # Prioritize: high-confidence invariants that are critical to security
+        for i, inv in enumerate(invariants[:3]):  # Cap at 3 invariant hunters
+            statement = inv.get("statement", inv.get("invariant", ""))
+            inv_id = inv.get("id", f"inv_{i}")
+            confidence = inv.get("confidence", "medium")
+
+            if not statement:
+                continue
+
+            tasks.append(DispatchTask(
+                agent_type="InvariantViolationHunter",
+                objective=f"Verify invariant: {statement}",
+                scope=self.repo_path_str,
+                deliverable=f"/memories/waves/wave_1/invariant_{inv_id}.json",
+                time_budget=base_budget,
+                constraints=f"INVARIANT_ID: {inv_id}\nINVARIANT: {statement}\nCONFIDENCE: {confidence}",
+            ))
+
+        # Extract trust boundary gaps
+        tb_data = self.security_map.get("trust_boundaries", {})
+        gaps = tb_data.get("gaps", tb_data.get("missing_enforcement", []))
+
+        for i, gap in enumerate(gaps[:2]):  # Cap at 2 gap hunters
+            desc = gap.get("description", gap.get("gap", str(gap)))
+            gap_id = gap.get("id", f"gap_{i}")
+
+            if not desc or not isinstance(desc, str):
+                continue
+
+            tasks.append(DispatchTask(
+                agent_type="TrustBoundaryGapHunter",
+                objective=f"Investigate trust boundary gap: {desc[:200]}",
+                scope=self.repo_path_str,
+                deliverable=f"/memories/waves/wave_1/boundary_gap_{gap_id}.json",
+                time_budget=base_budget,
+                constraints=f"GAP_ID: {gap_id}\nGAP: {desc}",
+            ))
+
+        return tasks
 
     async def _collect_findings_from_signals(self):
         """Read sub-agent outputs and extract findings from signals."""

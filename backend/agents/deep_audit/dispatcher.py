@@ -96,7 +96,15 @@ AGENT_TOOL_SUBSETS = {
     "CryptoSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
     "DataflowTracer": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
     "ThreatModeler": ["read_file", "get_repo_tree", "get_file_structure"],
+    # Phase 2: Deep Understanding agents (v2)
+    "ModuleAnalyzer": ["read_file", "search_code", "grep_semantic", "get_file_structure", "list_directory"],
+    "TrustBoundaryMapper": ["read_file", "search_code", "grep_semantic", "get_entry_points", "get_file_structure"],
+    "DataFlowMapper": ["read_file", "search_code", "grep_semantic", "get_entry_points", "trace_data_flow"],
+    "InvariantExtractor": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
     "AuthBoundaryMapper": ["read_file", "search_code", "grep_semantic", "get_entry_points"],
+    # Phase 3: Targeted Hunters (v2)
+    "InvariantViolationHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure", "find_usages"],
+    "TrustBoundaryGapHunter": ["read_file", "search_code", "grep_semantic", "get_entry_points", "trace_data_flow"],
     "Triager": ["read_file", "get_file_structure", "trace_data_flow"],
     "Auditor": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
     "Reproducer": ["read_file", "trace_data_flow"],
@@ -948,6 +956,208 @@ Begin your analysis now."""
                 print(f"[Foundation]   {r.agent_type}: {status_str}")
 
         return result, None
+
+    async def dispatch_understanding_phase(
+        self,
+        foundation_context: Optional[FoundationContext] = None,
+        time_budget_per_agent: int = 300,
+    ) -> tuple[WaveResult, Optional[dict]]:
+        """Run Understanding Phase: ModuleAnalyzer, TrustBoundaryMapper, DataFlowMapper, InvariantExtractor.
+
+        These agents build the Security Map — a deep understanding of the codebase's
+        security architecture including trust boundaries, invariants, and data flows.
+
+        Args:
+            foundation_context: Foundation Context from Phase 1
+            time_budget_per_agent: Time budget per agent in seconds
+
+        Returns:
+            Tuple of (WaveResult, security_map dict or None if failed)
+        """
+        # Build inputs context from foundation outputs
+        foundation_inputs = ""
+        if foundation_context:
+            foundation_inputs = foundation_context.to_prompt_context()
+
+        wave_plan = WavePlan(
+            wave_id=0,  # Understanding phase is wave 0.5 (between foundation=0 and hunting=1)
+            tasks=[
+                DispatchTask(
+                    agent_type="ModuleAnalyzer",
+                    objective="Analyze each security-critical module: responsibilities, trust level, entry/exit points, assumptions, and dependencies. Focus on modules identified in the scope map.",
+                    scope=self.repo_path,
+                    deliverable="/memories/understanding/module_analysis.json",
+                    time_budget=time_budget_per_agent,
+                ),
+                DispatchTask(
+                    agent_type="TrustBoundaryMapper",
+                    objective="Map all trust boundaries: where data crosses from untrusted to trusted zones, what enforcement exists at each crossing, and identify gaps where enforcement is missing or incomplete.",
+                    scope=self.repo_path,
+                    deliverable="/memories/understanding/trust_boundaries.json",
+                    time_budget=time_budget_per_agent,
+                ),
+                DispatchTask(
+                    agent_type="DataFlowMapper",
+                    objective="Trace critical data flows from user input to sensitive sinks. Identify what validation/sanitization occurs along each path and where it's missing.",
+                    scope=self.repo_path,
+                    deliverable="/memories/understanding/data_flows.json",
+                    time_budget=time_budget_per_agent,
+                ),
+                DispatchTask(
+                    agent_type="InvariantExtractor",
+                    objective="Extract security invariants the codebase relies on — assumptions like 'all SQL uses parameterized queries' or 'all endpoints require auth'. Identify where these invariants are enforced and where they might break.",
+                    scope=self.repo_path,
+                    deliverable="/memories/understanding/invariants.json",
+                    time_budget=time_budget_per_agent,
+                ),
+            ],
+            rationale="Understanding Phase: Build Security Map before targeted hunting",
+        )
+
+        result = await self.dispatch_wave(wave_plan, foundation_context=foundation_context)
+
+        # Try to build Security Map from outputs
+        security_map = None
+        if result.all_succeeded:
+            try:
+                security_map = await self._build_security_map()
+                print("[Understanding] SUCCESS: Built Security Map")
+            except Exception as e:
+                print(f"[Understanding] FAILED to build Security Map: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # Try partial security map from whatever succeeded
+            try:
+                security_map = await self._build_security_map(partial=True)
+                if security_map:
+                    print("[Understanding] Built PARTIAL Security Map from available outputs")
+            except Exception as e:
+                print(f"[Understanding] Could not build even partial Security Map: {e}")
+
+            print("[Understanding] PARTIAL: Not all understanding agents succeeded")
+            for r in result.results:
+                status_str = f"status={r.status}"
+                if r.error:
+                    status_str += f", error={r.error[:100]}"
+                print(f"[Understanding]   {r.agent_type}: {status_str}")
+
+        return result, security_map
+
+    async def _build_security_map(self, partial: bool = False) -> Optional[dict]:
+        """Build Security Map from understanding phase outputs.
+
+        Args:
+            partial: If True, build with whatever outputs are available
+
+        Returns:
+            Security map dict or None
+        """
+        security_map = {}
+
+        # Read each understanding output
+        outputs = {
+            "module_analysis": "/memories/understanding/module_analysis.json",
+            "trust_boundaries": "/memories/understanding/trust_boundaries.json",
+            "data_flows": "/memories/understanding/data_flows.json",
+            "invariants": "/memories/understanding/invariants.json",
+        }
+
+        for key, path in outputs.items():
+            try:
+                content = self.filesystem.read_file(path)
+                parsed = self._extract_json_from_output(content)
+                if parsed:
+                    security_map[key] = parsed
+                    print(f"[Understanding] Loaded {key}: {len(content)} bytes")
+                else:
+                    print(f"[Understanding] WARNING: Could not parse {key}")
+                    if not partial:
+                        raise ValueError(f"Could not parse {path}")
+            except FileNotFoundError:
+                print(f"[Understanding] WARNING: {key} not found at {path}")
+                if not partial:
+                    raise
+
+        if not security_map:
+            return None
+
+        # Write synthesized security map summary
+        summary = self._synthesize_security_map_summary(security_map)
+        self.filesystem.write_file("/memories/understanding/security_map_summary.md", summary)
+        print(f"[Understanding] Wrote security_map_summary.md ({len(summary)} bytes)")
+
+        # Also write the raw security map as JSON for programmatic access
+        self.filesystem.write_json("/memories/understanding/security_map.json", security_map)
+
+        return security_map
+
+    def _synthesize_security_map_summary(self, security_map: dict) -> str:
+        """Synthesize a human-readable security map summary for prompt injection.
+
+        This summary is prepended to hunting agent prompts alongside Foundation Context.
+        """
+        sections = ["# Security Map Summary\n"]
+
+        # Module Analysis
+        if "module_analysis" in security_map:
+            ma = security_map["module_analysis"]
+            modules = ma.get("modules", ma.get("analysis", []))
+            if isinstance(modules, list):
+                sections.append(f"## Modules Analyzed: {len(modules)}")
+                for m in modules[:10]:  # Cap at 10 for prompt size
+                    name = m.get("name", m.get("module", "unknown"))
+                    trust = m.get("trust_level", "unknown")
+                    sections.append(f"- **{name}** (trust: {trust})")
+                sections.append("")
+
+        # Trust Boundaries
+        if "trust_boundaries" in security_map:
+            tb = security_map["trust_boundaries"]
+            boundaries = tb.get("boundaries", tb.get("trust_boundaries", []))
+            gaps = tb.get("gaps", tb.get("missing_enforcement", []))
+            if isinstance(boundaries, list):
+                sections.append(f"## Trust Boundaries: {len(boundaries)}")
+                for b in boundaries[:8]:
+                    name = b.get("name", b.get("boundary", "unknown"))
+                    enforcement = b.get("enforcement", "unknown")
+                    sections.append(f"- **{name}**: {enforcement}")
+                sections.append("")
+            if isinstance(gaps, list) and gaps:
+                sections.append(f"## Trust Boundary Gaps: {len(gaps)}")
+                for g in gaps[:5]:
+                    desc = g.get("description", g.get("gap", str(g)))
+                    if isinstance(desc, str):
+                        sections.append(f"- {desc[:200]}")
+                sections.append("")
+
+        # Data Flows
+        if "data_flows" in security_map:
+            df = security_map["data_flows"]
+            flows = df.get("flows", df.get("data_flows", []))
+            if isinstance(flows, list):
+                sections.append(f"## Critical Data Flows: {len(flows)}")
+                for f in flows[:8]:
+                    source = f.get("source", "unknown")
+                    sink = f.get("sink", "unknown")
+                    validated = f.get("validated", f.get("sanitized", "unknown"))
+                    sections.append(f"- {source} → {sink} (validated: {validated})")
+                sections.append("")
+
+        # Invariants
+        if "invariants" in security_map:
+            inv = security_map["invariants"]
+            invariants = inv.get("invariants", [])
+            if isinstance(invariants, list):
+                sections.append(f"## Security Invariants: {len(invariants)}")
+                for i in invariants[:10]:
+                    statement = i.get("statement", i.get("invariant", str(i)))
+                    confidence = i.get("confidence", "unknown")
+                    if isinstance(statement, str):
+                        sections.append(f"- {statement[:200]} (confidence: {confidence})")
+                sections.append("")
+
+        return "\n".join(sections)
 
     def _extract_json_from_output(self, content: str) -> Optional[dict]:
         """Extract JSON from Claude CLI output. Delegates to shared util."""

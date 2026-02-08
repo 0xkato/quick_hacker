@@ -259,3 +259,39 @@ class EvidenceQuest(Base):
 
     def __repr__(self) -> str:
         return f"<EvidenceQuest(id={self.id}, finding_id={self.finding_id}, status={self.status})>"
+
+
+class Scan(Base):
+    """Scan/agent record persisted across restarts.
+
+    Mirrors the Agent Pydantic schema (models/schemas.py) for lightweight
+    metadata persistence. LLM interactions and full state are in JSON snapshots.
+    """
+    __tablename__ = "scans"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    repo_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    agent_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    provider_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    scan_tier: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    time_budget_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    custom_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    target_files: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    focus_areas: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    files_analyzed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_scans_repo_status", "repo_id", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Scan(id={self.id}, repo_id={self.repo_id}, status={self.status})>"

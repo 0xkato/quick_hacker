@@ -54,6 +54,7 @@ from services.settings_service import settings_service
 from services.persistence_service import persistence_service
 from services.findings_service import findings_service
 from services.report_service import report_service
+from services.scan_service import scan_service
 from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
 from services.span_service import span_service
@@ -338,7 +339,15 @@ class AgentOrchestrator:
             self._agents[agent.id] = agent
             self._findings[agent.id] = []
 
-        return agent.to_schema()
+        agent_schema = agent.to_schema()
+
+        # Persist scan record to DB
+        try:
+            await scan_service.save_scan(agent_schema)
+        except Exception as e:
+            print(f"[Orchestrator] Failed to persist scan record on create: {e}")
+
+        return agent_schema
 
     async def start_agent(self, agent_id: str) -> Agent:
         """Start an agent's analysis."""
@@ -356,6 +365,13 @@ class AgentOrchestrator:
         self._tasks[agent_id] = task
 
         print(f"[Orchestrator] Task created for agent {agent_id}")
+
+        # Update scan status in DB
+        try:
+            await scan_service.update_status(agent_id, AgentStatus.RUNNING.value, started_at=datetime.utcnow())
+        except Exception as e:
+            print(f"[Orchestrator] Failed to update scan status on start: {e}")
+
         return agent.to_schema()
 
     async def _run_agent(self, agent: BaseAgent):
@@ -445,6 +461,18 @@ class AgentOrchestrator:
             print(f"[Orchestrator] Agent {agent.id} completed with {len(findings)} findings")
             self._findings[agent.id] = findings
 
+            # Update scan record in DB
+            try:
+                status_val = agent.status.value if hasattr(agent.status, 'value') else str(agent.status)
+                await scan_service.update_status(
+                    agent.id, status_val,
+                    completed_at=datetime.utcnow(),
+                    files_analyzed=agent.files_analyzed if isinstance(getattr(agent, 'files_analyzed', None), int) else 0,
+                    findings_count=len(findings),
+                )
+            except Exception as e:
+                print(f"[Orchestrator] Failed to update scan record on completion: {e}")
+
             # Save state on successful completion (for persistence)
             if hasattr(agent, 'get_state_snapshot'):
                 try:
@@ -486,6 +514,17 @@ class AgentOrchestrator:
                     persistence_service.save_agent_state(snapshot)
                 except Exception as e:
                     print(f"[Orchestrator] Failed to save state on cancel: {e}")
+
+            # Update scan record in DB
+            try:
+                cancel_status = "failed" if resource_cancelled else "cancelled"
+                await scan_service.update_status(
+                    agent.id, cancel_status,
+                    completed_at=datetime.utcnow(),
+                    error_message=agent.error_message,
+                )
+            except Exception as e:
+                print(f"[Orchestrator] Failed to update scan record on cancel: {e}")
         except Exception as e:
             print(f"[Orchestrator] Agent {agent.id} FAILED with error: {e}")
             import traceback
@@ -503,6 +542,16 @@ class AgentOrchestrator:
                     persistence_service.save_agent_state(snapshot)
                 except Exception as save_err:
                     print(f"[Orchestrator] Failed to save state on failure: {save_err}")
+
+            # Update scan record in DB
+            try:
+                await scan_service.update_status(
+                    agent.id, "failed",
+                    completed_at=datetime.utcnow(),
+                    error_message=str(e),
+                )
+            except Exception as scan_err:
+                print(f"[Orchestrator] Failed to update scan record on failure: {scan_err}")
         finally:
             print(f"[Orchestrator] _run_agent cleanup for {agent.id}")
             # Stop resource monitoring
@@ -2570,6 +2619,12 @@ class AgentOrchestrator:
                 del self._findings[agent_id]
             if agent_id in self._tasks:
                 del self._tasks[agent_id]
+
+        # Delete scan record from DB
+        try:
+            await scan_service.delete_scan(agent_id)
+        except Exception as e:
+            print(f"[Orchestrator] Failed to delete scan record: {e}")
 
         return True
 

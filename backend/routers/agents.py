@@ -31,6 +31,7 @@ from services.flow_service import flow_service
 from services.investigation_queue_service import investigation_queue_service
 from services.persistence_service import persistence_service
 from services.findings_service import findings_service
+from services.scan_service import scan_service
 from services.report_service import report_service
 from services.finding_triage_service import triage_service
 from services.project_service import project_service
@@ -110,8 +111,19 @@ async def list_agents(
     agents = await orchestrator.list_agents(repo_id, status)
     agent_ids = {a.id for a in agents}
 
-    # Include persisted agents that aren't in memory
+    # Include DB-persisted scan records that aren't in memory
     if include_persisted:
+        try:
+            status_str = status.value if status else None
+            db_scans = await scan_service.list_scans(repo_id=repo_id, status=status_str)
+            for scan_agent in db_scans:
+                if scan_agent.id not in agent_ids:
+                    agents.append(scan_agent)
+                    agent_ids.add(scan_agent.id)
+        except Exception as e:
+            print(f"[Agents] Error loading DB scans: {e}")
+
+        # Fallback: JSON snapshot agents not in DB or memory
         saved_states = persistence_service.list_saved_states()
         for state in saved_states:
             if state.get("agent_id") not in agent_ids:
@@ -135,6 +147,7 @@ async def list_agents(
                     files_analyzed=state.get("files_analyzed", 0),
                     findings_count=state.get("findings_count", 0),
                 ))
+                agent_ids.add(state.get("agent_id", ""))
 
     # Sort by creation time (newest first)
     agents.sort(key=lambda a: a.created_at if a.created_at else "", reverse=True)
@@ -163,7 +176,15 @@ async def get_agent(agent_id: str):
     if agent:
         return agent
 
-    # Try persisted state
+    # Try DB scan record
+    try:
+        db_agent = await scan_service.get_scan(agent_id)
+        if db_agent:
+            return db_agent
+    except Exception as e:
+        print(f"[Agents] Error loading scan from DB: {e}")
+
+    # Fallback: Try persisted JSON state
     snapshot = persistence_service.load_agent_state(agent_id)
     if snapshot:
         return Agent(
@@ -237,8 +258,21 @@ async def load_agent_state(agent_id: str):
 @router.delete("/{agent_id}", response_model=APIResponse)
 async def delete_agent(agent_id: str):
     """Delete an agent, its findings, and persisted state."""
-    # Delete from orchestrator (in-memory)
+    # Delete from orchestrator (in-memory) — also calls scan_service.delete_scan
     success = await orchestrator.delete_agent(agent_id)
+
+    # Delete DB scan record (in case orchestrator didn't have it in memory)
+    scan_deleted = False
+    try:
+        scan_deleted = await scan_service.delete_scan(agent_id)
+    except Exception as e:
+        print(f"[Agents] Error deleting scan from DB: {e}")
+
+    # Delete DB findings for this agent
+    try:
+        await findings_service.delete_findings_by_agent(agent_id)
+    except Exception as e:
+        print(f"[Agents] Error deleting findings from DB: {e}")
 
     # Also delete persisted state if exists
     state_deleted = persistence_service.delete_agent_state(agent_id)
@@ -249,20 +283,28 @@ async def delete_agent(agent_id: str):
     # Clear flow data
     flow_service.clear_flow(agent_id)
 
-    if not success and not state_deleted:
+    if not success and not state_deleted and not scan_deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
     return APIResponse(success=True, message="Agent and all associated data deleted")
 
 
 @router.get("/{agent_id}/findings", response_model=list[Finding])
 async def get_agent_findings(agent_id: str):
-    """Get findings for a specific agent (from memory or persisted state)."""
+    """Get findings for a specific agent (from memory, DB, or persisted state)."""
     # Try in-memory first
     findings = await orchestrator.get_findings(agent_id=agent_id)
     if findings:
         return findings
 
-    # Try persisted state
+    # Try DB findings
+    try:
+        db_findings = await findings_service.get_findings_by_agent(agent_id)
+        if db_findings:
+            return db_findings
+    except Exception as e:
+        print(f"[Agents] Error loading findings from DB: {e}")
+
+    # Fallback: Try persisted JSON state
     snapshot = persistence_service.load_agent_state(agent_id)
     if snapshot and snapshot.findings:
         return [Finding(**f) for f in snapshot.findings]

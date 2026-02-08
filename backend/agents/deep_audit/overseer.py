@@ -999,6 +999,32 @@ Output JSON with your analysis for each signal.""",
                                     "confidence": signal.get("confidence", 0.7),
                                 }
                                 self.campaign_state.confirmed_findings.append(finding)
+
+                                # Persist to DB and emit to UI so findings appear during Hunting phase
+                                severity = finding.get("severity", "medium")
+                                if severity not in ("critical", "high", "medium", "low", "info"):
+                                    severity = "medium"
+                                finding_create = FindingCreate(
+                                    title=finding.get("title", "Untitled"),
+                                    description=finding.get("description", ""),
+                                    severity=severity,
+                                    vulnerability_type=finding.get("vulnerability_type", "unknown"),
+                                    file_path=finding.get("file_path", ""),
+                                    line_start=finding.get("line_start"),
+                                    code_snippet=finding.get("code_snippet"),
+                                    remediation=finding.get("remediation"),
+                                    confidence=finding.get("confidence", 0.7),
+                                    metadata={"signal_id": finding.get("signal_id", ""),
+                                              "category": finding.get("category", "unknown"),
+                                              "why_suspicious": finding.get("why_suspicious", "")},
+                                )
+                                db_finding = self.add_finding(finding_create)
+                                if db_finding:
+                                    try:
+                                        await findings_service.save_finding(db_finding)
+                                    except Exception as db_err:
+                                        print(f"[Overseer] Failed to save hunting finding to DB: {db_err}")
+                                    await self.emit_finding(db_finding)
                         print(f"[Overseer] Collected {len(signals)} signals from SinkHunter")
                 else:
                     error_msg = "Could not parse SinkHunter output as JSON"

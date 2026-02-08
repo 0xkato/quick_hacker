@@ -102,8 +102,8 @@ AGENT_TOOL_SUBSETS = {
     "Reproducer": ["read_file", "trace_data_flow"],
 
     # Routing Phase agents
-    "Decider": ["read_file"],
-    "FamilyCoordinator": ["read_file"],
+    "Decider": ["read_file", "search_code"],
+    "FamilyCoordinator": ["read_file", "search_code"],
 
     # Specialist agents (read-only analysis)
     "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow"],

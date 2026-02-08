@@ -819,7 +819,8 @@ Route signals from Hunters to the appropriate Specialist families for verificati
 
 ## Tools Available
 - Read: Read files
-- Grep: Search for patterns
+- Grep: Search for patterns in code
+- Glob: Find files by pattern
 
 ## Input
 You will receive signal data in the task context.
@@ -862,6 +863,7 @@ Read the signal data and pick the most appropriate specialist(s) to verify it.
 ## Tools Available
 - Read: Read files to gather code context for specialists
 - Grep: Search for related code patterns
+- Glob: Find files by pattern
 
 ## Your Responsibilities
 1. Analyze the signal to understand the vulnerability type
@@ -1122,6 +1124,7 @@ When specialist input is missing, you MUST:
 ## Tools Available
 - Read: Read files at the signal location
 - Grep: Search for patterns
+- Glob: Find files by pattern
 
 ## Output
 When done, output ONLY the following JSON (no other text):

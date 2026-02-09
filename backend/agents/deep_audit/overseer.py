@@ -54,6 +54,7 @@ from agents.base_agent import BaseAgent
 from agents.deep_audit.state import CampaignState, Hypothesis, ScopeStatus, HypothesisStatus
 from agents.deep_audit.filesystem import MemoriesFilesystem
 from agents.deep_audit.dispatcher import WaveDispatcher, WavePlan, DispatchTask
+from agents.deep_audit.signal_flow_tracker import SignalFlowTracker
 from agents.deep_audit.tools import dispatch as dispatch_tools
 from agents.deep_audit.tools import memories as memory_tools
 from agents.deep_audit.tools import finalize as finalize_tools
@@ -239,6 +240,9 @@ class Overseer(BaseAgent):
 
         # Cached set of dismissed signal fingerprints (loaded once before routing phase)
         self._dismissed_fingerprints: Optional[set[str]] = None
+
+        # Pipeline signal flow tracker — records every stage decision for health report
+        self.signal_tracker = SignalFlowTracker()
 
         # Phase budget allocation (v2)
         self.phase_budgets = self._calculate_phase_budgets()
@@ -1067,6 +1071,14 @@ Output JSON with your analysis for each signal.""",
         # Convert confirmed findings to Finding objects
         await self._process_findings()
 
+        # Print pipeline health report — makes signal drops visible
+        self.signal_tracker.print_report()
+        await self.emit_log(self.signal_tracker.summary_text())
+        await self.emit(WSMessageType.PROGRESS, {
+            "type": "pipeline_health",
+            "summary": self.signal_tracker.summary(),
+        })
+
     def _extract_json_from_output(self, content: str) -> Optional[dict]:
         """Extract JSON from Claude CLI output. Delegates to shared util."""
         return extract_json_from_output(content)
@@ -1534,6 +1546,10 @@ Output your verdict as JSON.""",
         """
         signal_id = signal.get("signal_id", f"sig-{uuid.uuid4().hex[:8]}")
         signal_severity = signal.get("severity", "MEDIUM").upper()
+        signal_title = signal.get("title", "Untitled")
+
+        # Track this signal through the pipeline
+        self.signal_tracker.enter(signal_id, signal_title, signal_severity)
 
         # Pre-check: skip signals that were dismissed in a previous scan.
         # Load cache on first call, then O(1) set lookups for subsequent signals.
@@ -1550,6 +1566,7 @@ Output your verdict as JSON.""",
                 )
                 if fingerprint in self._dismissed_fingerprints:
                     print(f"[Overseer] Signal {signal_id}: Previously dismissed (fingerprint {fingerprint}), skipping")
+                    self.signal_tracker.record_drop(signal_id, "pre_check", "previously dismissed")
                     return None
             except Exception as e:
                 print(f"[Overseer] Dismissal pre-check failed for {signal_id}: {e}")
@@ -1557,20 +1574,33 @@ Output your verdict as JSON.""",
         # Stage 1: Decider - Should we investigate?
         decider_result = await self._run_decider(signal)
         if not decider_result or decider_result.get("decision") == "dismiss":
+            rationale = (decider_result or {}).get("rationale", "no rationale")
             print(f"[Overseer] Signal {signal_id}: Dismissed by Decider")
+            self.signal_tracker.record_drop(signal_id, "decider", rationale)
             return None
+        self.signal_tracker.record_stage(signal_id, "decider", "investigate")
 
         # Stage 2: FamilyCoordinator - Which specialist? What context?
         coordinator_result = await self._run_family_coordinator(signal, decider_result)
         if not coordinator_result:
             print(f"[Overseer] Signal {signal_id}: FamilyCoordinator failed, using defaults")
-            # Use mass_assignment_auditor as fallback (API_DESIGN family catchall)
             coordinator_result = {"primary_specialist": "mass_assignment_auditor", "family": "api_design", "context_for_specialist": ""}
+        family = coordinator_result.get("family", "unknown")
+        self.signal_tracker.record_stage(signal_id, "coordinator", family)
 
         # Stage 3: Specialist - Technical validation
         specialist_start = time.time()
         specialist_result = await self._run_specialist(signal, coordinator_result)
         specialist_duration = time.time() - specialist_start
+
+        specialist_verdict = (specialist_result or {}).get("verdict", "error")
+        if specialist_verdict in ("not_vulnerable", "invalid", "dismiss", "dismissed"):
+            self.signal_tracker.record_stage(
+                signal_id, "specialist", specialist_verdict,
+                (specialist_result or {}).get("reasoning", "")[:200],
+            )
+        else:
+            self.signal_tracker.record_stage(signal_id, "specialist", specialist_verdict)
 
         # Stage 3.5: Devil's Advocate - Challenge quick dismissals of high-severity signals
         if specialist_result and self._should_challenge_specialist(
@@ -1579,16 +1609,23 @@ Output your verdict as JSON.""",
             print(f"[Overseer] Signal {signal_id}: Challenging specialist dismissal with Devil's Advocate")
             challenge_result = await self._run_devils_advocate(signal, specialist_result)
             if challenge_result and challenge_result.get("recommendation") == "reconsider":
-                # Devil's Advocate found issues - update specialist result
                 specialist_result["challenged"] = True
                 specialist_result["challenge_findings"] = challenge_result.get("challenge_findings", [])
-                # If Devil's Advocate strongly disagrees, override verdict
                 if challenge_result.get("new_evidence"):
                     specialist_result["verdict"] = "needs_more_info"
                     specialist_result["devils_advocate_override"] = True
+                self.signal_tracker.record_stage(signal_id, "devils_advocate", "reconsider")
+            else:
+                self.signal_tracker.record_stage(signal_id, "devils_advocate", "uphold")
 
         # Stage 4: Triager - Final classification (even if specialist failed/errored)
         finding = await self._run_triager(signal, specialist_result)
+
+        if finding:
+            classification = finding.get("classification", "unknown")
+            self.signal_tracker.record_stage(signal_id, "triager", classification)
+        else:
+            self.signal_tracker.record_drop(signal_id, "triager", "dismissed/by_design")
 
         return finding
 
@@ -2139,6 +2176,7 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
             if result and result.output:
                 triage_result = self._extract_json_from_output(result.output)
                 if triage_result:
+                    self.signal_tracker.record_parse("json_ok")
                     classification = triage_result.get("classification", "DISMISSED")
 
                     if classification == "SECURITY_VULNERABILITY":
@@ -2204,12 +2242,15 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
             if result and result.output:
                 fallback = self._parse_triager_markdown_fallback(result.output, signal, specialist_result)
                 if fallback is not None:
+                    self.signal_tracker.record_parse("markdown_fallback")
                     print(f"[Overseer] Triager JSON failed but markdown fallback succeeded for {signal.get('signal_id')}: {fallback.get('classification')}")
                     return fallback
+            self.signal_tracker.record_parse("parse_failure")
             print(f"[Overseer] Triager returned unparseable output for {signal.get('signal_id')} - preserving as UNVERIFIED")
             return self._build_unverified_finding(signal, specialist_result, "triager_parse_failure")
 
         except Exception as e:
+            self.signal_tracker.record_parse("parse_failure")
             print(f"[Overseer] Triager failed: {e} - preserving signal as UNVERIFIED")
             return self._build_unverified_finding(signal, specialist_result, f"triager_error: {e}")
 
@@ -2694,6 +2735,7 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
         # (the FindingCreate default) and show phantom findings in the UI.
         if finding.get("classification") == "UNVERIFIED":
             print(f"[Overseer] Skipping unverified finding: {finding.get('title', '?')} (reason: {finding.get('unverified_reason', '?')})")
+            self.signal_tracker.record_persist("unverified_blocked")
             return None
 
         try:
@@ -2733,12 +2775,16 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
             if db_finding:
                 try:
                     await findings_service.save_finding(db_finding)
+                    self.signal_tracker.record_persist("saved")
                 except Exception as db_err:
                     print(f"[Overseer] Failed to save finding to database: {db_err}")
+                    self.signal_tracker.record_persist("db_error")
                 return db_finding
+            self.signal_tracker.record_persist("deduped")
             return None
         except Exception as e:
             print(f"[Overseer] Error persisting finding immediately: {e}")
+            self.signal_tracker.record_persist("db_error")
             import traceback
             traceback.print_exc()
             return None

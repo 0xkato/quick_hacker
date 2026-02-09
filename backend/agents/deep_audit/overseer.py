@@ -2236,25 +2236,9 @@ Output as JSON with: classification, severity, title, description, recommendatio
                     signal["_verified_finding"] = finding
                     await self.emit_log(f"  ✓ {signal_id} ({severity}): Verified as {finding.get('classification', 'vulnerability')}")
 
-                    # Emit the finding immediately for UI visibility
-                    finding_create = FindingCreate(
-                        title=finding.get("title", "Untitled"),
-                        description=finding.get("description", ""),
-                        severity=finding.get("severity", "medium"),
-                        category=finding.get("category", "unknown"),
-                        file_path=finding.get("file_path", ""),
-                        line_start=finding.get("line_start"),
-                        code_snippet=finding.get("code_snippet"),
-                        remediation=finding.get("remediation"),
-                        cwe_id=finding.get("cwe_id"),
-                        confidence=finding.get("confidence", 0.5),
-                    )
-                    db_finding = self.add_finding(finding_create)
+                    # Persist finding immediately for UI visibility (survives refresh)
+                    db_finding = await self._persist_finding_immediately(finding)
                     if db_finding:
-                        try:
-                            await findings_service.save_finding(db_finding)
-                        except Exception as db_err:
-                            print(f"[Overseer] Failed to save finding to database: {db_err}")
                         await self.emit_finding(db_finding)
                 else:
                     dismissed_count += 1
@@ -2370,6 +2354,10 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 if finding:
                     verified_findings.append(finding)
                     await self.emit_log(f"  → Verified: {finding.get('title', 'Untitled')}")
+                    # Persist finding immediately for UI visibility (survives refresh)
+                    db_finding = await self._persist_finding_immediately(finding)
+                    if db_finding:
+                        await self.emit_finding(db_finding)
                     # Emit verified finding event
                     await self.emit(
                         WSMessageType.PROGRESS,
@@ -2461,6 +2449,55 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 "time_remaining": self.campaign_state.time_remaining(),
             }
         )
+
+    async def _persist_finding_immediately(self, finding: dict) -> "Finding | None":
+        """Persist a verified finding to DB immediately (don't wait for _process_findings).
+
+        This ensures findings survive page refreshes and server restarts even
+        if the audit is still running or gets interrupted.
+        """
+        try:
+            location = finding.get("file_path") or finding.get("location", "")
+            file_path = location.split(":")[0] if ":" in location else location
+            line_start = finding.get("line_start") or self._extract_line_number(location) or 1
+
+            severity = finding.get("severity", "medium")
+            if isinstance(severity, str):
+                severity = severity.lower()
+
+            metadata = {}
+            signal_id = finding.get("signal_id")
+            if signal_id:
+                metadata["signal_id"] = signal_id
+                metadata["category"] = finding.get("category", "unknown")
+
+            finding_create = FindingCreate(
+                title=finding.get("title", "Untitled Finding"),
+                description=finding.get("description", ""),
+                severity=severity,
+                vulnerability_type=finding.get("vulnerability_type", finding.get("category", "unknown")),
+                file_path=file_path,
+                line_start=line_start,
+                line_end=line_start,
+                code_snippet=finding.get("code_snippet"),
+                recommended_fix=finding.get("remediation") or finding.get("recommendation"),
+                cwe_id=finding.get("cwe_id"),
+                confidence=finding.get("confidence", 0.5),
+                metadata=metadata,
+            )
+            db_finding = self.add_finding(finding_create)
+            if db_finding:
+                try:
+                    await findings_service.save_finding(db_finding)
+                except Exception as db_err:
+                    print(f"[Overseer] Failed to save finding to database: {db_err}")
+                return db_finding
+            return None
+        except Exception as e:
+            print(f"[Overseer] Error persisting finding immediately: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     async def _process_findings(self):
         """Convert campaign state findings to Finding objects."""

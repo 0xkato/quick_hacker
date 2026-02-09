@@ -2511,7 +2511,7 @@ class AgentOrchestrator:
             raise ValueError(f"Agent not found: {agent_id}")
 
         if agent.status in [AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED]:
-            raise ValueError(f"Agent already finished (status: {agent.status})")
+            return agent.to_schema()
 
         # Auto-save state before cancelling (for ReAct agents)
         if hasattr(agent, 'get_state_snapshot'):
@@ -2611,7 +2611,10 @@ class AgentOrchestrator:
 
         # Cancel if still running
         if agent.status in [AgentStatus.RUNNING, AgentStatus.PENDING]:
-            await self.cancel_agent(agent_id)
+            try:
+                await self.cancel_agent(agent_id)
+            except Exception:
+                pass  # Best-effort cancel before delete
 
         async with self._lock:
             del self._agents[agent_id]

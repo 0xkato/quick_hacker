@@ -2108,7 +2108,22 @@ Classify as:
 - BY_DESIGN: Intentional behavior
 - DISMISSED: Not a real vulnerability
 
-Output as JSON with: classification, severity, title, description, recommendation"""
+CRITICAL: You MUST respond with ONLY a JSON object. No markdown, no explanation, no preamble.
+Your entire response must be valid JSON matching this exact schema:
+```json
+{{
+  "classification": "SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|DISMISSED",
+  "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+  "confidence": 0-100,
+  "title": "concise vulnerability title",
+  "description": "2-4 sentence vulnerability summary with attack vector and impact",
+  "reasoning": "why this classification is correct",
+  "impact": "what damage could occur",
+  "attack_path": "step by step exploitation",
+  "recommendation": "how to fix"
+}}
+```
+Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
 
         try:
             foundation_ctx = dispatch_tools.get_foundation_context()
@@ -2185,13 +2200,104 @@ Output as JSON with: classification, severity, title, description, recommendatio
                         }
                     # BY_DESIGN and DISMISSED return None
                     return None
-            # JSON parse failure - preserve signal as unverified finding instead of losing it
+            # JSON parse failure — try to extract classification from markdown prose
+            if result and result.output:
+                fallback = self._parse_triager_markdown_fallback(result.output, signal, specialist_result)
+                if fallback is not None:
+                    print(f"[Overseer] Triager JSON failed but markdown fallback succeeded for {signal.get('signal_id')}: {fallback.get('classification')}")
+                    return fallback
             print(f"[Overseer] Triager returned unparseable output for {signal.get('signal_id')} - preserving as UNVERIFIED")
             return self._build_unverified_finding(signal, specialist_result, "triager_parse_failure")
 
         except Exception as e:
             print(f"[Overseer] Triager failed: {e} - preserving signal as UNVERIFIED")
             return self._build_unverified_finding(signal, specialist_result, f"triager_error: {e}")
+
+    def _parse_triager_markdown_fallback(
+        self, raw_output: str, signal: dict, specialist_result: Optional[dict]
+    ) -> Optional[dict]:
+        """Extract classification from triager markdown when JSON parsing fails.
+
+        Models sometimes respond with prose instead of JSON. This extracts the
+        classification from patterns like "## Final Classification: SECURITY_VULNERABILITY"
+        or "classified it as a **SECURITY_VULNERABILITY**" and builds a finding dict
+        from the prose + original signal data.
+        """
+        text = raw_output.upper()
+
+        # Determine classification from prose
+        classification = None
+        for candidate in ["SECURITY_VULNERABILITY", "HARDENING", "BY_DESIGN", "DISMISSED", "BUG", "MISCONFIGURATION"]:
+            if candidate in text:
+                classification = candidate
+                break
+
+        if not classification:
+            return None
+
+        # DISMISSED / BY_DESIGN → drop the signal (same as JSON path)
+        if classification in ("DISMISSED", "BY_DESIGN"):
+            return None
+
+        # Extract severity from prose (e.g. "HIGH severity" or "severity: HIGH")
+        severity = "medium"
+        for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
+            if sev in text:
+                severity = sev.lower()
+                break
+
+        # Use the full prose as the description — it's richer than most JSON descriptions
+        # Trim to first ~2000 chars to avoid storing a wall of text
+        description = raw_output.strip()[:2000]
+
+        if classification == "SECURITY_VULNERABILITY":
+            return {
+                "signal_id": signal.get("signal_id"),
+                "title": signal.get("title", "Untitled"),
+                "description": description,
+                "severity": severity,
+                "vulnerability_type": signal.get("category", signal.get("vulnerability_type", "unknown")),
+                "location": signal.get("file_path", signal.get("location", "")),
+                "file_path": signal.get("file_path", ""),
+                "line_start": signal.get("line_start", signal.get("line_number")),
+                "code_snippet": signal.get("code_snippet", ""),
+                "remediation": signal.get("remediation", ""),
+                "confidence": specialist_result.get("confidence", 0.7) if specialist_result else 0.5,
+                "verified_by": specialist_result.get("specialist_id") if specialist_result else None,
+                "classification": classification,
+            }
+        elif classification == "HARDENING":
+            return {
+                "signal_id": signal.get("signal_id"),
+                "title": f"[Hardening] {signal.get('title', 'Untitled')}",
+                "description": description,
+                "severity": "low",
+                "vulnerability_type": signal.get("category", "hardening"),
+                "location": signal.get("file_path", ""),
+                "file_path": signal.get("file_path", ""),
+                "line_start": signal.get("line_start"),
+                "code_snippet": signal.get("code_snippet", ""),
+                "remediation": signal.get("remediation", ""),
+                "confidence": 0.5,
+                "classification": classification,
+            }
+        elif classification in ("BUG", "MISCONFIGURATION"):
+            return {
+                "signal_id": signal.get("signal_id"),
+                "title": f"[{classification.title()}] {signal.get('title', 'Untitled')}",
+                "description": description,
+                "severity": severity,
+                "vulnerability_type": signal.get("category", classification.lower()),
+                "location": signal.get("file_path", ""),
+                "file_path": signal.get("file_path", ""),
+                "line_start": signal.get("line_start"),
+                "code_snippet": signal.get("code_snippet", ""),
+                "remediation": signal.get("remediation", ""),
+                "confidence": 0.5,
+                "classification": classification,
+            }
+
+        return None
 
     async def _load_dismissed_fingerprints(self) -> None:
         """Load dismissed signal fingerprints from SinkSignalService into memory.

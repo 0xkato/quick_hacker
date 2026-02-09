@@ -42,6 +42,7 @@ from models.schemas import (
     AgentType,
     Finding,
     FindingCreate,
+    FindingClassification,
     WSMessage,
     WSMessageType,
     ProviderConfig,
@@ -2558,6 +2559,22 @@ Output as JSON with: classification, severity, title, description, recommendatio
             }
         )
 
+    @staticmethod
+    def _map_classification(raw: str) -> FindingClassification:
+        """Map triager/pipeline classification strings to FindingClassification enum."""
+        mapping = {
+            "SECURITY_VULNERABILITY": FindingClassification.SECURITY_ISSUE,
+            "SECURITY_ISSUE": FindingClassification.SECURITY_ISSUE,
+            "security_issue": FindingClassification.SECURITY_ISSUE,
+            "HARDENING": FindingClassification.HARDENING,
+            "hardening": FindingClassification.HARDENING,
+            "BUG": FindingClassification.BUG,
+            "bug": FindingClassification.BUG,
+            "MISCONFIGURATION": FindingClassification.MISCONFIGURATION,
+            "misconfiguration": FindingClassification.MISCONFIGURATION,
+        }
+        return mapping.get(raw, FindingClassification.SECURITY_ISSUE)
+
     async def _persist_finding_immediately(self, finding: dict) -> "Finding | None":
         """Persist a verified finding to DB immediately (don't wait for _process_findings).
 
@@ -2589,10 +2606,13 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 metadata["category"] = finding.get("category", finding.get("vulnerability_type", "unknown"))
                 metadata["why_suspicious"] = finding.get("why_suspicious", "")
 
+            classification = self._map_classification(finding.get("classification", ""))
+
             finding_create = FindingCreate(
                 title=finding.get("title", "Untitled Finding"),
                 description=finding.get("description", ""),
                 severity=severity,
+                classification=classification,
                 vulnerability_type=finding.get("vulnerability_type", finding.get("category", "unknown")),
                 file_path=file_path,
                 line_start=line_start,
@@ -2668,10 +2688,13 @@ Output as JSON with: classification, severity, title, description, recommendatio
                     metadata["category"] = finding_data.get("category", "unknown")
                     metadata["why_suspicious"] = finding_data.get("why_suspicious", "")
 
+                classification = self._map_classification(finding_data.get("classification", ""))
+
                 finding_create = FindingCreate(
                     title=finding_data.get("title", "Untitled Finding"),
                     description=finding_data.get("description", ""),
                     severity=severity,
+                    classification=classification,
                     vulnerability_type=finding_data.get("vulnerability_type", "unknown"),
                     file_path=file_path,
                     line_start=line_start,

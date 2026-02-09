@@ -2486,7 +2486,7 @@ class AgentOrchestrator:
         """Cancel an agent (in-memory or persisted)."""
         agent = self._agents.get(agent_id)
 
-        # If not in memory, check persisted state
+        # If not in memory, check persisted state (JSON snapshots then DB)
         if not agent:
             snapshot = persistence_service.load_agent_state(agent_id)
             if snapshot:
@@ -2508,6 +2508,14 @@ class AgentOrchestrator:
                     files_analyzed=snapshot.files_analyzed,
                     findings_count=len(snapshot.findings) if snapshot.findings else 0,
                 )
+
+            # Check DB scans table (agent visible via list_agents but not in memory)
+            db_agent = await scan_service.get_scan(agent_id)
+            if db_agent:
+                await scan_service.update_status(agent_id, AgentStatus.CANCELLED.value)
+                db_agent.status = AgentStatus.CANCELLED
+                return db_agent
+
             raise ValueError(f"Agent not found: {agent_id}")
 
         if agent.status in [AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED]:
@@ -2604,32 +2612,34 @@ class AgentOrchestrator:
         return findings
 
     async def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent and its findings."""
+        """Delete an agent and its findings (in-memory and/or DB)."""
         agent = self._agents.get(agent_id)
-        if not agent:
-            return False
+        deleted_something = False
 
-        # Cancel if still running
-        if agent.status in [AgentStatus.RUNNING, AgentStatus.PENDING]:
-            try:
-                await self.cancel_agent(agent_id)
-            except Exception:
-                pass  # Best-effort cancel before delete
+        if agent:
+            # Cancel if still running
+            if agent.status in [AgentStatus.RUNNING, AgentStatus.PENDING]:
+                try:
+                    await self.cancel_agent(agent_id)
+                except Exception:
+                    pass  # Best-effort cancel before delete
 
-        async with self._lock:
-            del self._agents[agent_id]
-            if agent_id in self._findings:
-                del self._findings[agent_id]
-            if agent_id in self._tasks:
-                del self._tasks[agent_id]
+            async with self._lock:
+                del self._agents[agent_id]
+                if agent_id in self._findings:
+                    del self._findings[agent_id]
+                if agent_id in self._tasks:
+                    del self._tasks[agent_id]
+            deleted_something = True
 
-        # Delete scan record from DB
+        # Delete scan record from DB (handles DB-only agents after restart)
         try:
-            await scan_service.delete_scan(agent_id)
+            if await scan_service.delete_scan(agent_id):
+                deleted_something = True
         except Exception as e:
             print(f"[Orchestrator] Failed to delete scan record: {e}")
 
-        return True
+        return deleted_something
 
     async def get_stats(self) -> dict:
         """Get orchestrator statistics."""

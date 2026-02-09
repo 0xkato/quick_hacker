@@ -2582,11 +2582,12 @@ Output as JSON with: classification, severity, title, description, recommendatio
             if isinstance(severity, str):
                 severity = severity.lower()
 
-            metadata = {}
+            metadata = finding.get("metadata", {})
             signal_id = finding.get("signal_id")
             if signal_id:
                 metadata["signal_id"] = signal_id
-                metadata["category"] = finding.get("category", "unknown")
+                metadata["category"] = finding.get("category", finding.get("vulnerability_type", "unknown"))
+                metadata["why_suspicious"] = finding.get("why_suspicious", "")
 
             finding_create = FindingCreate(
                 title=finding.get("title", "Untitled Finding"),
@@ -2599,7 +2600,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 code_snippet=finding.get("code_snippet"),
                 recommended_fix=finding.get("remediation") or finding.get("recommendation"),
                 cwe_id=finding.get("cwe_id"),
-                confidence=finding.get("confidence", 0.5),
+                confidence=finding.get("confidence", 0.7),
                 metadata=metadata,
             )
             db_finding = self.add_finding(finding_create)
@@ -2629,6 +2630,14 @@ Output as JSON with: classification, severity, title, description, recommendatio
                 # Skip findings that were already routed through the pipeline
                 # (persisted during incremental/batch routing, or dismissed by specialist/decider)
                 if finding_data.get("_routed") or finding_data.get("_dismissed") or finding_data.get("dismissed_by_specialist"):
+                    skipped_count += 1
+                    continue
+
+                # Block unverified findings — same guard as _persist_finding_immediately.
+                # These are created when the triager fails and would be mislabeled as
+                # SECURITY_ISSUE (FindingCreate default) if persisted.
+                if finding_data.get("classification") == "UNVERIFIED":
+                    print(f"[Overseer] _process_findings: Skipping unverified finding: {finding_data.get('title', '?')}")
                     skipped_count += 1
                     continue
 
@@ -2669,7 +2678,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                     line_end=line_start,  # Same as start for single-line findings
                     code_snippet=finding_data.get("code_snippet"),
                     recommended_fix=finding_data.get("remediation") or finding_data.get("recommendation"),
-                    confidence=finding_data.get("confidence", 0.8),
+                    confidence=finding_data.get("confidence", 0.5),
                     metadata=metadata,
                 )
                 finding = self.add_finding(finding_create)

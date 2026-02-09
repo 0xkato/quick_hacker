@@ -88,38 +88,38 @@ All of these must be true:
 
 ## Output Format
 
-```triage
-SIGNAL_ID: <id>
-CLASSIFICATION: <VALID_SECURITY_ISSUE|HARDENING|BY_DESIGN|SPECULATIVE|BUG|MISCONFIGURATION>
-CONFIDENCE: <0-100>
+You MUST output valid JSON. This is critical — your output will be parsed programmatically.
 
-CHECKLIST:
-- Exploitable path exists: <YES|NO|PARTIAL>
-- Attacker can reach: <YES|NO|UNKNOWN>
-- Meaningful impact: <YES|NO>
-- Mitigations effective: <YES|NO|PARTIAL>
-- In scope: <YES|NO>
-
-REASONING:
-<Why this classification is correct>
-
-EVIDENCE:
-<Specific code references supporting the classification>
-
-IF VALID_SECURITY_ISSUE:
-  SEVERITY: <CRITICAL|HIGH|MEDIUM|LOW>
-  IMPACT: <What damage could occur>
-  ATTACK_PATH: <Step by step>
-  REMEDIATION: <How to fix>
-
-IF HARDENING:
-  RECOMMENDATION: <What to improve>
-  BENEFIT: <Why it helps>
-
-IF SPECULATIVE:
-  ASSUMPTIONS_REQUIRED: <What would need to be true>
-  WHY_UNLIKELY: <Why these assumptions probably don't hold>
+```json
+{
+  "signal_id": "<id>",
+  "classification": "<SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|SPECULATIVE|BUG|MISCONFIGURATION|DISMISSED>",
+  "confidence": <0-100>,
+  "title": "<Concise vulnerability title, e.g. 'SSRF via unvalidated armory URL'>",
+  "description": "<2-4 sentence vulnerability summary: what the issue is, how an attacker exploits it, and what the impact is. This is the primary human-readable output — make it specific and actionable, NOT a generic restatement of the code.>",
+  "severity": "<CRITICAL|HIGH|MEDIUM|LOW>",
+  "checklist": {
+    "exploitable_path_exists": "<YES|NO|PARTIAL>",
+    "attacker_can_reach": "<YES|NO|UNKNOWN>",
+    "meaningful_impact": "<YES|NO>",
+    "mitigations_effective": "<YES|NO|PARTIAL>",
+    "in_scope": "<YES|NO>"
+  },
+  "reasoning": "<Why this classification is correct>",
+  "evidence": "<Specific code references supporting the classification>",
+  "impact": "<What damage could occur>",
+  "attack_path": "<Step by step exploitation>",
+  "recommendation": "<How to fix>"
+}
 ```
+
+### Description Field Guidelines
+
+The `description` field is the most important output. It must:
+- Explain the vulnerability in concrete terms (not "potentially allows X" — say what actually happens)
+- Include the specific attack vector (e.g. "An attacker controlling the armory JSON response can set TarGzURL to an internal IP")
+- State the impact (e.g. "allowing SSRF to cloud metadata endpoints like 169.254.169.254")
+- NOT just restate the code — explain WHY it's exploitable
 
 ## Key Principles
 

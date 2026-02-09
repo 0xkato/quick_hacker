@@ -82,6 +82,8 @@ from prompting_loader import load_prompt
 from services.observability_service import observability_service
 from services.flow_service import flow_service
 from services.findings_service import findings_service
+from services.sink_signal_service import sink_signal_service, compute_signal_fingerprint
+from models.sink_signals import SinkSignalStatus, SinkSignalKind, SinkSignal
 
 
 # Scan tier time budgets in seconds - aligned with scan_tier_service.py
@@ -233,6 +235,9 @@ class Overseer(BaseAgent):
 
         # Security Map from understanding phase (v2)
         self.security_map: Optional[dict] = None
+
+        # Cached set of dismissed signal fingerprints (loaded once before routing phase)
+        self._dismissed_fingerprints: Optional[set[str]] = None
 
         # Phase budget allocation (v2)
         self.phase_budgets = self._calculate_phase_budgets()
@@ -1529,6 +1534,25 @@ Output your verdict as JSON.""",
         signal_id = signal.get("signal_id", f"sig-{uuid.uuid4().hex[:8]}")
         signal_severity = signal.get("severity", "MEDIUM").upper()
 
+        # Pre-check: skip signals that were dismissed in a previous scan.
+        # Load cache on first call, then O(1) set lookups for subsequent signals.
+        if self._dismissed_fingerprints is None:
+            await self._load_dismissed_fingerprints()
+        if self._dismissed_fingerprints:
+            try:
+                category = signal.get("category", signal.get("vulnerability_type", "unknown"))
+                file_path = signal.get("file_path", signal.get("location", ""))
+                line_number = signal.get("line_start", signal.get("line_number"))
+                label = signal.get("title", signal.get("why_suspicious", category))
+                fingerprint = compute_signal_fingerprint(
+                    kind=category, file_path=file_path, line_number=line_number, label=label,
+                )
+                if fingerprint in self._dismissed_fingerprints:
+                    print(f"[Overseer] Signal {signal_id}: Previously dismissed (fingerprint {fingerprint}), skipping")
+                    return None
+            except Exception as e:
+                print(f"[Overseer] Dismissal pre-check failed for {signal_id}: {e}")
+
         # Stage 1: Decider - Should we investigate?
         decider_result = await self._run_decider(signal)
         if not decider_result or decider_result.get("decision") == "dismiss":
@@ -2106,10 +2130,23 @@ Output as JSON with: classification, severity, title, description, recommendatio
                         # Normalize severity to lowercase for Severity enum
                         raw_severity = triage_result.get("severity", "medium")
                         normalized_severity = raw_severity.lower() if isinstance(raw_severity, str) else "medium"
+
+                        # Synthesize description from available fields if triager didn't provide one
+                        description = triage_result.get("description", "")
+                        if not description.strip():
+                            parts = []
+                            if triage_result.get("reasoning"):
+                                parts.append(triage_result["reasoning"])
+                            if triage_result.get("impact"):
+                                parts.append(f"Impact: {triage_result['impact']}")
+                            if triage_result.get("attack_path"):
+                                parts.append(f"Attack path: {triage_result['attack_path']}")
+                            description = " ".join(parts) if parts else signal.get("why_suspicious", "")
+
                         return {
                             "signal_id": signal.get("signal_id"),
                             "title": triage_result.get("title", signal.get("title", "Untitled")),
-                            "description": triage_result.get("description", ""),
+                            "description": description,
                             "severity": normalized_severity,
                             "vulnerability_type": signal.get("category", signal.get("vulnerability_type", "unknown")),
                             "location": signal.get("file_path", signal.get("location", "")),
@@ -2123,10 +2160,18 @@ Output as JSON with: classification, severity, title, description, recommendatio
                         }
                     elif classification == "HARDENING":
                         # Still return as finding but lower priority
+                        hardening_desc = triage_result.get("description", "")
+                        if not hardening_desc.strip():
+                            parts = []
+                            if triage_result.get("reasoning"):
+                                parts.append(triage_result["reasoning"])
+                            if triage_result.get("recommendation"):
+                                parts.append(f"Recommendation: {triage_result['recommendation']}")
+                            hardening_desc = " ".join(parts) if parts else signal.get("why_suspicious", "")
                         return {
                             "signal_id": signal.get("signal_id"),
                             "title": f"[Hardening] {triage_result.get('title', signal.get('title', 'Untitled'))}",
-                            "description": triage_result.get("description", ""),
+                            "description": hardening_desc,
                             "severity": "low",  # Hardening items are always low (lowercase for Severity enum)
                             "vulnerability_type": signal.get("category", "hardening"),
                             "location": signal.get("file_path", ""),
@@ -2146,6 +2191,67 @@ Output as JSON with: classification, severity, title, description, recommendatio
         except Exception as e:
             print(f"[Overseer] Triager failed: {e} - preserving signal as UNVERIFIED")
             return self._build_unverified_finding(signal, specialist_result, f"triager_error: {e}")
+
+    async def _load_dismissed_fingerprints(self) -> None:
+        """Load dismissed signal fingerprints from SinkSignalService into memory.
+
+        Called once before routing phase starts. Cached in self._dismissed_fingerprints
+        so per-signal checks are O(1) set lookups instead of disk reads.
+        """
+        try:
+            dismissed = await sink_signal_service.list_signals(
+                project_id=self.campaign_state.project_id,
+                status=SinkSignalStatus.DISMISSED,
+            )
+            self._dismissed_fingerprints = {s.fingerprint for s in dismissed}
+            if self._dismissed_fingerprints:
+                print(f"[Overseer] Loaded {len(self._dismissed_fingerprints)} previously dismissed signals")
+        except Exception as e:
+            print(f"[Overseer] Failed to load dismissed fingerprints: {e}")
+            self._dismissed_fingerprints = set()
+
+    async def _persist_dismissal(self, signal: dict) -> None:
+        """Write DISMISSED status to SinkSignalService so it persists across scans.
+
+        This prevents the same signal from being re-processed in future scans.
+        Uses the same fingerprint scheme as SinkHunter so the match is exact.
+        """
+        try:
+            category = signal.get("category", signal.get("vulnerability_type", "unknown"))
+            file_path = signal.get("file_path", signal.get("location", ""))
+            line_number = signal.get("line_start", signal.get("line_number"))
+            label = signal.get("title", signal.get("why_suspicious", category))
+
+            fingerprint = compute_signal_fingerprint(
+                kind=category,
+                file_path=file_path,
+                line_number=line_number,
+                label=label,
+            )
+
+            project_id = self.campaign_state.project_id
+            # Upsert: if signal exists, status won't downgrade from DISMISSED.
+            # If signal doesn't exist yet, create it as DISMISSED.
+            dismissed_signal = SinkSignal(
+                fingerprint=fingerprint,
+                kind=SinkSignalKind.SINK,
+                label=label,
+                file_path=file_path,
+                line_number=line_number,
+                status=SinkSignalStatus.DISMISSED,
+                source="deep_audit_pipeline",
+                metadata={"dismissed_by": "pipeline", "signal_id": signal.get("signal_id", "")},
+            )
+            await sink_signal_service.upsert_signals(
+                project_id=project_id,
+                signals=[dismissed_signal],
+            )
+            # Update in-memory cache so subsequent signals in this scan are also caught
+            if self._dismissed_fingerprints is not None:
+                self._dismissed_fingerprints.add(fingerprint)
+        except Exception as e:
+            # Non-fatal — don't break the pipeline for bookkeeping failures
+            print(f"[Overseer] Failed to persist dismissal for {signal.get('signal_id', '?')}: {e}")
 
     def _build_unverified_finding(
         self, signal: dict, specialist_result: Optional[dict], reason: str
@@ -2244,6 +2350,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                     dismissed_count += 1
                     signal["_routed"] = True
                     signal["_dismissed"] = True
+                    await self._persist_dismissal(signal)
                     await self.emit_log(f"  ✗ {signal_id} ({severity}): Dismissed by specialist")
 
             except Exception as e:
@@ -2371,6 +2478,7 @@ Output as JSON with: classification, severity, title, description, recommendatio
                     )
                 else:
                     dismissed_signal_ids.add(signal_id)  # Track the actual signal ID
+                    await self._persist_dismissal(signal)
                     await self.emit_log(f"  → Dismissed")
                     # Emit dismissed event
                     await self.emit(
@@ -2456,6 +2564,15 @@ Output as JSON with: classification, severity, title, description, recommendatio
         This ensures findings survive page refreshes and server restarts even
         if the audit is still running or gets interrupted.
         """
+        # Block unverified findings — these should never reach the database.
+        # They are created when the triager fails (parse error, exception) and
+        # carry classification="UNVERIFIED" with a fallback description from the
+        # hunter's raw signal. Persisting them would mislabel them as SECURITY_ISSUE
+        # (the FindingCreate default) and show phantom findings in the UI.
+        if finding.get("classification") == "UNVERIFIED":
+            print(f"[Overseer] Skipping unverified finding: {finding.get('title', '?')} (reason: {finding.get('unverified_reason', '?')})")
+            return None
+
         try:
             location = finding.get("file_path") or finding.get("location", "")
             file_path = location.split(":")[0] if ":" in location else location

@@ -2509,6 +2509,12 @@ Output as JSON with: classification, severity, title, description, recommendatio
 
         for i, finding_data in enumerate(self.campaign_state.confirmed_findings):
             try:
+                # Skip findings that were already routed through the pipeline
+                # (persisted during incremental/batch routing, or dismissed by specialist/decider)
+                if finding_data.get("_routed") or finding_data.get("_dismissed") or finding_data.get("dismissed_by_specialist"):
+                    skipped_count += 1
+                    continue
+
                 # Debug: show what we're processing
                 if i < 3:  # Only show first 3 to avoid log spam
                     print(f"[Overseer] Finding {i+1}: {finding_data.get('title', 'No title')[:50]}")

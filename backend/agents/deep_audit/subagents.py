@@ -359,7 +359,9 @@ You have access to module analyses and trust boundaries at:
 - Glob: Find entry point files
 
 ## Output
-When done, output ONLY JSON:
+Your ENTIRE response must be a single valid JSON object. No prose, no markdown, no commentary.
+Do NOT read or reference existing output files — always produce a fresh analysis.
+
 ```json
 {{
   "flows": [
@@ -378,6 +380,7 @@ When done, output ONLY JSON:
 ```
 
 IMPORTANT: Trace actual code paths you read. Don't invent flows.
+IMPORTANT: Output ONLY the JSON object above. Any non-JSON text will cause a parse failure.
 """
 
 INVARIANT_EXTRACTOR_PROMPT = """You are an InvariantExtractor subagent for security audit.

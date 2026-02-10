@@ -2182,22 +2182,12 @@ Classify as:
 - BY_DESIGN: Intentional behavior
 - DISMISSED: Not a real vulnerability
 
-CRITICAL: You MUST respond with ONLY a JSON object. No markdown, no explanation, no preamble.
-Your entire response must be valid JSON matching this exact schema:
-```json
-{{
-  "classification": "SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|DISMISSED",
-  "severity": "CRITICAL|HIGH|MEDIUM|LOW",
-  "confidence": 0-100,
-  "title": "concise vulnerability title",
-  "description": "2-4 sentence vulnerability summary with attack vector and impact",
-  "reasoning": "why this classification is correct",
-  "impact": "what damage could occur",
-  "attack_path": "step by step exploitation",
-  "recommendation": "how to fix"
-}}
-```
-Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
+CRITICAL: Your ENTIRE response must be a single raw JSON object.
+No markdown. No prose. No explanation. No code fences. Start with {{ and end with }}.
+Any non-JSON text causes a pipeline failure and this signal is LOST.
+
+Required schema (output this directly, not in a code block):
+{{"signal_id": "<from input>", "classification": "SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|DISMISSED", "severity": "CRITICAL|HIGH|MEDIUM|LOW", "confidence": 85, "title": "concise title", "description": "2-4 sentences", "reasoning": "why", "impact": "damage", "attack_path": "exploitation steps", "recommendation": "fix"}}"""
 
         try:
             foundation_ctx = dispatch_tools.get_foundation_context()

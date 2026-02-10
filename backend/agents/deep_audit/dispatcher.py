@@ -420,10 +420,11 @@ class WaveDispatcher:
 
 **Objective:** {task.objective}
 **Scope:** {task.scope}
-**Deliverable:** {task.deliverable}
 **Success Criteria:** {task.success_criteria or 'Complete the objective thoroughly'}
 
 {f'**Constraints:** {task.constraints}' if task.constraints else ''}
+
+IMPORTANT: Output your result directly as text/JSON to stdout. Do NOT try to write files — you do not have a Write tool. Your stdout output will be automatically captured and saved.
 
 Begin your analysis now."""
 

@@ -1566,12 +1566,18 @@ If the Security Map provides invariants and trust boundary information, USE THEM
 - Grep: Search for patterns
 - Glob: Find files by pattern
 
-## Output
-When done, output ONLY the following JSON (no other text):
-```json
+## Output — CRITICAL
+
+Your ENTIRE response MUST be a single raw JSON object. No markdown, no prose, no explanation, no code fences.
+Any non-JSON text will cause a pipeline failure and the signal will be lost.
+
+Start your response with {{ and end with }}. Nothing else.
+
 {{
+  "signal_id": "<signal_id from input>",
   "classification": "SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|DISMISSED",
   "severity": "critical|high|medium|low",
+  "confidence": 85,
   "title": "Clear vulnerability title",
   "description": "What the vulnerability is and why it matters",
   "recommendation": "How to fix it",
@@ -1579,7 +1585,6 @@ When done, output ONLY the following JSON (no other text):
   "specialist_input": "available|error|missing",
   "independent_analysis": true
 }}
-```
 
 Your classification is FINAL. Be thorough but decisive.
 """

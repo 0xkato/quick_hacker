@@ -1884,13 +1884,23 @@ def get_specialist_prompt(
     skill via the Skill tool at runtime to load domain expertise and
     detection methodology. The prompt is lightweight — content is loaded
     on-demand from the specialist_plugin/skills/ directory.
+
+    If a prompt file exists in prompting/specialists/, its content replaces
+    the 1-line proficiency string from registry.py with full domain context
+    (scope, CWEs, language-specific patterns, code shapes).
     """
     skill_name = _specialist_id_to_skill_name(specialist_id)
+
+    # Try loading the full prompt file for richer domain context
+    from agents.deep_audit.skills_loader import SkillsLoader
+    loader = SkillsLoader()
+    prompt_content = loader.load_prompt_for_specialist(specialist_id)
+    effective_proficiency = prompt_content if prompt_content else proficiency
 
     return SPECIALIST_PROMPT_TEMPLATE.format(
         specialist_name=specialist_name,
         specialist_id=specialist_id,
-        proficiency=proficiency,
+        proficiency=effective_proficiency,
         skill_name=skill_name,
         signal_id=signal_id,
         signal_context=signal_context,

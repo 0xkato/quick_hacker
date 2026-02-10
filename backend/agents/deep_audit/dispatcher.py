@@ -1056,9 +1056,14 @@ Begin your analysis now."""
                 security_map = await self._build_security_map()
                 print("[Understanding] SUCCESS: Built Security Map")
             except Exception as e:
-                print(f"[Understanding] FAILED to build Security Map: {e}")
-                import traceback
-                traceback.print_exc()
+                # All agents succeeded but some output couldn't be parsed — fall back to partial
+                print(f"[Understanding] Strict build failed ({e}), trying partial...")
+                try:
+                    security_map = await self._build_security_map(partial=True)
+                    if security_map:
+                        print("[Understanding] Built PARTIAL Security Map (some outputs unparseable)")
+                except Exception as e2:
+                    print(f"[Understanding] Could not build even partial Security Map: {e2}")
         else:
             # Try partial security map from whatever succeeded
             try:

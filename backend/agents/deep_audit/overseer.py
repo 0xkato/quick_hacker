@@ -774,9 +774,11 @@ Continue the investigation. What should the next wave focus on?"""
             from agents.deep_audit.dispatcher import WavePlan, DispatchTask
 
             # Calculate sub-agent time budget from hunting phase budget
+            # Agents run in parallel, so each gets ~80% of the phase wall-clock budget
+            # (matching understanding phase formula; 20% reserved for dispatch overhead)
             hunting_phase_budget = self.phase_budgets.get("hunting", self.campaign_state.time_remaining() * 0.3)
             remaining = self.campaign_state.time_remaining()
-            subagent_budget = max(60, min(1800, int(min(remaining, hunting_phase_budget) * 0.2)))
+            subagent_budget = max(120, min(1800, int(min(remaining, hunting_phase_budget) * 0.8)))
 
             # Build hunting tasks — standard SinkHunter + EntrypointHunter
             hunting_tasks = [

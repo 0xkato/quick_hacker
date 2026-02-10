@@ -969,7 +969,7 @@ Output JSON with your analysis for each signal.""",
                 )
 
                 try:
-                    foundation_ctx = dispatch_tools.get_foundation_context()
+                    # Use local foundation_ctx from Phase 1, not ContextVar which may not propagate across async tasks
                     wave_result = await self.dispatcher.dispatch_wave(wave_plan, foundation_context=foundation_ctx)
                     self.campaign_state.current_wave = wave_num
 
@@ -1218,7 +1218,7 @@ Output JSON with your analysis for each signal.""",
                                     "remediation": signal.get("remediation", signal.get("recommendation", "")),
                                     "confidence": signal.get("confidence", 0.7),
                                 }
-                                self.campaign_state.confirmed_findings.append(finding)
+                                self._add_finding_deduped(finding)
                         # Emit progress so the UI shows signal collection activity
                         await self.emit(
                             WSMessageType.PROGRESS,
@@ -1271,6 +1271,26 @@ Output JSON with your analysis for each signal.""",
             await self.emit_log(f"WARNING: {len(collection_errors)} collection error(s): {'; '.join(collection_errors)}")
 
         await self.emit_log(f"Collected {len(self.campaign_state.confirmed_findings)} potential findings from sub-agents")
+
+    def _add_finding_deduped(self, finding: dict) -> bool:
+        """Add a finding to confirmed_findings if not a duplicate.
+
+        Deduplicates on (file_path, line_start, category) to prevent the same
+        sink from being routed through the full pipeline multiple times across waves.
+
+        Returns:
+            True if the finding was added, False if it was a duplicate.
+        """
+        fp = (
+            finding.get("file_path", ""),
+            finding.get("line_start"),
+            finding.get("category", ""),
+        )
+        if fp in self.campaign_state._signal_fingerprints:
+            return False
+        self.campaign_state._signal_fingerprints.add(fp)
+        self.campaign_state.confirmed_findings.append(finding)
+        return True
 
     async def _collect_wave_findings(self, wave_num: int):
         """Collect findings from a specific wave's outputs."""
@@ -1333,7 +1353,7 @@ Output JSON with your analysis for each signal.""",
                                         "remediation": signal.get("remediation", signal.get("recommendation", "")),
                                         "confidence": signal.get("confidence", 0.7),
                                     }
-                                    self.campaign_state.confirmed_findings.append(finding)
+                                    self._add_finding_deduped(finding)
                             if len(signals) > 0:
                                 print(f"[Overseer] Wave {wave_num}: Collected {len(signals)} signals from {file_path}")
             except Exception as e:
@@ -1860,8 +1880,13 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
         # Standard single-specialist flow for non-critical
         return await self._run_single_specialist(signal, coordinator_result)
 
-    async def _run_single_specialist(self, signal: dict, coordinator_result: dict) -> Optional[dict]:
-        """Run a single specialist for standard validation."""
+    async def _run_single_specialist(self, signal: dict, coordinator_result: dict, *, _skip_calibration: bool = False) -> Optional[dict]:
+        """Run a single specialist for standard validation.
+
+        Args:
+            _skip_calibration: If True, skip calibration cross-validation promotion.
+                Used when called FROM cross-validation to prevent infinite recursion.
+        """
         specialist_id = coordinator_result.get("primary_specialist", "mass_assignment_auditor")
         context = coordinator_result.get("context_for_specialist", "")
         signal_id = signal.get('signal_id', 'unknown')
@@ -1886,8 +1911,9 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
             return {"verdict": "needs_more_info", "error": "No specialist found"}
 
         # Check if this specialist needs cross-validation based on calibration history
+        # Skip this check when called from within cross-validation to prevent infinite recursion
         specialist_type = specialist_info.id
-        if self.calibrator.should_require_cross_validation(specialist_type):
+        if not _skip_calibration and self.calibrator.should_require_cross_validation(specialist_type):
             print(f"[Overseer] Calibration: {specialist_type} requires cross-validation due to historical performance")
             # Promote to cross-validation even if not critical
             return await self._run_specialist_cross_validation(signal, coordinator_result)
@@ -2001,11 +2027,13 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
 
         if not secondary_id:
             # Can't cross-validate, fall back to single specialist
-            return await self._run_single_specialist(signal, coordinator_result)
+            # _skip_calibration=True prevents infinite recursion back into cross-validation
+            return await self._run_single_specialist(signal, coordinator_result, _skip_calibration=True)
 
         # Run both specialists in parallel
-        primary_task = self._run_single_specialist(signal, {**coordinator_result, "primary_specialist": primary_id})
-        secondary_task = self._run_single_specialist(signal, {**coordinator_result, "primary_specialist": secondary_id})
+        # _skip_calibration=True prevents infinite recursion: cross-validation -> single -> calibration check -> cross-validation
+        primary_task = self._run_single_specialist(signal, {**coordinator_result, "primary_specialist": primary_id}, _skip_calibration=True)
+        secondary_task = self._run_single_specialist(signal, {**coordinator_result, "primary_specialist": secondary_id}, _skip_calibration=True)
 
         results = await asyncio.gather(primary_task, secondary_task, return_exceptions=True)
 

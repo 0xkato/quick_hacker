@@ -454,8 +454,12 @@ Begin your analysis now."""
 
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
-            if task.agent_type == "Specialist" and SPECIALIST_PLUGIN_DIR.is_dir():
-                print(f"[Dispatcher] Native skills plugin loaded: {SPECIALIST_PLUGIN_DIR}")
+            if task.agent_type == "Specialist":
+                if SPECIALIST_PLUGIN_DIR.is_dir():
+                    print(f"[Dispatcher] Native skills plugin loaded: {SPECIALIST_PLUGIN_DIR}")
+                else:
+                    print(f"[Dispatcher] WARNING: Specialist {agent_id} running WITHOUT skills plugin!")
+                    print(f"[Dispatcher] Expected plugin dir: {SPECIALIST_PLUGIN_DIR}")
 
             # Verify Foundation Context file exists for downstream agents
             # This helps debug cases where agents should have read context but didn't
@@ -519,7 +523,7 @@ Begin your analysis now."""
                     error_message = f"Claude CLI exited with code {returncode}: {error_output}"
                     print(f"[Dispatcher] {agent_id} failed: {error_message}")
                 elif not output or not output.strip():
-                    # Non-zero exit with empty output is suspicious
+                    # Zero exit but empty output — may indicate stdin bug or silent failure
                     error_message = "Claude CLI produced no output"
                     print(f"[Dispatcher] {agent_id} produced no output")
                 else:

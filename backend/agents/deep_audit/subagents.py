@@ -1284,10 +1284,13 @@ IMPORTANT: Use actual signal IDs and specialist IDs from your input. Do NOT use 
 
 SPECIALIST_PROMPT_TEMPLATE = """You are a {specialist_name} specialist for security audit.
 
+## Your Expertise (Fallback)
+{proficiency}
+
 ## FIRST: Load Your Skill
 
 You MUST invoke the "{skill_name}" skill BEFORE analyzing any code.
-This loads your domain expertise and detection methodology.
+This loads your full domain expertise and detection methodology.
 
 ## Foundation Context
 If Foundation Context is provided above, use it to:
@@ -1332,7 +1335,7 @@ When done, output ONLY JSON with actual data from your analysis:
 {{
   "signal_id": "{signal_id}",
   "specialist": "{specialist_id}",
-  "skill_invoked": "{skill_name}",
+  "skill_invoked": null,
   "verdict": "vulnerable|not_vulnerable|needs_more_info",
   "confidence": 0,
   "reasoning": "<your_detailed_analysis>",
@@ -1345,7 +1348,7 @@ When done, output ONLY JSON with actual data from your analysis:
 }}
 ```
 
-IMPORTANT: Set "skill_invoked" to the exact skill name you loaded, or null if you could not load it.
+IMPORTANT: Set "skill_invoked" to the exact skill name you loaded (e.g. "{skill_name}"). Leave as null if skill loading failed.
 
 IMPORTANT: All file paths, line numbers, and observations must come from your actual code analysis.
 Be rigorous. False positives waste time. False negatives miss real vulnerabilities.
@@ -1887,6 +1890,7 @@ def get_specialist_prompt(
     return SPECIALIST_PROMPT_TEMPLATE.format(
         specialist_name=specialist_name,
         specialist_id=specialist_id,
+        proficiency=proficiency,
         skill_name=skill_name,
         signal_id=signal_id,
         signal_context=signal_context,
@@ -1993,33 +1997,10 @@ AGENT_PROMPTS = {
     # Base prompts for dynamic agents (objective contains full context)
     "Specialist": """You are a security vulnerability specialist for deep audit.
 
-Your task objective contains your specific expertise area, the signal to verify, and code context.
+Your full instructions, detection methodology, output schema, and the signal to analyze
+are provided in your task objective below. Follow those instructions exactly.
 
-## Your Role
-- Analyze the code thoroughly to verify or dismiss the potential vulnerability
-- Read the actual source files to understand the full context
-- Trace data flow from user input to the potentially dangerous sink
-- Consider edge cases and bypass techniques
-
-## Tools Available
-- Read: Read source files to understand the code
-- Glob: Find related files by pattern
-- Grep: Search for patterns across the codebase
-
-## Output
-When done, output ONLY JSON with your verdict:
-```json
-{
-  "verdict": "vulnerable" | "not_vulnerable" | "needs_more_info",
-  "confidence": 0.0-1.0,
-  "reasoning": "Detailed technical analysis...",
-  "attack_vector": "How an attacker could exploit this (if vulnerable)",
-  "mitigating_factors": ["List of factors that reduce risk"],
-  "recommended_fix": "How to fix this vulnerability"
-}
-```
-
-Be thorough but decisive. Don't hedge - make a clear determination.""",
+Use ALL available tools (Skill, Read, Grep, Glob) to verify findings with real code evidence.""",
     "Arbiter": """You are a security arbiter resolving specialist disagreements.
 
 Two specialists have analyzed the same signal and reached different conclusions.

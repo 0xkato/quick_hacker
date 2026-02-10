@@ -226,6 +226,7 @@ class CampaignState(BaseModel):
 
     # Results
     confirmed_findings: list[dict] = Field(default_factory=list)  # Finding dicts
+    _signal_fingerprints: set = Field(default_factory=set, exclude=True)  # Dedup: (file_path, line_start, category)
     dismissed: list[Dismissal] = Field(default_factory=list)
 
     # Wave tracking

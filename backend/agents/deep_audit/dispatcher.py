@@ -452,7 +452,9 @@ Begin your analysis now."""
             if task.agent_type == "Specialist" and SPECIALIST_PLUGIN_DIR.is_dir():
                 cmd.extend(["--plugin-dir", str(SPECIALIST_PLUGIN_DIR)])
 
-            cmd.append(user_prompt)
+            # NOTE: Prompt is fed via stdin, NOT as a positional argument.
+            # --plugin-dir <paths...> is variadic and would consume a trailing
+            # positional argument as another path, causing "no input" errors.
 
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
@@ -479,14 +481,22 @@ Begin your analysis now."""
 
             # Run claude CLI as subprocess
             # Use asyncio.create_subprocess_exec for async execution
+            # Prompt is piped via stdin to avoid --plugin-dir variadic arg issues
             start_time = time.time()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.repo_path,
                 env={**os.environ, "NO_COLOR": "1"},  # Disable color codes in output
             )
+
+            # Feed prompt via stdin and close — process reads it then proceeds
+            process.stdin.write(user_prompt.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+            await process.stdin.wait_closed()
 
             # Wait for completion with timeout and output size limit
             # Limit output to 10MB to prevent OOM from runaway subagents

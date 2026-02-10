@@ -4,7 +4,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from agents.deep_audit.foundation import (
     FoundationContext,
@@ -226,7 +226,7 @@ class CampaignState(BaseModel):
 
     # Results
     confirmed_findings: list[dict] = Field(default_factory=list)  # Finding dicts
-    _signal_fingerprints: set = Field(default_factory=set, exclude=True)  # Dedup: (file_path, line_start, category)
+    _signal_fingerprints: set = PrivateAttr(default_factory=set)  # Dedup: (file_path, line_start, category)
     dismissed: list[Dismissal] = Field(default_factory=list)
 
     # Wave tracking

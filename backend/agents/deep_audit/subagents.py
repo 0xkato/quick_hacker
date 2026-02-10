@@ -1284,29 +1284,33 @@ IMPORTANT: Use actual signal IDs and specialist IDs from your input. Do NOT use 
 
 SPECIALIST_PROMPT_TEMPLATE = """You are a {specialist_name} specialist for security audit.
 
+## FIRST: Load Your Skill
+
+You MUST invoke the "{skill_name}" skill BEFORE analyzing any code.
+This loads your domain expertise and detection methodology.
+
 ## Foundation Context
 If Foundation Context is provided above, use it to:
 - Focus on in-scope, security-critical paths
 - Exclude test/vendor/generated code from analysis
 - Understand attacker capabilities and trust boundaries
 
-## Your Expertise
-{proficiency}
-{skill_section}
 ## CRITICAL: You MUST Use Tools to Verify
 
 **DO NOT rely on the signal description alone.** You MUST read the actual code.
 
 **Required verification workflow:**
-1. `Read` the file at the signal location - examine the actual vulnerable code
-2. `Grep` for function/variable usage - find who calls this code
-3. `Read` caller files - trace the actual data flow
-4. `Grep` for sanitization patterns - search for validation/encoding
+1. Invoke your skill to load detection methodology
+2. `Read` the file at the signal location - examine the actual vulnerable code
+3. `Grep` for function/variable usage - find who calls this code
+4. `Read` caller files - trace the actual data flow
+5. `Grep` for sanitization patterns - search for validation/encoding
 
 **Your verdict MUST be based on:**
 - Actual code you read (not assumed)
 - Real file paths and line numbers
 - Evidence from your tool usage
+- The Verdict Rules from your loaded skill
 
 If you cannot verify with tools, verdict MUST be "needs_more_info".
 
@@ -1316,14 +1320,8 @@ Verify whether the assigned signal is a real vulnerability.
 ## Signal to Analyze
 {signal_context}
 
-## Verification Steps
-1. Read the code at the indicated location
-2. Trace data flow from source to sink
-3. Check for sanitization, validation, or encoding
-4. Assess exploitability (can an attacker reach this? can they control input?)
-5. Determine if security controls prevent exploitation
-
 ## Tools Available
+- Skill: Load your detection methodology (REQUIRED first step)
 - Read: Read source code files (REQUIRED for verification)
 - Grep: Search for related code patterns
 - Glob: Find related files
@@ -1851,6 +1849,22 @@ def get_family_coordinator_prompt(family_name: str = None, specialist_list: str 
     return FAMILY_COORDINATOR_PROMPT
 
 
+# Plugin namespace for specialist skills (must match .claude-plugin/plugin.json "name")
+_SPECIALIST_PLUGIN_NS = "deep-audit-specialists"
+
+
+def _specialist_id_to_skill_name(specialist_id: str) -> str:
+    """Convert specialist_id to fully-qualified Claude Code skill name.
+
+    Examples:
+        use_after_free_auditor -> deep-audit-specialists:use-after-free-audit
+        sql_injection_auditor  -> deep-audit-specialists:sql-injection-audit
+        csrf_auditor           -> deep-audit-specialists:csrf-audit
+    """
+    base = specialist_id.replace("_auditor", "").replace("_", "-") + "-audit"
+    return f"{_SPECIALIST_PLUGIN_NS}:{base}"
+
+
 def get_specialist_prompt(
     specialist_name: str,
     specialist_id: str,
@@ -1860,35 +1874,19 @@ def get_specialist_prompt(
 ) -> str:
     """Get Specialist prompt for a specific specialist and signal.
 
-    Loads the relevant skill file (methodology, decision tree, examples)
-    and injects it into the prompt to guide the specialist's analysis.
+    Uses Claude Code's native skill mechanism: the specialist invokes its
+    skill via the Skill tool at runtime to load domain expertise and
+    detection methodology. The prompt is lightweight — content is loaded
+    on-demand from the specialist_plugin/skills/ directory.
     """
-    from agents.deep_audit.skills_loader import SkillsLoader
-
-    loader = SkillsLoader()
-    skill_content = loader.load_for_specialist(specialist_id)
-
-    if skill_content:
-        skill_section = f"""
-
-## Detection Methodology (Skill)
-
-Use the following methodology to guide your analysis. Pay special attention to
-the Decision Tree for classification and the False Positive Patterns to avoid
-incorrect findings.
-
-{skill_content}
-"""
-    else:
-        skill_section = ""
+    skill_name = _specialist_id_to_skill_name(specialist_id)
 
     return SPECIALIST_PROMPT_TEMPLATE.format(
         specialist_name=specialist_name,
         specialist_id=specialist_id,
-        proficiency=proficiency,
+        skill_name=skill_name,
         signal_id=signal_id,
         signal_context=signal_context,
-        skill_section=skill_section,
     )
 
 

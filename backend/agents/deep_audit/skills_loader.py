@@ -1,21 +1,24 @@
 """
 Skills loader for Deep Audit specialist agents.
 
-Loads vulnerability-specific methodology files (skills) and injects them
-into specialist prompts to improve detection accuracy and reduce false positives.
+Loads vulnerability-specific methodology files (skills) and domain expertise
+prompts, injecting them into specialist prompts to improve detection accuracy
+and reduce false positives.
 
 Skills are markdown files containing:
-- Step-by-step methodology for finding the vulnerability class
-- Decision tree for classification (VULNERABLE/HARDENED/SAFE/BY_DESIGN)
-- Real-world examples with vulnerable and fixed code
-- Common false positive patterns
+- Step-by-step methodology for confirming/rejecting findings
+- Verdict rules mapping to pipeline JSON output
+- Evidence checklists, false positive filters, and remediation patterns
+
+Specialist prompts are markdown files containing:
+- Domain expertise (scope, CWEs, language-specific patterns)
+- Injected as the specialist's proficiency context at runtime
 
 Usage:
     >>> from agents.deep_audit.skills_loader import SkillsLoader
     >>> loader = SkillsLoader()
     >>> skill = loader.load_for_specialist("sql_injection_auditor")
-    >>> if skill:
-    ...     prompt = f"{base_prompt}\\n\\n## Detection Methodology\\n{skill}"
+    >>> prompt = loader.load_prompt_for_specialist("sql_injection_auditor")
 """
 
 import logging
@@ -28,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 # Directory containing skill files, relative to this module
 SKILLS_DIR = Path(__file__).parent / "skills"
+
+# Directory containing specialist prompt files (domain expertise)
+# skills_loader.py is at backend/agents/deep_audit/ — prompting/ is sibling of backend/
+PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompting"
 
 
 # Maps specialist_id -> skill file path (relative to SKILLS_DIR)
@@ -123,6 +130,103 @@ SPECIALIST_SKILL_MAP: dict[str, str] = {
     "mass_assignment_auditor": "api_design/mass_assignment.md",
     "param_pollution_auditor": "api_design/parameter_pollution.md",
     "graphql_auditor": "api_design/graphql_security.md",
+}
+
+
+# Maps specialist_id -> prompt file path (relative to PROMPTS_DIR)
+# These provide domain expertise: scope, CWEs, language patterns, code shapes
+SPECIALIST_PROMPT_MAP: dict[str, str] = {
+    # Memory Safety (8)
+    "oob_read_write_auditor": "specialists/memory_safety/oob_read_write.md",
+    "use_after_free_auditor": "specialists/memory_safety/use_after_free.md",
+    "double_free_auditor": "specialists/memory_safety/double_free.md",
+    "uninit_memory_auditor": "specialists/memory_safety/uninit_memory.md",
+    "integer_overflow_auditor": "specialists/memory_safety/integer_overflow.md",
+    "format_string_auditor": "specialists/memory_safety/format_string.md",
+    "type_confusion_auditor": "specialists/memory_safety/type_confusion.md",
+    "unsafe_ffi_auditor": "specialists/memory_safety/unsafe_ffi.md",
+
+    # Injection (10)
+    "sql_injection_auditor": "specialists/injection/sql_injection.md",
+    "nosql_injection_auditor": "specialists/injection/nosql_injection.md",
+    "command_injection_auditor": "specialists/injection/command_injection.md",
+    "template_injection_auditor": "specialists/injection/template_injection.md",
+    "expression_injection_auditor": "specialists/injection/expression_injection.md",
+    "ldap_injection_auditor": "specialists/injection/ldap_injection.md",
+    "xpath_injection_auditor": "specialists/injection/xpath_injection.md",
+    "crlf_injection_auditor": "specialists/injection/crlf_injection.md",
+    "log_injection_auditor": "specialists/injection/log_injection.md",
+    "email_injection_auditor": "specialists/injection/email_injection.md",
+
+    # Web Edge Cases (4)
+    "ssrf_auditor": "specialists/web_edge_cases/ssrf.md",
+    "request_smuggling_auditor": "specialists/web_edge_cases/request_smuggling.md",
+    "cache_poisoning_auditor": "specialists/web_edge_cases/cache_poisoning.md",
+    "host_header_auditor": "specialists/web_edge_cases/host_header.md",
+
+    # Browser/Client (4)
+    "xss_auditor": "specialists/browser_client/xss.md",
+    "prototype_pollution_auditor": "specialists/browser_client/prototype_pollution.md",
+    "clickjacking_auditor": "specialists/browser_client/clickjacking.md",
+    "csp_auditor": "specialists/browser_client/csp.md",
+
+    # Deserialization/Parsing (6)
+    "unsafe_deser_auditor": "specialists/deserialization_parsing/unsafe_deserialization.md",
+    "parser_differential_auditor": "specialists/deserialization_parsing/parser_differential.md",
+    "xxe_auditor": "specialists/deserialization_parsing/xxe.md",
+    "zip_slip_auditor": "specialists/deserialization_parsing/zip_slip.md",
+    "redos_auditor": "specialists/deserialization_parsing/redos.md",
+    "file_parser_auditor": "specialists/deserialization_parsing/file_parser.md",
+
+    # File System (4)
+    "path_traversal_auditor": "specialists/file_system/path_traversal.md",
+    "file_upload_auditor": "specialists/file_system/file_upload.md",
+    "symlink_toctou_auditor": "specialists/file_system/symlink_toctou.md",
+    "temp_file_auditor": "specialists/file_system/temp_file.md",
+
+    # AuthN/Session (5)
+    "authn_bypass_auditor": "specialists/authn_session/authn_bypass.md",
+    "session_mgmt_auditor": "specialists/authn_session/session_management.md",
+    "csrf_auditor": "specialists/authn_session/csrf.md",
+    "oauth_auditor": "specialists/authn_session/oauth.md",
+    "jwt_auditor": "specialists/authn_session/jwt.md",
+
+    # AuthZ/Business Logic (5)
+    "idor_auditor": "specialists/authz_business_logic/idor.md",
+    "priv_esc_auditor": "specialists/authz_business_logic/privilege_escalation.md",
+    "multi_tenant_auditor": "specialists/authz_business_logic/multi_tenant.md",
+    "workflow_bypass_auditor": "specialists/authz_business_logic/workflow_bypass.md",
+    "rate_limit_auditor": "specialists/authz_business_logic/rate_limit.md",
+
+    # Crypto/Secrets (4)
+    "crypto_misuse_auditor": "specialists/crypto_secrets/crypto_misuse.md",
+    "randomness_auditor": "specialists/crypto_secrets/randomness.md",
+    "secrets_handling_auditor": "specialists/crypto_secrets/secrets_handling.md",
+    "tls_auditor": "specialists/crypto_secrets/tls.md",
+
+    # Infrastructure (4)
+    "insecure_config_auditor": "specialists/infrastructure/insecure_config.md",
+    "container_auditor": "specialists/infrastructure/container.md",
+    "k8s_auditor": "specialists/infrastructure/kubernetes.md",
+    "cicd_auditor": "specialists/infrastructure/cicd.md",
+
+    # Supply Chain (3)
+    "dependency_risk_auditor": "specialists/supply_chain/dependency_risk.md",
+    "dependency_confusion_auditor": "specialists/supply_chain/dependency_confusion.md",
+    "plugin_auditor": "specialists/supply_chain/plugin.md",
+
+    # Concurrency (2)
+    "race_condition_auditor": "specialists/concurrency/race_condition.md",
+    "dos_auditor": "specialists/concurrency/dos.md",
+
+    # Data Exposure (2)
+    "sensitive_data_auditor": "specialists/data_exposure/sensitive_data.md",
+    "token_in_url_auditor": "specialists/data_exposure/token_in_url.md",
+
+    # API Design (3)
+    "mass_assignment_auditor": "specialists/api_design/mass_assignment.md",
+    "param_pollution_auditor": "specialists/api_design/parameter_pollution.md",
+    "graphql_auditor": "specialists/api_design/graphql.md",
 }
 
 
@@ -231,6 +335,40 @@ class SkillsLoader:
             logger.debug("No skill mapping for specialist: %s", specialist_id)
             return None
         return self._load_file(relative_path)
+
+    def load_prompt_for_specialist(self, specialist_id: str) -> Optional[str]:
+        """Load the domain expertise prompt for a given specialist.
+
+        Prompt files contain scope, CWEs, language-specific patterns, and
+        code shapes — the specialist's identity and domain knowledge.
+
+        Args:
+            specialist_id: The specialist's ID (e.g. "use_after_free_auditor")
+
+        Returns:
+            Prompt file content as string, or None if no prompt exists.
+        """
+        relative_path = SPECIALIST_PROMPT_MAP.get(specialist_id)
+        if not relative_path:
+            logger.debug("No prompt mapping for specialist: %s", specialist_id)
+            return None
+
+        cache_key = f"prompt:{relative_path}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        file_path = PROMPTS_DIR / relative_path
+        if not file_path.is_file():
+            logger.debug("Specialist prompt not found: %s", file_path)
+            return None
+
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            self._cache[cache_key] = content
+            return content
+        except OSError as e:
+            logger.warning("Failed to read specialist prompt %s: %s", file_path, e)
+            return None
 
     def load_for_category(self, category: SignalCategory) -> Optional[str]:
         """Load the skill file for a given signal category.

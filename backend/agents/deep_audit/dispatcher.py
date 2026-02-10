@@ -19,6 +19,8 @@ from datetime import datetime
 from typing import Optional, Callable, Any
 from pydantic import BaseModel, Field
 
+from pathlib import Path
+
 from agents.deep_audit.filesystem import MemoriesFilesystem
 from agents.deep_audit.foundation import (
     FoundationContext,
@@ -36,6 +38,10 @@ import time
 def _claude_cli_available() -> bool:
     """Check if the claude CLI is available on PATH."""
     return shutil.which("claude") is not None
+
+
+# Plugin directory for specialist skills (native Claude Code skills mechanism)
+SPECIALIST_PLUGIN_DIR = Path(__file__).resolve().parent / "specialist_plugin"
 
 
 class DispatchTask(BaseModel):
@@ -113,8 +119,8 @@ AGENT_TOOL_SUBSETS = {
     "Decider": ["read_file", "search_code"],
     "FamilyCoordinator": ["read_file", "search_code"],
 
-    # Specialist agents (read-only analysis)
-    "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow"],
+    # Specialist agents (read-only analysis + native skill loading)
+    "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow", "use_skill"],
 
     # Resolution agents
     "Arbiter": ["read_file", "search_code", "trace_data_flow", "find_usages"],
@@ -380,6 +386,8 @@ class WaveDispatcher:
                 "get_entry_points": "Grep",
                 # Bash for complex operations
                 "trace_data_flow": "Bash",
+                # Skill for native Claude Code skill loading
+                "use_skill": "Skill",
             }
 
             # Convert our tool names to Claude CLI tool names
@@ -438,8 +446,13 @@ Begin your analysis now."""
                 "--append-system-prompt", system_prompt,  # Append to preserve tool instructions
                 "--output-format", "text",
                 "--no-session-persistence",  # Don't save session to disk
-                user_prompt,
             ]
+
+            # Add specialist plugin for native skill loading (Specialist agents only)
+            if task.agent_type == "Specialist" and SPECIALIST_PLUGIN_DIR.is_dir():
+                cmd.extend(["--plugin-dir", str(SPECIALIST_PLUGIN_DIR)])
+
+            cmd.append(user_prompt)
 
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")

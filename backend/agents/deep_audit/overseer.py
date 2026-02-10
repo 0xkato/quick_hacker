@@ -1889,7 +1889,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
             _skip_calibration: If True, skip calibration cross-validation promotion.
                 Used when called FROM cross-validation to prevent infinite recursion.
         """
-        specialist_id = coordinator_result.get("primary_specialist", "mass_assignment_auditor")
+        specialist_id = coordinator_result.get("primary_specialist") or "mass_assignment_auditor"
         context = coordinator_result.get("context_for_specialist", "")
         signal_id = signal.get('signal_id', 'unknown')
 
@@ -2010,7 +2010,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
         print(f"[Overseer] Signal {signal_id}: Running cross-validation (CRITICAL severity)")
 
         # Get primary and secondary specialists
-        primary_id = coordinator_result.get("primary_specialist", "mass_assignment_auditor")
+        primary_id = coordinator_result.get("primary_specialist") or "mass_assignment_auditor"
         secondary_id = coordinator_result.get("secondary_specialist")
 
         # If no secondary, get another from the same family
@@ -2793,6 +2793,12 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
 
             classification = self._map_classification(finding.get("classification", ""))
 
+            # Normalize confidence: specialists return 0-100, FindingCreate expects 0.0-1.0
+            raw_confidence = finding.get("confidence", 0.7)
+            if isinstance(raw_confidence, (int, float)) and raw_confidence > 1.0:
+                raw_confidence = raw_confidence / 100.0
+            confidence = max(0.0, min(1.0, float(raw_confidence)))
+
             finding_create = FindingCreate(
                 title=finding.get("title", "Untitled Finding"),
                 description=finding.get("description", ""),
@@ -2805,7 +2811,7 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
                 code_snippet=finding.get("code_snippet"),
                 recommended_fix=finding.get("remediation") or finding.get("recommendation"),
                 cwe_id=finding.get("cwe_id"),
-                confidence=finding.get("confidence", 0.7),
+                confidence=confidence,
                 metadata=metadata,
             )
             db_finding = self.add_finding(finding_create)
@@ -2879,6 +2885,12 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
 
                 classification = self._map_classification(finding_data.get("classification", ""))
 
+                # Normalize confidence: specialists return 0-100, FindingCreate expects 0.0-1.0
+                raw_confidence = finding_data.get("confidence", 0.5)
+                if isinstance(raw_confidence, (int, float)) and raw_confidence > 1.0:
+                    raw_confidence = raw_confidence / 100.0
+                confidence = max(0.0, min(1.0, float(raw_confidence)))
+
                 finding_create = FindingCreate(
                     title=finding_data.get("title", "Untitled Finding"),
                     description=finding_data.get("description", ""),
@@ -2890,7 +2902,7 @@ Do NOT wrap the JSON in markdown code fences. Output raw JSON only."""
                     line_end=line_start,  # Same as start for single-line findings
                     code_snippet=finding_data.get("code_snippet"),
                     recommended_fix=finding_data.get("remediation") or finding_data.get("recommendation"),
-                    confidence=finding_data.get("confidence", 0.5),
+                    confidence=confidence,
                     metadata=metadata,
                 )
                 finding = self.add_finding(finding_create)

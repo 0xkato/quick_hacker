@@ -1932,6 +1932,13 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
                     verdict["specialist_id"] = specialist_id
                     verdict["specialist_name"] = specialist_info.name
 
+                    # Verify native skill was loaded
+                    skill_invoked = verdict.get("skill_invoked")
+                    if skill_invoked and skill_invoked != "null":
+                        print(f"[Overseer] {specialist_id} loaded skill: {skill_invoked}")
+                    else:
+                        print(f"[Overseer] WARNING: {specialist_id} did NOT load native skill")
+
                     # Record verdict in calibration system
                     confidence = verdict.get("confidence", 50)
                     self.calibration_store.record_verdict(VerdictRecord(

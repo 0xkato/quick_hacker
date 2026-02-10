@@ -456,6 +456,8 @@ Begin your analysis now."""
 
             print(f"[Dispatcher] Spawning Claude CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Tools: {', '.join(claude_tools)}")
+            if task.agent_type == "Specialist" and SPECIALIST_PLUGIN_DIR.is_dir():
+                print(f"[Dispatcher] Native skills plugin loaded: {SPECIALIST_PLUGIN_DIR}")
 
             # Verify Foundation Context file exists for downstream agents
             # This helps debug cases where agents should have read context but didn't

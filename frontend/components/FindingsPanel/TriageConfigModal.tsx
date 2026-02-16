@@ -28,8 +28,8 @@ const PROVIDERS: { value: ProviderType; label: string }[] = [
 
 const SUGGESTED_MODELS: Record<ProviderType, string[]> = {
   anthropic: [
-    'claude-sonnet-4-20250514',
-    'claude-3-5-haiku-20241022',
+    'claude-sonnet-4-5-20250929',
+    'claude-haiku-4-5-20251001',
   ],
   openai: [
     'gpt-4o',
@@ -41,7 +41,7 @@ const SUGGESTED_MODELS: Record<ProviderType, string[]> = {
 
 export function TriageConfigModal({ findingsCount, onClose, onStartTriage }: TriageConfigModalProps) {
   const [provider, setProvider] = useState<ProviderType>('anthropic');
-  const [model, setModel] = useState('claude-sonnet-4-20250514');
+  const [model, setModel] = useState('claude-sonnet-4-5-20250929');
   const [apiKey, setApiKey] = useState('');
   const [useClaudeSDK, setUseClaudeSDK] = useState(true);
   const [useClaudeCodeAuth, setUseClaudeCodeAuth] = useState(false);

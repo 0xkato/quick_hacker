@@ -6,7 +6,7 @@ This module provides robust extraction with precompiled patterns for performance
 
 import json
 import re
-from typing import Optional, Union
+from typing import Optional
 
 # Precompiled patterns for better performance
 _JSON_CODE_BLOCK_PATTERN = re.compile(r'```json\s*([\s\S]*?)\s*```')
@@ -218,9 +218,6 @@ def extract_all_json_objects(content: str) -> list[dict]:
         results.append(obj)
 
         # Find where this object ended and continue from there
-        # This is approximate - we re-serialize and find the length
-        obj_str = json.dumps(obj)
-        # Find the actual end in the original content
         start = remaining.find('{')
         if start == -1:
             break

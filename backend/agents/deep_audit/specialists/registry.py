@@ -36,7 +36,7 @@ Adding a New Specialist:
 2. Map new SignalCategory to family in CATEGORY_TO_FAMILY dict
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -69,7 +69,6 @@ class SpecialistInfo:
     family: SpecialistFamily
     triggers: list[SignalCategory]
     proficiency: str
-    prompt_template: Optional[str] = None
 
 
 # Mapping from SignalCategory to SpecialistFamily
@@ -325,7 +324,7 @@ ALL_SPECIALISTS: list[SpecialistInfo] = [
         id="csp_auditor",
         name="CSP Auditor",
         family=SpecialistFamily.BROWSER_CLIENT,
-        triggers=[SignalCategory.XSS],  # CSP issues often relate to XSS
+        triggers=[SignalCategory.CLICKJACKING],  # CSP mitigates clickjacking; XSS trigger owned by xss_auditor
         proficiency="Expert at auditing Content Security Policy configurations for bypasses and weaknesses.",
     ),
 
@@ -657,11 +656,17 @@ class SpecialistRegistry:
         Returns:
             Best matching SpecialistInfo or None
         """
-        # Try matching against specialist IDs first (most specific)
+        # Exact match on base ID (strip _auditor suffix)
         for specialist in ALL_SPECIALISTS:
-            if category_str in specialist.id or specialist.id.replace("_auditor", "") in category_str:
+            base_id = specialist.id.replace("_auditor", "")
+            if category_str == base_id:
                 return specialist
-        # Try matching against proficiency descriptions (broader)
+        # Substring match: category must contain specialist base name or vice versa
+        for specialist in ALL_SPECIALISTS:
+            base_id = specialist.id.replace("_auditor", "")
+            if base_id in category_str or category_str in base_id:
+                return specialist
+        # Proficiency fallback
         for specialist in ALL_SPECIALISTS:
             if category_str.replace("_", " ") in specialist.proficiency.lower():
                 return specialist

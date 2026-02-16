@@ -4,13 +4,11 @@
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Literal
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from agents.deep_audit.foundation import (
     FoundationContext,
     SuspiciousSignal,
-    SignalCategory,
-    SignalSeverity,
 )
 
 
@@ -47,9 +45,7 @@ class SignalState(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        """Pydantic config to allow arbitrary types for SuspiciousSignal."""
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class HypothesisStatus(str, Enum):
@@ -246,10 +242,7 @@ class CampaignState(BaseModel):
     max_hypotheses: int = 200
     max_findings: int = 50
 
-    class Config:
-        """Pydantic config."""
-        use_enum_values = True
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(use_enum_values=True, arbitrary_types_allowed=True)
 
     # Helper methods
 

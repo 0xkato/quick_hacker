@@ -236,6 +236,9 @@ class Overseer(BaseAgent):
         self.calibration_store = CalibrationStore(calibration_path)
         self.calibrator = ConfidenceCalibrator(self.calibration_store)
 
+        # Tier-adaptive quick dismissal threshold
+        self.quick_dismissal_threshold = self.QUICK_DISMISSAL_THRESHOLDS.get(scan_tier, 60)
+
         # Foundation Context from Phase 1 (stored on instance to avoid ContextVar issues)
         self.foundation_ctx: Optional[FoundationContext] = None
 
@@ -294,9 +297,15 @@ class Overseer(BaseAgent):
         # Set dispatcher for dispatch tools
         dispatch_tools.set_dispatcher(self.dispatcher)
 
+    def _log_task_exception(self, task: asyncio.Task):
+        """Callback for background tasks to surface exceptions instead of swallowing them."""
+        if not task.cancelled() and task.exception():
+            print(f"[Overseer] Background emit failed: {task.exception()}")
+
     def _on_subagent_start(self, task_id: str, agent_type: str):
         """Callback when a sub-agent starts."""
-        asyncio.create_task(self._emit_subagent_start(task_id, agent_type))
+        t = asyncio.create_task(self._emit_subagent_start(task_id, agent_type))
+        t.add_done_callback(self._log_task_exception)
 
     async def _emit_subagent_start(self, task_id: str, agent_type: str):
         """Emit sub-agent start notification."""
@@ -313,7 +322,8 @@ class Overseer(BaseAgent):
 
     def _on_subagent_complete(self, task_id: str, agent_type: str, status: str):
         """Callback when a sub-agent completes."""
-        asyncio.create_task(self._emit_subagent_complete(task_id, agent_type, status))
+        t = asyncio.create_task(self._emit_subagent_complete(task_id, agent_type, status))
+        t.add_done_callback(self._log_task_exception)
 
     async def _emit_subagent_complete(self, task_id: str, agent_type: str, status: str):
         """Emit sub-agent completion notification."""
@@ -326,22 +336,6 @@ class Overseer(BaseAgent):
                 "task_id": task_id,
                 "agent_type": agent_type,
                 "status": status,
-            }
-        )
-
-    async def _emit_wave_progress(self, wave_id: int, status: str, tasks_count: int = 0):
-        """Emit wave progress notification."""
-        state = self.campaign_state
-        await self.emit(
-            WSMessageType.PROGRESS,
-            {
-                "type": "wave_progress",
-                "wave": wave_id,
-                "status": status,
-                "tasks_count": tasks_count,
-                "hypotheses_count": len(state.hypotheses),
-                "findings_count": len(state.confirmed_findings),
-                "time_remaining": state.time_remaining(),
             }
         )
 
@@ -449,19 +443,6 @@ Start with Wave 0 reconnaissance:
 
 Begin now. Use ALL available time productively."""
 
-    def _build_continuation_message(self) -> str:
-        """Build message to continue after tool results."""
-        state = self.campaign_state
-        return f"""**Campaign Status:**
-- Wave: {state.current_wave}
-- Time Remaining: {state.time_remaining():.0f} seconds
-- Hypotheses: {len(state.hypotheses)} ({len(state.get_pending_hypotheses())} pending)
-- Confirmed Findings: {len(state.confirmed_findings)}
-- Dismissed: {len(state.dismissed)}
-- Scopes Mapped: {len(state.scopes)}
-
-Continue the investigation. What should the next wave focus on?"""
-
     def _format_conversation_for_cli(self) -> str:
         """Format conversation history for Claude CLI input.
 
@@ -482,131 +463,6 @@ Continue the investigation. What should the next wave focus on?"""
             parts.append(f"[{role}]\n{content}\n")
 
         return "\n".join(parts)
-
-    async def _call_claude_cli(self, system_prompt: str, user_message: str) -> dict:
-        """Call Claude CLI for Overseer's own LLM orchestration.
-
-        Uses `claude -p` with Claude Code subscription auth (no API key needed).
-
-        Args:
-            system_prompt: System prompt for the LLM
-            user_message: Current user message (includes conversation context)
-
-        Returns:
-            Dict with 'text' (response text) and 'tool_calls' (list of tool calls)
-        """
-        # Check if Claude CLI is available
-        if not shutil.which("claude"):
-            raise RuntimeError("Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code")
-
-        # Build the prompt with conversation context
-        # For multi-turn, we format the conversation as part of the user message
-        full_prompt = user_message
-
-        # Build command
-        cmd = [
-            "claude",
-            "-p",  # Print mode (non-interactive)
-            "--model", self.model,
-            "--permission-mode", "bypassPermissions",
-            "--system-prompt", system_prompt,
-            "--output-format", "json",  # Get structured output
-            "--no-session-persistence",
-            full_prompt,
-        ]
-
-        print(f"[Overseer] Calling Claude CLI with model: {self.model}")
-        print(f"[Overseer] System prompt length: {len(system_prompt)} chars")
-        print(f"[Overseer] User message length: {len(user_message)} chars")
-
-        # Log LLM request for observability
-        request_id = observability_service.log_llm_request(
-            agent_id=self.id,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
-            tools_available=["dispatch_wave", "dispatch_agent", "read_memories"],
-            model=self.model,
-        )
-
-        # Run Claude CLI with timeout
-        start_time = time.time()
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.repo_path_str,
-            env={**os.environ, "NO_COLOR": "1"},
-        )
-
-        try:
-            # 5 minute timeout for Overseer LLM calls
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=300,
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise RuntimeError("Claude CLI timed out after 5 minutes")
-
-        output = stdout.decode("utf-8", errors="replace")
-        error_output = stderr.decode("utf-8", errors="replace")
-
-        print(f"[Overseer] Claude CLI returned, output length: {len(output)}")
-        if error_output:
-            print(f"[Overseer] CLI stderr: {error_output[:500]}")
-
-        if process.returncode != 0:
-            raise RuntimeError(f"Claude CLI error: {error_output}")
-
-        # Parse JSON output
-        try:
-            response_data = json.loads(output)
-        except json.JSONDecodeError:
-            # If not valid JSON, treat as plain text response
-            return {"text": output, "tool_calls": []}
-
-        # Extract text and tool calls from response
-        text = ""
-        tool_calls = []
-
-        # Handle different response formats
-        if isinstance(response_data, dict):
-            # Check for result field (stream-json format)
-            if "result" in response_data:
-                text = response_data.get("result", "")
-            elif "content" in response_data:
-                # Standard message format
-                content = response_data.get("content", [])
-                if isinstance(content, str):
-                    text = content
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                text += block.get("text", "")
-                            elif block.get("type") == "tool_use":
-                                tool_calls.append({
-                                    "id": block.get("id", str(uuid.uuid4())[:8]),
-                                    "name": block.get("name", ""),
-                                    "arguments": block.get("input", {}),
-                                })
-            else:
-                text = str(response_data)
-        else:
-            text = str(response_data)
-
-        # Log LLM response for observability
-        duration = time.time() - start_time
-        observability_service.log_llm_response(
-            agent_id=self.id,
-            request_id=request_id,
-            content=text[:1000] + "..." if len(text) > 1000 else text,
-            tool_calls=[{"name": tc.get("name", ""), "id": tc.get("id", "")} for tc in tool_calls],
-            duration_ms=int(duration * 1000),
-            model=self.model,
-        )
-
-        return {"text": text, "tool_calls": tool_calls}
 
     async def analyze(self):
         """Run the Overseer orchestration loop (v2 pipeline).
@@ -1006,9 +862,6 @@ Output JSON with your analysis for each signal.""",
                         # Find and update the agent's flow node
                         if result.agent_type == "SinkHunter" and sink_node:
                             flow_service.update_node_status(self.id, sink_node.id, status)
-                        elif result.agent_type == "DataflowTracer":
-                            # trace_node might not exist if we didn't dispatch it
-                            pass
 
                     if wave_node:
                         wave_status = "completed" if wave_result.all_succeeded else "failed"
@@ -1164,8 +1017,8 @@ Output JSON with your analysis for each signal.""",
                     self.campaign_state.current_wave = data.get("current_wave", 0)
                     print(f"[Overseer] Restored campaign state from checkpoint (phase: {data.get('phase')}, findings: {len(saved_findings)})")
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Overseer] Could not load campaign state: {e}")
         return False
 
     def _format_signals_for_context(self, max_signals: int = 10) -> str:
@@ -1313,17 +1166,20 @@ Output JSON with your analysis for each signal.""",
                                 if self._add_finding_deduped(finding):
                                     # Also construct typed SuspiciousSignal (dual-track)
                                     self._attach_typed_signal(finding)
-                        # Emit progress so the UI shows signal collection activity
-                        await self.emit(
-                            WSMessageType.PROGRESS,
-                            {
-                                "type": "hunting_signals_collected",
-                                "agent": "SinkHunter",
-                                "signals_count": len(signals),
-                                "phase": "hunting",
-                            }
-                        )
-                        print(f"[Overseer] Collected {len(signals)} signals from SinkHunter")
+                        # Emit progress only when signals were actually collected
+                        if signals:
+                            await self.emit(
+                                WSMessageType.PROGRESS,
+                                {
+                                    "type": "hunting_signals_collected",
+                                    "agent": "SinkHunter",
+                                    "signals_count": len(signals),
+                                    "phase": "hunting",
+                                }
+                            )
+                            print(f"[Overseer] Collected {len(signals)} signals from SinkHunter")
+                        else:
+                            print("[Overseer] SinkHunter returned no signals")
                 else:
                     error_msg = "Could not parse SinkHunter output as JSON"
                     print(f"[Overseer] {error_msg}")
@@ -1501,140 +1357,6 @@ Output JSON with your analysis for each signal.""",
             except Exception as e:
                 print(f"[Overseer] Wave {wave_num}: Could not read {file_path}: {e}")
 
-    async def _dispatch_specialists(self):
-        """Dispatch specialists to verify high-priority signals.
-
-        Specialists are sub-agents with vulnerability-specific prompts.
-        They analyze signals matching their expertise and return verdicts.
-        """
-        signals = self.campaign_state.confirmed_findings
-        if not signals:
-            return
-
-        await self.emit_log(f"Phase 4: Dispatching specialists to verify {len(signals)} signals...")
-        print(f"[Overseer] Dispatching specialists for {len(signals)} signals")
-
-        # Create flow node for Verification Phase
-        verify_node = flow_service.add_node(
-            self.id,
-            node_type="analysis",
-            label="Verification Phase",
-            parent_id=None,
-            data={"phase": "verification", "signals_count": len(signals)},
-        )
-        if verify_node:
-            flow_service.update_node_status(self.id, verify_node.id, "running")
-        await self.emit_flow_update()
-
-        # Group signals by category to dispatch appropriate specialists
-        registry = SpecialistRegistry()
-        category_signals: dict[str, list[dict]] = {}
-
-        for signal in signals:
-            # Get category from signal (normalize to lowercase)
-            category = signal.get("vulnerability_type", signal.get("category", "unknown"))
-            if isinstance(category, str):
-                category = category.lower().replace(" ", "_").replace("-", "_")
-
-            if category not in category_signals:
-                category_signals[category] = []
-            category_signals[category].append(signal)
-
-        print(f"[Overseer] Signal categories: {list(category_signals.keys())}")
-
-        # Calculate time budget for specialists
-        remaining = self.campaign_state.time_remaining()
-        specialist_budget = max(60, min(300, int(remaining * 0.1)))
-
-        # Dispatch specialists for each category (limit to top 5 categories by signal count)
-        sorted_categories = sorted(category_signals.items(), key=lambda x: -len(x[1]))[:5]
-        tasks = []
-
-        for category, cat_signals in sorted_categories:
-            # Try to map category string to SignalCategory enum
-            try:
-                signal_cat = SignalCategory(category)
-                specialists = get_specialists_for_signal(signal_cat)
-            except (ValueError, KeyError):
-                # Unknown category, use generic verification
-                specialists = []
-
-            if specialists:
-                # Use first specialist for this category
-                specialist_id = specialists[0]
-                specialist_info = registry.get_by_id(specialist_id)
-
-                if specialist_info:
-                    # Format signals for the specialist
-                    signals_text = self._format_signals_for_specialist(cat_signals[:5])
-
-                    tasks.append(DispatchTask(
-                        agent_type="Specialist",
-                        objective=f"""Verify {len(cat_signals)} {category} signals.
-
-{specialist_info.proficiency}
-
-## Signals to Verify:
-{signals_text}
-
-For each signal:
-1. Read the code at the indicated location
-2. Trace data flow from user input to the sink
-3. Check for sanitization, validation, or encoding
-4. Determine if the vulnerability is exploitable
-
-Output your verdict as JSON.""",
-                        scope=self.repo_path_str,
-                        deliverable=f"/memories/verification/{specialist_id}_verdict.json",
-                        time_budget=specialist_budget,
-                    ))
-
-                    # Add flow node for this specialist
-                    spec_node = flow_service.add_node(
-                        self.id,
-                        node_type="analysis",
-                        label=f"{specialist_info.name}",
-                        parent_id=verify_node.id if verify_node else None,
-                        data={"specialist": specialist_id, "signals": len(cat_signals)},
-                    )
-                    if spec_node:
-                        flow_service.update_node_status(self.id, spec_node.id, "running")
-
-        await self.emit_flow_update()
-
-        if not tasks:
-            await self.emit_log("No specialists matched signal categories")
-            if verify_node:
-                flow_service.update_node_status(self.id, verify_node.id, "completed")
-            return
-
-        # Dispatch all specialists in parallel
-        wave_plan = WavePlan(
-            wave_id=self.waves_completed + 1,
-            tasks=tasks,
-            rationale="Verification Phase: Specialist analysis",
-        )
-
-        try:
-            foundation_ctx = self.foundation_ctx
-            result = await self.dispatcher.dispatch_wave(wave_plan, foundation_context=foundation_ctx)
-            await self.emit_log(f"Specialists completed: {result.all_succeeded}")
-
-            # Collect specialist verdicts
-            await self._collect_specialist_verdicts()
-
-            if verify_node:
-                status = "completed" if result.all_succeeded else "failed"
-                flow_service.update_node_status(self.id, verify_node.id, status)
-
-        except Exception as e:
-            print(f"[Overseer] Specialist dispatch failed: {e}")
-            await self.emit_log(f"Specialist dispatch failed: {e}")
-            if verify_node:
-                flow_service.update_node_status(self.id, verify_node.id, "failed")
-
-        await self.emit_flow_update()
-
     def _format_signals_for_specialist(self, signals: list[dict], max_signals: int = 5) -> str:
         """Format signals for a specialist prompt."""
         lines = []
@@ -1793,9 +1515,12 @@ Output your verdict as JSON.""",
 
         return finding
 
-    # Threshold for considering a specialist dismissal "quick" (seconds)
-    # Complex files may legitimately take longer to analyze, so set higher than typical
-    QUICK_DISMISSAL_THRESHOLD_SECONDS = 60
+    # Threshold for considering a specialist dismissal "quick" (seconds), by scan tier.
+    # Higher tiers allow more analysis time before considering a dismissal suspicious.
+    QUICK_DISMISSAL_THRESHOLDS = {
+        "quick": 30, "medium": 45, "advanced": 60,
+        "pro": 90, "ultra": 120, "evil": 180,
+    }
 
     def _should_challenge_specialist(
         self,
@@ -1810,6 +1535,10 @@ Output your verdict as JSON.""",
         - Low confidence dismissal of critical signal
         - Generic reasoning for dismissal
         """
+        # Guard: specialist_result must exist
+        if not specialist_result:
+            return False
+
         # Only challenge dismissals, not confirmations
         verdict = specialist_result.get("verdict", "").lower()
         if verdict not in ("not_vulnerable", "invalid", "dismiss", "dismissed"):
@@ -1818,7 +1547,7 @@ Output your verdict as JSON.""",
         # Always challenge quick dismissals of critical/high severity
         if signal_severity in ("CRITICAL", "HIGH"):
             # Quick dismissal (< threshold seconds)
-            if duration_seconds < self.QUICK_DISMISSAL_THRESHOLD_SECONDS:
+            if duration_seconds < self.quick_dismissal_threshold:
                 return True
             # Low confidence
             confidence = specialist_result.get("confidence", 100)
@@ -1828,7 +1557,7 @@ Output your verdict as JSON.""",
         # Challenge MEDIUM severity with stricter thresholds
         if signal_severity == "MEDIUM":
             # Very quick dismissal (half the normal threshold)
-            if duration_seconds < self.QUICK_DISMISSAL_THRESHOLD_SECONDS / 2:
+            if duration_seconds < self.quick_dismissal_threshold / 2:
                 return True
             # Very low confidence
             confidence = specialist_result.get("confidence", 100)
@@ -2079,8 +1808,8 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
                 family_specialists = registry.get_by_family(family)
                 if family_specialists:
                     specialist_info = family_specialists[0]
-            except (ValueError, KeyError):
-                pass
+            except (ValueError, KeyError) as e:
+                print(f"[Overseer] Specialist family lookup failed for '{specialist_id}': {e}")
 
         if not specialist_info:
             print(f"[Overseer] No specialist found for {specialist_id}")
@@ -2323,8 +2052,8 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
                 tm_data = self._extract_json_from_output(tm_content)
                 if tm_data:
                     threat_model = json.dumps(tm_data, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Overseer] Could not load threat model for triager: {e}")
 
         # Format specialist verdict
         if specialist_result:
@@ -2686,8 +2415,13 @@ Required schema (output this directly, not in a code block):
             return
 
         # Limit signals per wave to avoid spending too much time on routing
-        # Route up to 5 signals per wave, prioritizing by severity
-        MAX_SIGNALS_PER_WAVE = 5
+        MAX_SIGNALS_PER_WAVE_BY_TIER = {
+            "quick": 3, "medium": 5, "advanced": 8,
+            "pro": 10, "ultra": 15, "evil": 20,
+        }
+        MAX_SIGNALS_PER_WAVE = MAX_SIGNALS_PER_WAVE_BY_TIER.get(
+            self.campaign_state.scan_tier, 5
+        )
 
         # Sort by severity (critical first)
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -2764,7 +2498,7 @@ Required schema (output this directly, not in a code block):
         verified_from_incremental = [
             s.get("_verified_finding")
             for s in original_signals
-            if s.get("_routed") and s.get("_verified_finding")
+            if s.get("_routed") and isinstance(s.get("_verified_finding"), dict) and s.get("_verified_finding")
         ]
 
         if already_routed > 0:
@@ -2815,7 +2549,7 @@ Required schema (output this directly, not in a code block):
 
         # Sort signals by severity: CRITICAL first, then HIGH, MEDIUM, LOW
         SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        signals.sort(key=lambda f: SEVERITY_ORDER.get(f.get("severity", "medium"), 2))
+        signals.sort(key=lambda f: SEVERITY_ORDER.get(f.get("severity", "medium").lower(), 2))
 
         routing_start = time.time()
         phase_budget = self.campaign_state.time_remaining() * 0.8  # Reserve 20% for finalization

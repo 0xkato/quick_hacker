@@ -69,6 +69,15 @@ AGENT_MODEL_MAP: dict[str, str] = {
     "TrustBoundaryMapper": "sonnet",
     "DataFlowMapper": "sonnet",
     "InvariantExtractor": "sonnet",
+    # Sink hunter variants → Sonnet
+    "MemorySinkHunter": "sonnet",
+    "InjectionSinkHunter": "sonnet",
+    "WebSinkHunter": "sonnet",
+    "CryptoSinkHunter": "sonnet",
+    "AuthBoundaryMapper": "sonnet",
+    # Verification agents → Opus
+    "Auditor": "opus",
+    "Reproducer": "opus",
 }
 
 
@@ -164,13 +173,13 @@ def get_tools_for_agent_type(agent_type: str) -> list[str]:
 
 
 # Module-level atexit handler for orphan subprocess cleanup
-_dispatcher_instance: Optional["WaveDispatcher"] = None
+_dispatcher_instances: set["WaveDispatcher"] = set()
 
 
 def _atexit_cleanup():
     """Kill all tracked subprocesses on interpreter exit."""
-    if _dispatcher_instance:
-        _dispatcher_instance._cleanup_all_processes()
+    for inst in list(_dispatcher_instances):
+        inst._cleanup_all_processes()
 
 
 atexit.register(_atexit_cleanup)
@@ -222,8 +231,11 @@ class WaveDispatcher:
         self.parent_agent_id = parent_agent_id
         self._active_processes: dict[int, asyncio.subprocess.Process] = {}
         # Register this instance for atexit cleanup
-        global _dispatcher_instance
-        _dispatcher_instance = self
+        _dispatcher_instances.add(self)
+
+    def close(self):
+        """Remove this instance from atexit tracking."""
+        _dispatcher_instances.discard(self)
 
     def _register_process(self, process: asyncio.subprocess.Process):
         """Track an active subprocess for cleanup on crash."""
@@ -573,8 +585,6 @@ Begin your analysis now."""
             # Run claude CLI as subprocess
             # All agents use stdin for prompt delivery to avoid shell arg length limits
             # and to work consistently with --plugin-dir (which is variadic)
-            is_specialist = task.agent_type == "Specialist" and SPECIALIST_PLUGIN_DIR.is_dir()
-
             start_time = time.time()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -626,8 +636,8 @@ Begin your analysis now."""
                         timeout=2.0,  # 2 second grace period for buffered output
                     )
                     partial_stdout = partial_out
-                except (asyncio.TimeoutError, Exception):
-                    pass
+                except (asyncio.TimeoutError, OSError) as e:
+                    print(f"[Dispatcher] Grace period read failed: {e}")
                 process.kill()
                 await process.wait()
                 error_message = f"Task exceeded time budget of {task.time_budget}s"
@@ -1354,23 +1364,6 @@ Begin your analysis now."""
         print(f"[Foundation] Wrote context to /memories/foundation/context.md ({len(context_md)} bytes)")
 
         return context
-
-    def inject_foundation_context(self, task: DispatchTask, foundation_context: FoundationContext) -> DispatchTask:
-        """Inject Foundation Context into a task's prompt context.
-
-        Args:
-            task: The task to inject context into
-            foundation_context: The Foundation Context to inject
-
-        Returns:
-            Modified task with Foundation Context in constraints
-        """
-        context_text = foundation_context.to_prompt_context()
-        if task.constraints:
-            task.constraints = f"FOUNDATION_CONTEXT:\n{context_text}\n\n{task.constraints}"
-        else:
-            task.constraints = f"FOUNDATION_CONTEXT:\n{context_text}"
-        return task
 
     # Devil's Advocate challenge templates
     DEVILS_ADVOCATE_CHALLENGES = {

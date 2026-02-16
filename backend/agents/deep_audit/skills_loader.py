@@ -82,7 +82,7 @@ SPECIALIST_SKILL_MAP: dict[str, str] = {
     "file_parser_auditor": "deserialization/file_parser.md",
 
     # File System (4)
-    "path_traversal_auditor": "web/path_traversal.md",
+    "path_traversal_auditor": "web/path_traversal.md",  # Intentionally in web/ — overlaps web and filesystem domains
     "file_upload_auditor": "filesystem/file_upload.md",
     "symlink_toctou_auditor": "filesystem/symlink_toctou.md",
     "temp_file_auditor": "filesystem/temp_file.md",
@@ -302,6 +302,8 @@ class SkillsLoader:
     def __init__(self, skills_dir: Optional[Path] = None) -> None:
         self._skills_dir = skills_dir or SKILLS_DIR
         self._cache: dict[str, str] = {}
+        if not self._skills_dir.is_dir():
+            logger.warning("Skills directory not found: %s", self._skills_dir)
 
     def _load_file(self, relative_path: str) -> Optional[str]:
         """Load a skill file from disk, using cache."""

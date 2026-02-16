@@ -403,6 +403,12 @@ class SuspiciousSignal:
     hunter_notes: str | None = None
     foundation_context_summary: str | None = None
 
+    def __post_init__(self):
+        if self.line_start < 0:
+            self.line_start = 0
+        if self.line_end is not None and self.line_end < self.line_start:
+            self.line_end = self.line_start
+
     def to_specialist_context(self) -> str:
         """Format signal for specialist agent consumption."""
         lines = [
@@ -447,6 +453,7 @@ class SuspiciousSignal:
             "sink_function": self.sink_function,
             "related_signals": self.related_signals,
             "hunter_notes": self.hunter_notes,
+            "foundation_context_summary": self.foundation_context_summary,
         }
 
     @classmethod
@@ -465,4 +472,5 @@ class SuspiciousSignal:
             sink_function=data.get("sink_function"),
             related_signals=data.get("related_signals", []),
             hunter_notes=data.get("hunter_notes"),
+            foundation_context_summary=data.get("foundation_context_summary"),
         )

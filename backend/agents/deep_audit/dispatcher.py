@@ -789,10 +789,8 @@ IMPORTANT: Output your result directly as text/JSON to stdout. Do NOT try to wri
 
 Begin your analysis now."""
 
-            # Select model based on agent type — lightweight agents use Sonnet, deep analysis uses Opus
-            default_model = self.provider_config.get("model", "claude-opus-4-5-20251101")
-            agent_model_override = AGENT_MODEL_MAP.get(task.agent_type)
-            model_arg = agent_model_override if agent_model_override else default_model
+            # Always use the model specified by the user
+            model_arg = self.provider_config.get("model", "claude-opus-4-5-20251101")
 
             # Build claude CLI command
             # IMPORTANT: Use --append-system-prompt instead of --system-prompt
@@ -1221,10 +1219,8 @@ Begin your analysis now."""
             # Codex has no --append-system-prompt; concatenate system + user prompt
             full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
 
-            # Select model from Codex model map
-            default_model = self.provider_config.get("model", "gpt-5.2-codex")
-            agent_model_override = CODEX_AGENT_MODEL_MAP.get(task.agent_type)
-            model_arg = agent_model_override if agent_model_override else default_model
+            # Always use the model specified by the user
+            model_arg = self.provider_config.get("model", "gpt-4o")
 
             # Set up isolated Codex HOME with auth + MCP config
             codex_runtime = self._setup_codex_runtime(agent_id)

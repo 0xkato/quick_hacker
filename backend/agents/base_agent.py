@@ -408,15 +408,22 @@ class BaseAgent(ABC):
 
         provider_config: dict[str, object] = {}
         if self.provider_config:
-            provider_value = (
-                self.provider_config.provider.value
-                if hasattr(self.provider_config.provider, "value")
-                else str(self.provider_config.provider)
-            )
-            provider_config = {
-                "provider": provider_value,
-                "model": self.provider_config.model,
-            }
+            if isinstance(self.provider_config, dict):
+                # Overseer sets provider_config as a plain dict
+                provider_config = {
+                    "provider": str(self.provider_config.get("provider", "")),
+                    "model": str(self.provider_config.get("model", "")),
+                }
+            else:
+                provider_value = (
+                    self.provider_config.provider.value
+                    if hasattr(self.provider_config.provider, "value")
+                    else str(self.provider_config.provider)
+                )
+                provider_config = {
+                    "provider": provider_value,
+                    "model": self.provider_config.model,
+                }
             session_id = getattr(self, "_codex_session_id", None)
             if isinstance(session_id, str) and session_id:
                 provider_config["session_id"] = session_id

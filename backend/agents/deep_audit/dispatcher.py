@@ -1044,6 +1044,11 @@ Begin your analysis now."""
         backend_dir = Path(__file__).resolve().parents[2]
         mcp_server_path = backend_dir / "quickhack_mcp" / "quickhack_mcp_server.py"
 
+        # Write limits.json for MCP server budget enforcement
+        limits_json = codex_home / "limits.json"
+        cancel_flag = codex_home / "cancel.flag"
+        limits_json.write_text(json.dumps({"max_runtime_s": 600.0}), encoding="utf-8")
+
         toml_content = (
             "[features]\n"
             "shell_tool=false\n"
@@ -1057,6 +1062,8 @@ Begin your analysis now."""
             f"QUICKHACK_REPO_PATH = {json.dumps(self.repo_path)}\n"
             f"QUICKHACK_PROJECT_ID = {json.dumps(self.filesystem.project_id)}\n"
             f"QUICKHACK_AGENT_ID = {json.dumps(agent_id)}\n"
+            f"QUICKHACK_LIMITS_PATH = {json.dumps(str(limits_json))}\n"
+            f"QUICKHACK_CANCEL_PATH = {json.dumps(str(cancel_flag))}\n"
         )
         (codex_dir / "config.toml").write_text(toml_content, encoding="utf-8")
 
@@ -1159,30 +1166,27 @@ Begin your analysis now."""
                     duration_ms=None,
                 )
 
-            elif etype in ("turn.failed", "error"):
+            elif etype == "turn.failed":
                 err = event.get("error") or {}
                 message = err.get("message") if isinstance(err, dict) else str(err)
                 behavior_tree_service.add_error(
                     parent_agent_id, str(message)[:200]
                 )
 
-        # Drain stderr
-        stderr_data = b""
-        try:
-            stderr_data = await asyncio.wait_for(
-                process.stderr.read(), timeout=5.0
-            )
-        except Exception:
-            pass
-        stderr = stderr_data.decode("utf-8", errors="replace") if stderr_data else ""
+            elif etype == "error":
+                message = str(event.get("message") or "")
+                behavior_tree_service.add_error(
+                    parent_agent_id, message[:200]
+                )
 
+        # stderr is merged into stdout, no separate drain needed
         await process.wait()
 
         # Assemble result text
         if not result_text and all_text_parts:
             result_text = "\n".join(all_text_parts)
 
-        return result_text, stderr, truncated, process.returncode
+        return result_text, "", truncated, process.returncode
 
     async def _spawn_subagent_codex(
         self,
@@ -1253,6 +1257,11 @@ Begin your analysis now."""
 
             print(f"[Dispatcher] Spawning Codex CLI sub-agent {agent_id}")
             print(f"[Dispatcher] Codex model: {model_arg}")
+            print(f"[Dispatcher] Codex HOME: {codex_runtime['codex_home']}")
+            print(f"[Dispatcher] Codex auth.json exists: {(codex_runtime['codex_dir'] / 'auth.json').exists()}")
+            print(f"[Dispatcher] Codex config.toml exists: {(codex_runtime['codex_dir'] / 'config.toml').exists()}")
+            print(f"[Dispatcher] Prompt length: {len(full_prompt)} chars")
+            print(f"[Dispatcher] Codex cmd: {' '.join(cmd[:8])}... [prompt truncated]")
 
             # Log LLM request for observability
             log_agent_id = self.parent_agent_id or agent_id
@@ -1279,7 +1288,7 @@ Begin your analysis now."""
                 *cmd,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
                 cwd=self.repo_path,
                 env=env,
             )

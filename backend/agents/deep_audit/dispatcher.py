@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime
@@ -39,6 +40,11 @@ from services.observability_service import observability_service
 def _claude_cli_available() -> bool:
     """Check if the claude CLI is available on PATH."""
     return shutil.which("claude") is not None
+
+
+def _codex_cli_available() -> bool:
+    """Check if the codex CLI is available on PATH."""
+    return shutil.which("codex") is not None
 
 
 # Plugin directory for specialist skills (native Claude Code skills mechanism)
@@ -79,6 +85,42 @@ AGENT_MODEL_MAP: dict[str, str] = {
     # Verification agents → Opus
     "Auditor": "opus",
     "Reproducer": "opus",
+}
+
+# Codex CLI model mapping: mirrors AGENT_MODEL_MAP but uses OpenAI model IDs.
+CODEX_AGENT_MODEL_MAP: dict[str, str] = {
+    # Lightweight routing/triage → gpt-4o (fast)
+    "Decider": "gpt-4o",
+    "FamilyCoordinator": "gpt-4o",
+    "SinkHunter": "gpt-4o",
+    "EntrypointHunter": "gpt-4o",
+    "DataflowTracer": "gpt-4o",
+    "InvariantViolationHunter": "gpt-4o",
+    "TrustBoundaryGapHunter": "gpt-4o",
+    # Deep analysis → gpt-5.2-codex (quality-critical)
+    "Specialist": "gpt-5.2-codex",
+    "Triager": "gpt-5.2-codex",
+    "DevilsAdvocate": "gpt-5.2-codex",
+    "Arbiter": "gpt-5.2-codex",
+    # Foundation → gpt-4o
+    "RepoProfiler": "gpt-4o",
+    "ScopeMapper": "gpt-4o",
+    "ThreatModeler": "gpt-4o",
+    # Understanding → gpt-4o
+    "ModuleAnalyzer": "gpt-4o",
+    "TrustBoundaryMapper": "gpt-4o",
+    "DataFlowMapper": "gpt-4o",
+    "InvariantExtractor": "gpt-4o",
+    # Sink hunter variants → gpt-4o
+    "MemorySinkHunter": "gpt-4o",
+    "InjectionSinkHunter": "gpt-4o",
+    "WebSinkHunter": "gpt-4o",
+    "CryptoSinkHunter": "gpt-4o",
+    "AuthLogicHunter": "gpt-5.2-codex",
+    "AuthBoundaryMapper": "gpt-4o",
+    # Verification → gpt-5.2-codex
+    "Auditor": "gpt-5.2-codex",
+    "Reproducer": "gpt-5.2-codex",
 }
 
 
@@ -339,7 +381,36 @@ class WaveDispatcher:
         if self.on_agent_start:
             self.on_agent_start(task.task_id, task.agent_type)
 
-        # ALWAYS use Claude CLI (Gas Town approach) - NO API KEYS
+        # Check provider type for Codex CLI routing
+        provider_type = str(self.provider_config.get("provider", "anthropic")).lower()
+        if provider_type in ("codex_cli", "providertype.codex_cli"):
+            if _codex_cli_available():
+                return await self._spawn_subagent_codex(task, foundation_context, started_at)
+            else:
+                error_msg = "Codex CLI not found. Install codex and run `codex login`."
+                print(f"[Dispatcher] ERROR: {error_msg}")
+                self._broadcast(
+                    WSMessageType.AGENT_STATUS,
+                    task.task_id,
+                    {
+                        "agent_id": task.task_id,
+                        "agent_type": task.agent_type,
+                        "status": "failed",
+                        "error": error_msg,
+                    }
+                )
+                if self.on_agent_complete:
+                    self.on_agent_complete(task.task_id, task.agent_type, "failed")
+                return SubagentResult(
+                    task_id=task.task_id,
+                    agent_type=task.agent_type,
+                    status="failed",
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    error=error_msg,
+                )
+
+        # Claude CLI path (Gas Town approach) - default
         use_claude_code_auth = self.provider_config.get("use_claude_code_auth", True)
 
         if use_claude_code_auth:
@@ -923,6 +994,427 @@ Begin your analysis now."""
             except Exception:
                 pass
             # Broadcast failure
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": agent_id,
+                    "agent_type": task.agent_type,
+                    "status": "failed",
+                    "task_id": task.task_id,
+                    "error": error_msg,
+                }
+            )
+            if self.on_agent_complete:
+                self.on_agent_complete(task.task_id, task.agent_type, "failed")
+            return SubagentResult(
+                task_id=task.task_id,
+                agent_type=task.agent_type,
+                status="failed",
+                started_at=started_at,
+                completed_at=completed_at,
+                error=error_msg,
+            )
+
+    # ── Codex CLI sub-agent support ──────────────────────────────────────
+
+    def _setup_codex_runtime(self, agent_id: str) -> dict:
+        """Set up isolated Codex HOME with auth.json + TOML MCP config.
+
+        Returns: {"codex_home": Path, "codex_dir": Path}
+        """
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        codex_home = data_dir / "codex_runtime" / agent_id
+        codex_dir = codex_home / ".codex"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        codex_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy auth.json from global ~/.codex/
+        global_codex = Path(
+            os.environ.get("CODEX_GLOBAL_HOME", str(Path.home() / ".codex"))
+        )
+        src_auth = global_codex / "auth.json"
+        if src_auth.exists():
+            shutil.copy2(src_auth, codex_dir / "auth.json")
+        else:
+            print(f"[Dispatcher] WARNING: Codex auth not found at {src_auth}")
+
+        # Write config.toml with MCP server
+        backend_dir = Path(__file__).resolve().parents[2]
+        mcp_server_path = backend_dir / "quickhack_mcp" / "quickhack_mcp_server.py"
+
+        toml_content = (
+            "[features]\n"
+            "shell_tool=false\n"
+            "web_search_request=false\n"
+            "\n"
+            "[mcp_servers.quickhack]\n"
+            f"command = {json.dumps(sys.executable)}\n"
+            f"args = [{json.dumps('-u')}, {json.dumps(str(mcp_server_path))}]\n"
+            "\n"
+            "[mcp_servers.quickhack.env]\n"
+            f"QUICKHACK_REPO_PATH = {json.dumps(self.repo_path)}\n"
+            f"QUICKHACK_PROJECT_ID = {json.dumps(self.filesystem.project_id)}\n"
+            f"QUICKHACK_AGENT_ID = {json.dumps(agent_id)}\n"
+        )
+        (codex_dir / "config.toml").write_text(toml_content, encoding="utf-8")
+
+        return {"codex_home": codex_home, "codex_dir": codex_dir}
+
+    async def _stream_parse_codex_output(
+        self,
+        process: asyncio.subprocess.Process,
+        agent_id: str,
+        subagent_type: str,
+        parent_agent_id: str,
+        max_stdout: int = 10 * 1024 * 1024,
+    ) -> tuple[str, str, bool, int]:
+        """Stream-parse Codex CLI --json output, feeding behavior tree in real-time.
+
+        Codex JSONL events:
+        - thread.started: session established
+        - item.started + mcp_tool_call: tool invocation
+        - item.completed + agent_message: LLM text response
+        - item.completed + mcp_tool_call: tool result
+        - turn.completed: done
+        - turn.failed / error: failure
+
+        Returns: (result_text, stderr, was_truncated, returncode)
+        """
+        from services.behavior_tree_service import behavior_tree_service
+
+        all_text_parts: list[str] = []
+        result_text = ""
+        total_stdout = 0
+        truncated = False
+        turn_count = 0
+
+        # Read stdout line-by-line (Codex emits one JSON object per line)
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            total_stdout += len(line)
+            if total_stdout > max_stdout:
+                truncated = True
+                break
+
+            line_str = line.decode("utf-8", errors="replace").strip()
+            if not line_str:
+                continue
+
+            try:
+                event = json.loads(line_str)
+            except json.JSONDecodeError:
+                continue
+
+            etype = (event.get("type") or "").strip()
+
+            if etype == "thread.started":
+                # Session tracking — no BT action needed
+                pass
+
+            elif etype == "item.started":
+                item = event.get("item") or {}
+                if item.get("type") == "mcp_tool_call":
+                    server = str(item.get("server") or "")
+                    tool = str(item.get("tool") or "")
+                    tool_name = f"mcp__{server}__{tool}" if server and tool else tool
+                    args = item.get("arguments", {})
+                    behavior_tree_service.add_tool_call(
+                        parent_agent_id, tool_name,
+                        args if isinstance(args, dict) else {}
+                    )
+
+            elif etype == "item.completed":
+                item = event.get("item") or {}
+                item_type = item.get("type")
+
+                if item_type == "agent_message":
+                    text = item.get("text", "")
+                    if text.strip():
+                        behavior_tree_service.add_llm_response(
+                            parent_agent_id, text[:500]
+                        )
+                        all_text_parts.append(text)
+
+                elif item_type == "mcp_tool_call":
+                    result = item.get("result")
+                    is_error = bool(item.get("error"))
+                    result_str = str(result)[:500] if result else ""
+                    behavior_tree_service.add_tool_result(
+                        parent_agent_id,
+                        str(item.get("id") or ""),
+                        result_str,
+                        is_error
+                    )
+
+            elif etype == "turn.completed":
+                turn_count += 1
+                usage = event.get("usage")
+                behavior_tree_service.complete_agent(
+                    parent_agent_id, agent_id,
+                    cost_usd=None,
+                    duration_ms=None,
+                )
+
+            elif etype in ("turn.failed", "error"):
+                err = event.get("error") or {}
+                message = err.get("message") if isinstance(err, dict) else str(err)
+                behavior_tree_service.add_error(
+                    parent_agent_id, str(message)[:200]
+                )
+
+        # Drain stderr
+        stderr_data = b""
+        try:
+            stderr_data = await asyncio.wait_for(
+                process.stderr.read(), timeout=5.0
+            )
+        except Exception:
+            pass
+        stderr = stderr_data.decode("utf-8", errors="replace") if stderr_data else ""
+
+        await process.wait()
+
+        # Assemble result text
+        if not result_text and all_text_parts:
+            result_text = "\n".join(all_text_parts)
+
+        return result_text, stderr, truncated, process.returncode
+
+    async def _spawn_subagent_codex(
+        self,
+        task: DispatchTask,
+        foundation_context: Optional[FoundationContext],
+        started_at: datetime,
+    ) -> SubagentResult:
+        """Spawn sub-agent using Codex CLI (codex exec --json).
+
+        Uses the same specialist skills, foundation context, and wave orchestration
+        as the Claude CLI path but spawns `codex exec` subprocesses instead.
+        """
+        agent_id = f"{task.agent_type}_{task.task_id}"
+
+        try:
+            # Get prompt for this agent type (with foundation context if available)
+            system_prompt = self._get_subagent_prompt(task, foundation_context)
+
+            # Build the user prompt for the task
+            user_prompt = f"""Execute this task:
+
+**Objective:** {task.objective}
+**Scope:** {task.scope}
+**Success Criteria:** {task.success_criteria or 'Complete the objective thoroughly'}
+
+{f'**Constraints:** {task.constraints}' if task.constraints else ''}
+
+IMPORTANT: Output your result directly as text/JSON to stdout. Do NOT try to write files — you do not have a Write tool. Your stdout output will be automatically captured and saved.
+
+Begin your analysis now."""
+
+            # Codex has no --append-system-prompt; concatenate system + user prompt
+            full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
+
+            # Select model from Codex model map
+            default_model = self.provider_config.get("model", "gpt-5.2-codex")
+            agent_model_override = CODEX_AGENT_MODEL_MAP.get(task.agent_type)
+            model_arg = agent_model_override if agent_model_override else default_model
+
+            # Set up isolated Codex HOME with auth + MCP config
+            codex_runtime = self._setup_codex_runtime(agent_id)
+
+            # Build codex exec command
+            cmd = [
+                "codex", "exec",
+                "--json",
+                "--model", model_arg,
+                "--disable", "shell_tool",
+                "--disable", "web_search_request",
+                "--skip-git-repo-check",
+                "--cd", self.repo_path,
+                full_prompt,
+            ]
+
+            # Broadcast sub-agent started
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": agent_id,
+                    "agent_type": task.agent_type,
+                    "status": "running",
+                    "task_id": task.task_id,
+                    "objective": task.objective,
+                }
+            )
+
+            print(f"[Dispatcher] Spawning Codex CLI sub-agent {agent_id}")
+            print(f"[Dispatcher] Codex model: {model_arg}")
+
+            # Log LLM request for observability
+            log_agent_id = self.parent_agent_id or agent_id
+            request_id = observability_service.log_llm_request(
+                agent_id=log_agent_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                tools_available=["mcp__quickhack"],
+                model=model_arg,
+            )
+
+            # Run codex exec as subprocess with isolated HOME
+            start_time = time.time()
+            env = {
+                **os.environ,
+                "HOME": str(codex_runtime["codex_home"]),
+                "CODEX_HOME": str(codex_runtime["codex_dir"]),
+                "NO_COLOR": "1",
+            }
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.repo_path,
+                env=env,
+            )
+            self._register_process(process)
+
+            # Start behavior tree agent node for real-time visualization
+            from services.behavior_tree_service import behavior_tree_service
+            behavior_tree_service.start_agent(
+                log_agent_id, agent_id, task.agent_type, model_arg, task.objective
+            )
+            behavior_tree_service.start_turn(log_agent_id, 1)
+            behavior_tree_service.add_llm_request(
+                log_agent_id, user_prompt[:300], model_arg
+            )
+
+            # Wait for completion with timeout — stream-parse for real-time BT updates
+            try:
+                output, error_output, was_truncated, returncode = await asyncio.wait_for(
+                    self._stream_parse_codex_output(
+                        process, agent_id, task.agent_type, log_agent_id
+                    ),
+                    timeout=task.time_budget,
+                )
+
+                if was_truncated:
+                    print(f"[Dispatcher] {agent_id} output truncated")
+
+                if returncode != 0:
+                    error_message = f"Codex CLI exited with code {returncode}: {error_output}"
+                    print(f"[Dispatcher] {agent_id} failed: {error_message}")
+                    behavior_tree_service.add_error(log_agent_id, error_message[:200])
+                elif not output or not output.strip():
+                    error_message = "Codex CLI produced no output"
+                    print(f"[Dispatcher] {agent_id} produced no output")
+                    behavior_tree_service.add_error(log_agent_id, error_message)
+                else:
+                    error_message = None
+                    print(f"[Dispatcher] {agent_id} completed successfully")
+                    if error_output and error_output.strip():
+                        print(f"[Dispatcher] {agent_id} stderr: {error_output[:200]}...")
+
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                error_message = f"Task exceeded time budget of {task.time_budget}s"
+                output = ""
+                print(f"[Dispatcher] {agent_id} timed out")
+                behavior_tree_service.add_error(log_agent_id, error_message)
+            finally:
+                self._unregister_process(process)
+
+            completed_at = datetime.utcnow()
+            status = "completed" if not error_message else "failed"
+            duration = time.time() - start_time
+
+            # Log LLM response for observability
+            observability_service.log_llm_response(
+                agent_id=log_agent_id,
+                request_id=request_id,
+                content=output[:1000] + "..." if len(output) > 1000 else output,
+                tool_calls=[],
+                duration_ms=int(duration * 1000),
+                model=model_arg,
+                subagent=task.agent_type,
+            )
+
+            # Check if output contains questions
+            questions = self._detect_questions_in_output(output) if output else []
+            if questions and not error_message:
+                for q in questions:
+                    print(f"[Dispatcher] {agent_id} asked: {q[:150]}...")
+                self._broadcast(
+                    WSMessageType.AGENT_STATUS,
+                    agent_id,
+                    {
+                        "agent_id": agent_id,
+                        "agent_type": task.agent_type,
+                        "status": "has_questions",
+                        "questions": questions,
+                        "task_id": task.task_id,
+                    }
+                )
+
+            # Write output to deliverable path
+            if output and output.strip():
+                try:
+                    self.filesystem.write_file(task.deliverable, output)
+                    print(f"[Dispatcher] Wrote {len(output)} bytes to {task.deliverable}")
+                except Exception as e:
+                    error_message = f"Failed to write deliverable: {e}"
+                    status = "failed"
+                    print(f"[Dispatcher] {error_message}")
+
+            # Broadcast sub-agent completed
+            self._broadcast(
+                WSMessageType.AGENT_STATUS,
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": agent_id,
+                    "agent_type": task.agent_type,
+                    "status": status,
+                    "task_id": task.task_id,
+                    "findings_count": 0,
+                    "error": error_message,
+                }
+            )
+
+            if self.on_agent_complete:
+                self.on_agent_complete(task.task_id, task.agent_type, status)
+
+            return SubagentResult(
+                task_id=task.task_id,
+                agent_type=task.agent_type,
+                status=status,
+                output_path=task.deliverable,
+                output=output,
+                started_at=started_at,
+                completed_at=completed_at,
+                error=error_message,
+                tokens_used=0,
+            )
+
+        except Exception as e:
+            completed_at = datetime.utcnow()
+            error_msg = str(e)
+            print(f"[Dispatcher] {agent_id} exception: {error_msg}")
+            try:
+                from services.behavior_tree_service import behavior_tree_service
+                behavior_tree_service.add_error(
+                    self.parent_agent_id or agent_id,
+                    f"Exception: {error_msg[:180]}"
+                )
+            except Exception:
+                pass
             self._broadcast(
                 WSMessageType.AGENT_STATUS,
                 agent_id,

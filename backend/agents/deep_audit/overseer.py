@@ -188,26 +188,39 @@ class Overseer(BaseAgent):
             repo_path=repo_path,
         )
 
-        # Initialize dispatcher with Claude Code auth mode (Gas Town approach)
-        # ALWAYS use Claude CLI with subscription auth - NO API KEYS
-        # Default to Opus for quality, but allow user override via provider_config
-        default_model = "claude-opus-4-5-20251101"
+        # Initialize dispatcher with provider-aware config
+        # Detect provider type: Codex CLI or Claude CLI (default)
+        provider_type = (
+            request.provider_config.provider
+            if request.provider_config
+            else ProviderType.ANTHROPIC
+        )
         user_model = (
             request.provider_config.model
             if request.provider_config and request.provider_config.model
             else None
         )
-        # Use user's model if provided, otherwise default to Opus
-        model_to_use = user_model or default_model
 
-        provider_config = {
-            "provider": request.provider_config.provider if request.provider_config else ProviderType.ANTHROPIC,
-            "model": model_to_use,
-            "use_claude_code_auth": True,  # ALWAYS use Claude CLI subscription auth
-        }
-        self.provider_config = provider_config  # Store for later use
+        if str(provider_type).lower() in ("codex_cli", "providertype.codex_cli"):
+            # Codex CLI mode — uses OpenAI models via codex exec
+            codex_default_model = "gpt-5.2-codex"
+            model_to_use = user_model or codex_default_model
+            provider_config = {
+                "provider": "codex_cli",
+                "model": model_to_use,
+                "use_claude_code_auth": False,
+            }
+        else:
+            # Claude CLI mode (default) — subscription auth, no API keys
+            default_model = "claude-opus-4-5-20251101"
+            model_to_use = user_model or default_model
+            provider_config = {
+                "provider": request.provider_config.provider if request.provider_config else ProviderType.ANTHROPIC,
+                "model": model_to_use,
+                "use_claude_code_auth": True,
+            }
 
-        # Model for Claude CLI calls
+        self.provider_config = provider_config
         self.model = model_to_use
 
         self.dispatcher = WaveDispatcher(

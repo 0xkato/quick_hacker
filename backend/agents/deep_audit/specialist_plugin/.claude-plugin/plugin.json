@@ -1,5 +1,5 @@
 {
-  "name": "deep-audit-specialists",
-  "description": "64 vulnerability specialist skills for the Deep Audit security pipeline",
-  "version": "1.0.0"
+  "name": "deep-audit-specialist",
+  "version": "1.0.0",
+  "description": "Security audit specialist skills for vulnerability verification"
 }

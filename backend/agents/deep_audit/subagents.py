@@ -482,6 +482,10 @@ this invariant ACTUALLY holds everywhere in the codebase. Find violations.
    - Edge cases (empty input, null, unicode, very long strings)
 5. **Check completeness**: Are there NEW code paths added after the invariant
    was established that don't have the enforcement?
+6. **Verify reachability of violations**: For each violation found, confirm it is on a
+   code path reachable from an attacker-controlled entry point. A violation in dead code,
+   test-only code, or behind disabled feature flags is NOT exploitable. Also check if other
+   guards along the path prevent exploitation even without the expected invariant enforcement.
 
 ## Tools Available
 - Read: Read source code files (USE EXTENSIVELY)
@@ -501,6 +505,9 @@ When done, output ONLY JSON:
       "description": "<how the invariant is violated here>",
       "severity": "critical|high|medium|low",
       "evidence": "<code snippet or observation>",
+      "reachable": true,
+      "reachability_path": "<entry_point → ... → violation site>",
+      "guards_along_path": "<other checks that might prevent exploitation>",
       "exploitability": "<how an attacker could exploit this violation>"
     }}
   ],
@@ -663,6 +670,15 @@ IMPORTANT: Adapt your hunting to the codebase language(s). Check file extensions
 2. Search for patterns relevant to those languages
 3. For C/C++: Focus on memory safety - this is where real vulnerabilities live
 4. Read files with hits and get exact line numbers
+5. **Read the FULL FUNCTION** containing each hit — not just the matched line
+6. **Note any guards**: If the function has bounds checks, validation, or sanitization near the sink,
+   record them in `guards_present`. This saves downstream verification time.
+
+## Signal Quality
+Higher-quality signals lead to fewer false positives downstream. For each signal:
+- Include the **full function body** in code_snippet (not just the dangerous line)
+- Note any **guards/checks** you see near the sink (even if you're unsure they're sufficient)
+- Check if the function is **test-only** or dead code — skip these
 
 ## Output
 When done, output ONLY JSON with actual findings from THIS repository (no other text):
@@ -676,8 +692,9 @@ When done, output ONLY JSON with actual findings from THIS repository (no other 
       "file_path": "<actual/path/in/repo>",
       "line_start": 0,
       "line_end": 0,
-      "code_snippet": "<actual code from the file>",
+      "code_snippet": "<actual code from the file — include full function if possible>",
       "why_suspicious": "<specific reason based on your analysis>",
+      "guards_present": "<any bounds checks, validation, or sanitization near the sink — or 'none found'>",
       "entry_point_trace": ["<actual_function_calls>"],
       "next_steps": ["<what to verify>"]
     }
@@ -749,8 +766,15 @@ Memory corruption vulnerabilities in C/C++/Rust unsafe code. These are often the
 
 ## Tools Available
 - Glob: Find *.c, *.cpp, *.h, *.hpp, *.rs files
-- Read: Read source code
+- Read: Read source code (READ FULL FUNCTIONS, not just matched lines)
 - Grep: Search for dangerous function calls
+
+## Signal Quality
+For each potential sink, read the FULL FUNCTION to check for nearby guards:
+- Bounds checks before buffer operations → note in guards_present
+- NULL checks before pointer dereference → note in guards_present
+- Size validation before allocation → note in guards_present
+- Skip findings in test files or dead code
 
 ## Output
 Output ONLY JSON with actual findings from THIS repository:
@@ -763,8 +787,9 @@ Output ONLY JSON with actual findings from THIS repository:
       "severity": "critical|high|medium|low",
       "file_path": "<actual/path/from/repo>",
       "line_start": 0,
-      "code_snippet": "<actual code you found>",
-      "why_suspicious": "<your specific analysis>"
+      "code_snippet": "<actual code — include full function if possible>",
+      "why_suspicious": "<your specific analysis>",
+      "guards_present": "<any checks near the sink — or 'none found'>"
     }
   ]
 }
@@ -823,8 +848,15 @@ Code injection vulnerabilities: SQL, command, template, expression injection.
 
 ## Tools Available
 - Glob: Find *.py, *.js, *.java, *.go files
-- Read: Read source code
+- Read: Read source code (READ FULL FUNCTIONS, not just matched lines)
 - Grep: Search for dangerous patterns
+
+## Signal Quality
+For each potential sink, read the FULL FUNCTION to check for nearby guards:
+- Parameterized queries / prepared statements → note in guards_present (likely NOT vulnerable)
+- Input allowlist/validation before the query → note in guards_present
+- Escaping/encoding of user input → note in guards_present
+- Skip findings in test files or dead code
 
 ## Output
 Output ONLY JSON with actual findings from THIS repository:
@@ -837,8 +869,9 @@ Output ONLY JSON with actual findings from THIS repository:
       "severity": "critical|high|medium|low",
       "file_path": "<actual/path/from/repo>",
       "line_start": 0,
-      "code_snippet": "<actual code you found>",
-      "why_suspicious": "<your specific analysis>"
+      "code_snippet": "<actual code — include full function if possible>",
+      "why_suspicious": "<your specific analysis>",
+      "guards_present": "<any sanitization/parameterization near the sink — or 'none found'>"
     }
   ]
 }
@@ -898,8 +931,15 @@ Web-specific vulnerabilities: SSRF, XSS, open redirect, request smuggling.
 
 ## Tools Available
 - Glob: Find web handlers (routes.py, controllers/, handlers/)
-- Read: Read source code
+- Read: Read source code (READ FULL FUNCTIONS, not just matched lines)
 - Grep: Search for HTTP patterns
+
+## Signal Quality
+For each potential sink, read the FULL FUNCTION to check for nearby guards:
+- URL allowlist/validation before HTTP requests → note in guards_present
+- Output encoding/escaping before HTML rendering → note in guards_present
+- CSRF tokens on state-changing endpoints → note in guards_present
+- Skip findings in test files or dead code
 
 ## Output
 Output ONLY JSON with actual findings from THIS repository:
@@ -912,8 +952,9 @@ Output ONLY JSON with actual findings from THIS repository:
       "severity": "critical|high|medium|low",
       "file_path": "<actual/path/from/repo>",
       "line_start": 0,
-      "code_snippet": "<actual code you found>",
-      "why_suspicious": "<your specific analysis>"
+      "code_snippet": "<actual code — include full function if possible>",
+      "why_suspicious": "<your specific analysis>",
+      "guards_present": "<any validation/encoding near the sink — or 'none found'>"
     }
   ]
 }
@@ -978,8 +1019,15 @@ Cryptographic misuse, weak randomness, and secrets exposure.
 
 ## Tools Available
 - Glob: Find all source files
-- Read: Read source code
+- Read: Read source code (READ FULL FUNCTIONS for context)
 - Grep: Search for crypto patterns
+
+## Signal Quality
+For each potential finding, read surrounding code for context:
+- Is the weak crypto in test/dev code only? → skip or lower severity
+- Is there a stronger crypto path that supersedes this one? → note in guards_present
+- Is the hardcoded secret a placeholder with runtime override? → note in guards_present
+- Is the insecure config behind a feature flag or debug mode? → note in guards_present
 
 ## Output
 Output ONLY JSON with actual findings from THIS repository:
@@ -992,8 +1040,9 @@ Output ONLY JSON with actual findings from THIS repository:
       "severity": "critical|high|medium|low",
       "file_path": "<actual/path/from/repo>",
       "line_start": 0,
-      "code_snippet": "<actual code you found>",
-      "why_suspicious": "<your specific analysis>"
+      "code_snippet": "<actual code — include surrounding context>",
+      "why_suspicious": "<your specific analysis>",
+      "guards_present": "<any mitigating factors found — or 'none found'>"
     }
   ]
 }
@@ -1256,8 +1305,17 @@ Read the signal data and pick the most appropriate specialist(s) to verify it.
 1. Analyze the signal to understand the vulnerability type
 2. Pick the PRIMARY specialist best suited to verify this type
 3. Optionally pick a SECONDARY specialist for complex cases
-4. Provide CODE CONTEXT the specialist needs (relevant code snippets, related functions)
+4. Provide CODE CONTEXT the specialist needs — this is CRITICAL for accurate verdicts:
+   a. Read the FULL FUNCTION containing the flagged code (not just the snippet)
+   b. Grep for who calls this function — find caller functions
+   c. Read caller functions to identify guards, validation, bounds checks, sanitization
+   d. Include all of this in context_for_specialist so the specialist has the complete picture
    - DO NOT include threat model - that's for Triager only
+
+## Why Context Matters
+Specialists produce false positives when they only see the sink code without seeing guards
+that prevent exploitation. By providing the full function, callers, and any guards you find,
+you enable the specialist to make an accurate verdict.
 
 ## Output
 When done, output ONLY JSON based on actual signal data from your input:
@@ -1301,39 +1359,65 @@ If Foundation Context is provided above, use it to:
 - Exclude test/vendor/generated code from analysis
 - Understand attacker capabilities and trust boundaries
 
-## CRITICAL: You MUST Use Tools to Verify
+## CRITICAL: You MUST Use Tools to Trace the Full Code Path
 
-**DO NOT rely on the signal description alone.** You MUST read the actual code.
+**DO NOT rely on the signal description alone.** You MUST read the actual code AND trace the full path.
 
 **Required verification workflow:**
 1. Invoke your skill to load detection methodology
-2. `Read` the file at the signal location - examine the actual vulnerable code
-3. `Grep` for function/variable usage - find who calls this code
-4. `Read` caller files - trace the actual data flow
-5. `Grep` for sanitization patterns - search for validation/encoding
+2. `Read` the FULL FUNCTION containing the flagged code — not just the flagged line
+3. `Grep` for who calls this function — trace backward toward entry points
+4. `Read` each caller function completely — look for guards, checks, validation
+5. Repeat steps 3-4 until you reach an attacker-reachable entry point or hit dead code
+6. `Grep` for sanitization/validation of the tainted variable across the entire path
+7. Only AFTER completing the path trace: form your verdict
 
 **Your verdict MUST be based on:**
-- Actual code you read (not assumed)
-- Real file paths and line numbers
-- Evidence from your tool usage
+- The complete call chain you traced (not a single code point)
+- Every guard and check you found along the path
+- Actual code you read with real file paths and line numbers
 - The Verdict Rules from your loaded skill
 
 If you cannot verify with tools, verdict MUST be "needs_more_info".
 
+## MANDATORY: Path Analysis Before Any Verdict
+
+A "vulnerable" verdict requires ALL of these:
+1. **PATH**: Document the complete call chain from an attacker-reachable entry point to the sink.
+   Format: `entry_func():file.ext:line → caller():file.ext:line → sink():file.ext:line`
+2. **GUARDS**: List every validation, bounds check, sanitization, or access control found along the path.
+3. **GUARD EVALUATION**: For each guard, explain specifically why it does NOT prevent exploitation.
+   If ANY guard along the path effectively prevents the vulnerability, verdict MUST be "not_vulnerable".
+4. **ATTACKER INPUT**: Show how attacker-controlled data flows through each hop to influence the sink.
+
+If you cannot establish a reachable path from an entry point → "not_vulnerable" or "needs_more_info".
+If you find a guard that prevents exploitation → "not_vulnerable".
+
+## ANTI-PATTERN: Do Not Do Point Analysis
+
+Finding a dangerous pattern at a single code location is NOT a vulnerability finding.
+Common false positives from point analysis:
+- Buffer operation that has a bounds check earlier in the same function
+- SQL query using parameterized binding (not string concatenation)
+- Command execution with hardcoded arguments (no attacker input)
+- Memory operation in dead/unreachable code
+- Function that is only called from test code
+- Input that is validated/sanitized by a caller before reaching the sink
+
 ## Task
-Verify whether the assigned signal is a real vulnerability.
+Verify whether the assigned signal is a real vulnerability by tracing the full code path.
 
 ## Signal to Analyze
 {signal_context}
 
 ## Tools Available
 - Skill: Load your detection methodology (REQUIRED first step)
-- Read: Read source code files (REQUIRED for verification)
-- Grep: Search for related code patterns
+- Read: Read source code files (REQUIRED — read full functions, not just flagged lines)
+- Grep: Search for callers, guards, sanitization patterns
 - Glob: Find related files
 
 ## Output
-When done, output ONLY JSON with actual data from your analysis:
+When done, output ONLY JSON with actual data from your path analysis:
 ```json
 {{
   "signal_id": "{signal_id}",
@@ -1341,7 +1425,7 @@ When done, output ONLY JSON with actual data from your analysis:
   "skill_invoked": null,
   "verdict": "vulnerable|not_vulnerable|needs_more_info",
   "confidence": 0,
-  "reasoning": "<your_detailed_analysis>",
+  "reasoning": "PATH: entry_func():file:line → ... → sink():file:line\\nGUARDS: [each check found along path with file:line]\\nGUARD_BYPASS: [why each guard is insufficient — or 'effective guard, not_vulnerable']\\nATTACKER_INPUT: [how attacker data flows through path]\\nCONCLUSION: [verdict with evidence]",
   "evidence": [
     {{"file": "<actual_file_path>", "line": 0, "observation": "<your_specific_observation>"}}
   ],
@@ -1353,8 +1437,8 @@ When done, output ONLY JSON with actual data from your analysis:
 
 IMPORTANT: Set "skill_invoked" to the exact skill name you loaded (e.g. "{skill_name}"). Leave as null if skill loading failed.
 
-IMPORTANT: All file paths, line numbers, and observations must come from your actual code analysis.
-Be rigorous. False positives waste time. False negatives miss real vulnerabilities.
+IMPORTANT: The "reasoning" field MUST follow the PATH/GUARDS/GUARD_BYPASS/ATTACKER_INPUT/CONCLUSION structure.
+A "vulnerable" verdict without a documented path and guard analysis will be treated as invalid.
 """
 
 
@@ -1376,14 +1460,28 @@ Resolve disagreements between specialists when they have conflicting verdicts.
 {specialist_verdicts}
 
 ## Your Role
-1. Review both specialists' reasoning
-2. Examine the evidence each provided
-3. Do your own independent analysis if needed
-4. Make a final determination
+1. Review both specialists' reasoning — check if they traced the full code path
+2. Examine the evidence each provided — verify they checked for guards/validation along the path
+3. Do your own independent path analysis:
+   a. `Read` the full function containing the flagged code
+   b. `Grep` for callers — trace backward to entry points
+   c. `Read` caller functions — look for guards, bounds checks, sanitization
+   d. Check if the code is reachable from an attacker-controlled entry point
+4. Make a final determination based on complete path evidence
+
+## Path Verification Requirement
+Before ruling "vulnerable", you MUST verify:
+- A reachable path from entry point to sink exists
+- All guards/checks along the path have been identified
+- Each guard has been shown insufficient to prevent exploitation
+- If either specialist failed to trace the path, do it yourself
+
+A specialist who only found a dangerous pattern at one code point (without tracing the path
+or checking for guards) has NOT proven a vulnerability. Favor the specialist who did path analysis.
 
 ## Tools Available
-- Read: Read source code and verdict files
-- Grep: Search for additional context
+- Read: Read source code and verdict files (READ FULL FUNCTIONS, not just flagged lines)
+- Grep: Search for callers, guards, sanitization patterns
 - Glob: Find related files
 
 ## Output
@@ -1394,13 +1492,13 @@ When done, output ONLY the following JSON (no other text):
   "arbiter_decision": "vulnerable|not_vulnerable",
   "winning_verdict": "specialist_a|specialist_b|independent",
   "confidence": 90,
-  "reasoning": "Why this decision was made",
+  "reasoning": "PATH: [call chain] GUARDS: [checks found] DECISION: [why this verdict wins]",
   "additional_evidence": ["Any new evidence discovered"],
   "dissent_notes": "Why the losing verdict was incorrect"
 }}
 ```
 
-Your decision is final. Be thorough and impartial.
+Your decision is final. Be thorough and impartial. Favor evidence from path analysis over point analysis.
 """
 
 
@@ -1422,16 +1520,23 @@ Challenge a specialist who dismissed a high-severity signal too quickly.
 {dismissal_verdict}
 
 ## Your Mission
-Push back on the dismissal. Try to prove the specialist wrong.
+Push back on the dismissal. Try to prove the specialist wrong — but with EVIDENCE, not speculation.
 
-1. What if there's a path the specialist missed?
-2. What if the sanitization is bypassable?
-3. What if there's an edge case that makes this exploitable?
-4. What if the security control has a weakness?
+1. What if there's a path the specialist missed? → **Read the code and find the actual path.**
+2. What if the sanitization is bypassable? → **Read the sanitization code and find a concrete bypass.**
+3. What if there's an edge case that makes this exploitable? → **Show the specific edge case with code evidence.**
+4. What if the security control has a weakness? → **Read the control and explain the specific weakness.**
+
+## Path-Based Challenges Only
+Your challenges MUST be backed by code evidence you actually read:
+- If you claim a missed path exists, show the actual call chain (entry_point → ... → sink)
+- If you claim a guard is bypassable, cite the specific guard code and explain the bypass
+- If you claim reachability, trace it from an actual entry point
+- Speculative challenges without code evidence will be dismissed by the Arbiter
 
 ## Tools Available
-- Read: Read source code files
-- Grep: Search for bypass patterns
+- Read: Read source code files (READ FULL FUNCTIONS to find missed paths and guard weaknesses)
+- Grep: Search for alternative call paths, bypass patterns, edge cases
 - Glob: Find related files
 
 ## Output
@@ -1504,28 +1609,44 @@ If Foundation Context is provided above, use it to:
 - Understand attacker capabilities and trust boundaries
 
 ## Task
-Make final classification of signals based on threat model.
+Make final classification of signals based on threat model and path analysis.
 
 ## Your Role
 You are the FINAL decision maker. You classify signals as:
-- SECURITY_VULNERABILITY: Real vuln, attacker in threat model can exploit
+- SECURITY_VULNERABILITY: Real vuln, attacker in threat model can exploit via a proven reachable path
 - HARDENING: Real issue but attacker not in scope (nice-to-fix)
 - BY_DESIGN: Intentional behavior, not a vulnerability
-- DISMISSED: Not a real vulnerability
+- DISMISSED: Not a real vulnerability (includes: unreachable code, guarded paths, test-only code)
 
 ## Handling Specialist Input
 
 You will receive specialist analysis in the task context. Handle each case:
 
-1. **Specialist says "vulnerable" with high confidence** → Strong evidence for SECURITY_VULNERABILITY
+1. **Specialist says "vulnerable" with high confidence** → Verify their PATH and GUARDS analysis is complete.
+   If the specialist documented a reachable path with evaluated guards → Strong evidence for SECURITY_VULNERABILITY.
+   If the specialist only found a dangerous pattern without tracing the path → Downgrade confidence or DISMISS.
 2. **Specialist says "not_vulnerable"** → Consider their reasoning, but verify against threat model
-3. **Specialist encountered error/timeout** → YOU must analyze the signal directly using threat model
-4. **No specialist input** → Analyze independently using threat model
+3. **Specialist encountered error/timeout** → YOU must analyze the signal directly (see below)
+4. **No specialist input** → Analyze independently (see below)
+
+## Path Verification (MANDATORY for all classifications)
+
+Before classifying ANY signal as SECURITY_VULNERABILITY, verify:
+1. **Reachable path exists**: There is a documented call chain from an attacker-reachable entry point to the sink.
+   If the specialist provided PATH analysis, verify it looks complete.
+   If not provided, you MUST Read the code and trace the path yourself.
+2. **Guards are insufficient**: All validation, sanitization, bounds checks, and access controls along the path
+   have been identified and shown to not prevent exploitation.
+   A signal behind an effective guard is DISMISSED, not a vulnerability.
+3. **Not dead code**: The code is actually reachable in production (not test-only, commented-out, or behind
+   disabled feature flags).
 
 When specialist input is missing, you MUST:
-- Read the code at the signal location yourself
+- Read the FULL FUNCTION at the signal location (not just the flagged line)
+- Grep for callers to establish whether the code is reachable
+- Check for guards/validation in the calling functions
 - Evaluate based on threat model (is attacker in scope?)
-- Make your own determination
+- Make your own determination based on path analysis
 
 ## Threat Model Considerations
 - Who are the attackers? (unauthenticated, authenticated user, admin, etc.)
@@ -1581,12 +1702,14 @@ Start your response with {{ and end with }}. Nothing else.
   "title": "Clear vulnerability title",
   "description": "What the vulnerability is and why it matters",
   "recommendation": "How to fix it",
-  "reasoning": "Why you classified it this way",
+  "reasoning": "PATH: [call chain if verified] GUARDS: [checks found] CLASSIFICATION_BASIS: [why this classification]",
   "specialist_input": "available|error|missing",
+  "path_verified": true,
   "independent_analysis": true
 }}
 
 Your classification is FINAL. Be thorough but decisive.
+A SECURITY_VULNERABILITY without a verified reachable path and evaluated guards is a false positive.
 """
 
 
@@ -1603,21 +1726,30 @@ Verify the signal in case file {case_file_path}.
 
 ## Steps
 1. Read the case file to understand the signal
-2. Read the source code at the indicated location
-3. Trace data flow from source to sink
-4. Check for sanitization/validation controls
-5. Assess exploitability
+2. Read the FULL FUNCTION at the indicated location — not just the flagged line
+3. Grep for who calls this function — trace backward toward entry points
+4. Read each caller function completely — look for guards, checks, validation, sanitization
+5. Repeat steps 3-4 until you reach an attacker-reachable entry point or determine the code is unreachable
+6. Document all guards/checks found along the entire path
+7. Assess exploitability only AFTER completing the full path trace
+
+## Path Analysis Requirement
+Do NOT conclude "vulnerable" based on a single code point. You MUST:
+- Trace the complete call chain from entry point to sink
+- Identify every guard, check, and validation along the path
+- Explain why each guard is insufficient (or conclude "not_vulnerable" if a guard is effective)
+- Show how attacker input flows through the path
 
 ## Tools Available
-- Read: Read case file and source code
-- Grep: Search for related patterns
+- Read: Read case file and source code (READ FULL FUNCTIONS)
+- Grep: Search for callers, guards, sanitization patterns
 - Glob: Find related files
 
 ## Decision
-After analysis, output your verdict as JSON.
+After FULL PATH analysis, output your verdict as JSON.
 
 ## Output
-When done, output ONLY JSON with actual data from your analysis:
+When done, output ONLY JSON with actual data from your path analysis:
 ```json
 {{
   "signal_id": "{signal_id}",
@@ -1628,12 +1760,12 @@ When done, output ONLY JSON with actual data from your analysis:
   "description": "<your_detailed_description>",
   "proof_of_concept": "<how_to_exploit_if_vulnerable>",
   "recommendation": "<specific_fix_recommendation>",
-  "reasoning": "<your_analysis_reasoning>"
+  "reasoning": "PATH: [call chain] GUARDS: [checks found along path] GUARD_BYPASS: [why insufficient] CONCLUSION: [verdict]"
 }}
 ```
 
 IMPORTANT: All values must come from your actual analysis. Do NOT use example data.
-ONLY mark as vulnerable if you are confident the vulnerability is real and exploitable.
+ONLY mark as vulnerable if you have traced a reachable path and shown all guards are insufficient.
 
 Case file location: {case_file_path}
 """

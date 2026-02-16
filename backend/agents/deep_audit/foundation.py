@@ -98,6 +98,7 @@ class FoundationContext:
     repo_profile: RepoProfile
     scope_map: ScopeMap
     threat_model: ThreatModel
+    security_map_summary: str = ""  # Phase 2 Security Map (invariants, trust boundaries, data flows)
 
     def _matches_any_pattern(self, path: str, patterns: list[str]) -> bool:
         """Check if path matches any of the given patterns (glob or prefix)."""
@@ -191,6 +192,12 @@ class FoundationContext:
             for assumption in self.threat_model.assumptions:
                 lines.append(f"  - {assumption}")
 
+        # Security Map (from Phase 2)
+        if self.security_map_summary:
+            lines.append("")
+            lines.append("## Security Map")
+            lines.append(self.security_map_summary)
+
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
@@ -227,6 +234,7 @@ class FoundationContext:
                 "out_of_scope_reasons": self.threat_model.out_of_scope_reasons,
                 "assumptions": self.threat_model.assumptions,
             },
+            "security_map_summary": self.security_map_summary,
         }
 
     @classmethod
@@ -302,6 +310,7 @@ class FoundationContext:
             repo_profile=repo_profile,
             scope_map=scope_map,
             threat_model=threat_model,
+            security_map_summary=data.get("security_map_summary", ""),
         )
 
 

@@ -40,26 +40,48 @@ def extract_json_from_output(content: str) -> Optional[dict]:
     except json.JSONDecodeError:
         pass
 
-    # Strategy 2: Find ```json code blocks (most common Claude output format)
-    json_block_match = _JSON_CODE_BLOCK_PATTERN.search(content)
-    if json_block_match:
-        try:
-            return json.loads(json_block_match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    # Strategy 3: Try generic code blocks (Claude sometimes omits language)
-    generic_block_match = _JSON_GENERIC_BLOCK_PATTERN.search(content)
-    if generic_block_match:
-        block_content = generic_block_match.group(1).strip()
-        if block_content.startswith('{') or block_content.startswith('['):
+    # Strategy 2: Find ALL ```json code blocks and prefer ones with pipeline-expected keys
+    # Using findall instead of search ensures we don't miss the result block
+    # when the first block is commentary/examples
+    EXPECTED_KEYS = {"verdict", "classification", "signal_id", "signals", "findings", "sinks", "data_flows"}
+    json_blocks = _JSON_CODE_BLOCK_PATTERN.findall(content)
+    if json_blocks:
+        best = None
+        for block in json_blocks:
             try:
-                result = json.loads(block_content)
-                if isinstance(result, list):
-                    return {"items": result}
-                return result
+                parsed = json.loads(block.strip())
+                if isinstance(parsed, dict):
+                    if any(k in parsed for k in EXPECTED_KEYS):
+                        return parsed  # Immediately return if it has expected keys
+                    if best is None:
+                        best = parsed
+                elif isinstance(parsed, list) and best is None:
+                    best = {"items": parsed}
             except json.JSONDecodeError:
-                pass
+                continue
+        if best:
+            return best
+
+    # Strategy 3: Find ALL generic code blocks and prefer pipeline-relevant ones
+    generic_blocks = _JSON_GENERIC_BLOCK_PATTERN.findall(content)
+    if generic_blocks:
+        best = None
+        for block in generic_blocks:
+            block_content = block.strip()
+            if block_content.startswith('{') or block_content.startswith('['):
+                try:
+                    parsed = json.loads(block_content)
+                    if isinstance(parsed, dict):
+                        if any(k in parsed for k in EXPECTED_KEYS):
+                            return parsed
+                        if best is None:
+                            best = parsed
+                    elif isinstance(parsed, list) and best is None:
+                        best = {"items": parsed}
+                except json.JSONDecodeError:
+                    continue
+        if best:
+            return best
 
     # Strategy 4: Find JSON object boundaries
     # Use a more robust approach - find matching braces

@@ -65,13 +65,14 @@ from agents.deep_audit.specialists.registry import (
     get_specialists_for_signal,
 )
 from agents.deep_audit.foundation import SignalCategory
+from agents.deep_audit.foundation import FoundationContext, SuspiciousSignal, SignalSeverity
 from agents.deep_audit.subagents import get_specialist_prompt
 from agents.deep_audit.calibration import (
     CalibrationStore,
     ConfidenceCalibrator,
     VerdictRecord,
 )
-from agents.deep_audit.utils.json_extractor import extract_json_from_output
+from agents.deep_audit.utils.json_extractor import extract_json_from_output, extract_all_json_objects
 from agents.deep_audit.tools.dispatch import DISPATCH_WAVE_TOOL, DISPATCH_AGENT_TOOL, DISPATCH_FOUNDATION_PHASE_TOOL
 from agents.deep_audit.tools.memories import (
     READ_MEMORIES_TOOL,
@@ -234,6 +235,9 @@ class Overseer(BaseAgent):
         calibration_path = str(self.filesystem.memory_root / "calibration")
         self.calibration_store = CalibrationStore(calibration_path)
         self.calibrator = ConfidenceCalibrator(self.calibration_store)
+
+        # Foundation Context from Phase 1 (stored on instance to avoid ContextVar issues)
+        self.foundation_ctx: Optional[FoundationContext] = None
 
         # Security Map from understanding phase (v2)
         self.security_map: Optional[dict] = None
@@ -660,7 +664,9 @@ Continue the investigation. What should the next wave focus on?"""
             foundation_wave_result, foundation_ctx = await self.dispatcher.dispatch_foundation_phase()
             print(f"[Overseer] Foundation Phase complete: all_succeeded={foundation_wave_result.all_succeeded}")
 
-            # Store Foundation Context in dispatch_tools for other code that still uses it
+            # Store Foundation Context on instance for direct access (avoids ContextVar issues)
+            self.foundation_ctx = foundation_ctx
+            # Also store in dispatch_tools for backward compatibility
             if foundation_ctx:
                 dispatch_tools.set_foundation_context(foundation_ctx)
                 print(f"[Overseer] Foundation Context built: languages={foundation_ctx.repo_profile.languages}")
@@ -685,6 +691,9 @@ Continue the investigation. What should the next wave focus on?"""
                 for r in foundation_wave_result.results:
                     if r.status != "completed":
                         print(f"[Overseer] Foundation agent {r.agent_type} failed: {r.error}")
+
+            # Save state checkpoint after Phase 1
+            await self._save_campaign_state()
 
             # Check time budget
             if self.campaign_state.time_remaining() <= 0:
@@ -737,6 +746,10 @@ Continue the investigation. What should the next wave focus on?"""
                     n_flows = len(security_map.get("data_flows", {}).get("flows", security_map.get("data_flows", {}).get("data_flows", [])))
                     print(f"[Overseer] Security Map: {n_invariants} invariants, {n_boundaries} boundaries, {n_flows} flows")
                     await self.emit_log(f"Understanding Phase complete: {n_invariants} invariants, {n_boundaries} boundaries, {n_flows} data flows")
+
+                    # Inject Security Map summary into Foundation Context for all downstream agents
+                    if self.foundation_ctx:
+                        self.foundation_ctx.security_map_summary = json.dumps(security_map, indent=2)
                 else:
                     print("[Overseer] WARNING: Security Map not available")
                     await self.emit_log("Understanding Phase complete (no Security Map built)")
@@ -744,6 +757,9 @@ Continue the investigation. What should the next wave focus on?"""
                 # Check for cancellation
                 if self._cancelled:
                     return
+
+                # Save state checkpoint after Phase 2
+                await self._save_campaign_state()
 
                 # Check time budget
                 if self.campaign_state.time_remaining() <= 0:
@@ -831,6 +847,9 @@ Continue the investigation. What should the next wave focus on?"""
             # Parse sub-agent outputs and extract findings
             await self._collect_findings_from_signals()
 
+            # Save state checkpoint after Phase 3 (Hunting)
+            await self._save_campaign_state()
+
             # Check for cancellation
             if self._cancelled:
                 return
@@ -869,6 +888,12 @@ Continue the investigation. What should the next wave focus on?"""
                 ("Cryptographic weaknesses, insecure randomness, hardcoded secrets", "crypto"),
                 ("Race conditions, TOCTOU, concurrency bugs", "race"),
                 ("Input validation, XSS, template injection", "input"),
+                ("IDOR, broken access control, insecure direct object reference", "idor"),
+                ("Mass assignment, parameter pollution, unvalidated redirect", "api_misuse"),
+                ("State invariant breaks, business logic flaws, workflow bypass", "logic"),
+                ("Weak randomness, predictable tokens, insufficient entropy", "randomness"),
+                ("Information disclosure, verbose errors, debug endpoints", "disclosure"),
+                ("Dependency vulnerabilities, outdated libraries, known CVEs", "supply_chain"),
             ]
 
             while (self.campaign_state.time_remaining() > MIN_TIME_FOR_WAVE
@@ -1022,6 +1047,9 @@ Output JSON with your analysis for each signal.""",
             elif self.waves_completed >= EFFECTIVE_MAX_WAVES:
                 await self.emit_log(f"Maximum waves reached ({EFFECTIVE_MAX_WAVES} for {self.time_budget}s budget)")
 
+            # Save state checkpoint after wave loop
+            await self._save_campaign_state()
+
             # === PHASE 4: VERIFICATION (Signal Routing) ===
             # Route each signal through: Decider → FamilyCoordinator → Specialist → Triager
             # v2: Triager now has invariant awareness from Security Map
@@ -1041,6 +1069,9 @@ Output JSON with your analysis for each signal.""",
                 reason_str = ", ".join(skip_reasons)
                 print(f"[Overseer] Skipping Phase 4 (specialists): {reason_str}")
                 await self.emit_log(f"Skipping Phase 4 (specialists): {reason_str}")
+
+            # Save state checkpoint after Phase 4
+            await self._save_campaign_state()
 
             # === PHASE 5: FINALIZE ===
             await self.emit_log("Phase 5: Generating final report...")
@@ -1069,6 +1100,8 @@ Output JSON with your analysis for each signal.""",
             traceback.print_exc()
             self.error_message = str(e)
             await self.emit_log(f"Orchestration error: {e}")
+            # Save state on crash for potential recovery
+            await self._save_campaign_state()
 
         # Convert confirmed findings to Finding objects
         await self._process_findings()
@@ -1084,6 +1117,56 @@ Output JSON with your analysis for each signal.""",
     def _extract_json_from_output(self, content: str) -> Optional[dict]:
         """Extract JSON from Claude CLI output. Delegates to shared util."""
         return extract_json_from_output(content)
+
+    async def _save_campaign_state(self):
+        """Persist campaign state for crash recovery.
+
+        Saves to /memories/overseer/campaign_state.json after each phase
+        transition so progress survives crashes.
+        """
+        try:
+            state_dict = {
+                "project_id": self.campaign_state.project_id,
+                "scan_tier": self.campaign_state.scan_tier,
+                "deadline": self.campaign_state.deadline,
+                "phase": self.campaign_state.phase if isinstance(self.campaign_state.phase, str) else self.campaign_state.phase.value if hasattr(self.campaign_state.phase, "value") else str(self.campaign_state.phase),
+                "current_wave": self.campaign_state.current_wave,
+                "confirmed_findings_count": len(self.campaign_state.confirmed_findings),
+                "confirmed_findings": self.campaign_state.confirmed_findings,
+                "waves_completed": self.waves_completed,
+                "saved_at": datetime.utcnow().isoformat(),
+            }
+            # Strip non-serializable _typed_signal from findings before saving
+            for f in state_dict.get("confirmed_findings", []):
+                f.pop("_typed_signal", None)
+            self.filesystem.write_file(
+                "/memories/overseer/campaign_state.json",
+                json.dumps(state_dict, indent=2, default=str),
+            )
+            print(f"[Overseer] Campaign state saved (phase={state_dict['phase']}, findings={state_dict['confirmed_findings_count']})")
+        except Exception as e:
+            print(f"[Overseer] Could not save campaign state: {e}")
+
+    async def _load_campaign_state(self) -> bool:
+        """Try to load saved campaign state for crash recovery.
+
+        Returns True if state was successfully restored.
+        """
+        try:
+            content = self.filesystem.read_file("/memories/overseer/campaign_state.json")
+            if content:
+                data = json.loads(content)
+                # Restore key fields
+                saved_findings = data.get("confirmed_findings", [])
+                if saved_findings:
+                    self.campaign_state.confirmed_findings = saved_findings
+                    self.waves_completed = data.get("waves_completed", 0)
+                    self.campaign_state.current_wave = data.get("current_wave", 0)
+                    print(f"[Overseer] Restored campaign state from checkpoint (phase: {data.get('phase')}, findings: {len(saved_findings)})")
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _format_signals_for_context(self, max_signals: int = 10) -> str:
         """Format collected signals into a prompt-friendly string for verification agents."""
@@ -1193,6 +1276,7 @@ Output JSON with your analysis for each signal.""",
                         sinks_data.get("signals") or
                         sinks_data.get("sinks") or
                         sinks_data.get("findings") or
+                        sinks_data.get("data_flows") or
                         sinks_data.get("items") or
                         (sinks_data if isinstance(sinks_data, list) else [])
                     )
@@ -1215,12 +1299,20 @@ Output JSON with your analysis for each signal.""",
                                     "location": signal.get("location", signal.get("file_path", "")),
                                     "file_path": signal.get("file_path", signal.get("location", "")),
                                     "line_start": signal.get("line_start", signal.get("line_number")),
+                                    "line_end": signal.get("line_end"),
                                     "code_snippet": signal.get("code_snippet", signal.get("code", "")),
                                     "why_suspicious": signal.get("why_suspicious", signal.get("description", "")),
                                     "remediation": signal.get("remediation", signal.get("recommendation", "")),
                                     "confidence": signal.get("confidence", 0.7),
+                                    "entry_point_trace": signal.get("entry_point_trace", []),
+                                    "sink_function": signal.get("sink_function"),
+                                    "guards_present": signal.get("guards_present", []),
+                                    "next_steps": signal.get("next_steps", []),
+                                    "hunter_notes": signal.get("hunter_notes", ""),
                                 }
-                                self._add_finding_deduped(finding)
+                                if self._add_finding_deduped(finding):
+                                    # Also construct typed SuspiciousSignal (dual-track)
+                                    self._attach_typed_signal(finding)
                         # Emit progress so the UI shows signal collection activity
                         await self.emit(
                             WSMessageType.PROGRESS,
@@ -1277,22 +1369,51 @@ Output JSON with your analysis for each signal.""",
     def _add_finding_deduped(self, finding: dict) -> bool:
         """Add a finding to confirmed_findings if not a duplicate.
 
-        Deduplicates on (file_path, line_start, category) to prevent the same
+        Deduplicates on (file_path, line_start, normalized_category) to prevent the same
         sink from being routed through the full pipeline multiple times across waves.
 
         Returns:
             True if the finding was added, False if it was a duplicate.
         """
+        raw_cat = finding.get("category", "")
+        normalized_cat = raw_cat.lower().replace(" ", "_").replace("-", "_") if raw_cat else ""
         fp = (
             finding.get("file_path", ""),
-            finding.get("line_start"),
-            finding.get("category", ""),
+            finding.get("line_start") or 0,
+            normalized_cat,
         )
         if fp in self.campaign_state._signal_fingerprints:
             return False
         self.campaign_state._signal_fingerprints.add(fp)
         self.campaign_state.confirmed_findings.append(finding)
         return True
+
+    def _attach_typed_signal(self, finding: dict):
+        """Construct a SuspiciousSignal and attach it to the finding dict.
+
+        Dual-track approach: finding dict remains the primary data carrier,
+        but a typed SuspiciousSignal is attached for use by specialist context
+        building (to_specialist_context()) and campaign state tracking.
+        """
+        try:
+            cat_str = finding.get("category", "unknown").lower().replace(" ", "_").replace("-", "_")
+            sev_str = finding.get("severity", "medium").upper()
+            typed_signal = SuspiciousSignal(
+                signal_id=finding["signal_id"],
+                category=SignalCategory(cat_str) if cat_str != "unknown" else SignalCategory.UNKNOWN,
+                severity=SignalSeverity(sev_str.lower()) if sev_str.lower() in ("critical", "high", "medium", "low", "info") else SignalSeverity.MEDIUM,
+                file_path=finding.get("file_path", ""),
+                line_start=finding.get("line_start") or 0,
+                code_snippet=finding.get("code_snippet", ""),
+                why_suspicious=finding.get("why_suspicious", ""),
+                entry_point_trace=finding.get("entry_point_trace", []),
+                sink_function=finding.get("sink_function"),
+                hunter_notes=finding.get("hunter_notes"),
+            )
+            finding["_typed_signal"] = typed_signal
+            self.campaign_state.add_signal(typed_signal)
+        except (ValueError, KeyError) as e:
+            print(f"[Overseer] Could not create typed signal for {finding.get('signal_id', '?')}: {e}")
 
     async def _collect_wave_findings(self, wave_num: int):
         """Collect findings from a specific wave's outputs."""
@@ -1322,12 +1443,24 @@ Output JSON with your analysis for each signal.""",
                 content = self.filesystem.read_file(file_path)
                 if content:
                     data = self._extract_json_from_output(content)
+                    if not data:
+                        # Fallback: try extracting all JSON objects from multi-object output
+                        all_objects = extract_all_json_objects(content)
+                        if all_objects:
+                            SIGNAL_KEYS = {"signals", "findings", "sinks", "data_flows", "traces", "items"}
+                            for obj in all_objects:
+                                if isinstance(obj, dict) and any(k in obj for k in SIGNAL_KEYS):
+                                    data = obj
+                                    break
+                            if not data:
+                                data = all_objects[0]
                     if data:
                         # Extract signals/findings from various formats
                         signals = (
                             data.get("signals") or
                             data.get("findings") or
                             data.get("sinks") or
+                            data.get("data_flows") or
                             data.get("traces") or
                             data.get("items") or
                             (data if isinstance(data, list) else [])
@@ -1350,12 +1483,19 @@ Output JSON with your analysis for each signal.""",
                                         "location": signal.get("location", signal.get("file_path", "")),
                                         "file_path": signal.get("file_path", signal.get("location", "")),
                                         "line_start": signal.get("line_start", signal.get("line_number")),
+                                        "line_end": signal.get("line_end"),
                                         "code_snippet": signal.get("code_snippet", signal.get("code", "")),
                                         "why_suspicious": signal.get("why_suspicious", signal.get("description", "")),
                                         "remediation": signal.get("remediation", signal.get("recommendation", "")),
                                         "confidence": signal.get("confidence", 0.7),
+                                        "entry_point_trace": signal.get("entry_point_trace", []),
+                                        "sink_function": signal.get("sink_function"),
+                                        "guards_present": signal.get("guards_present", []),
+                                        "next_steps": signal.get("next_steps", []),
+                                        "hunter_notes": signal.get("hunter_notes", ""),
                                     }
-                                    self._add_finding_deduped(finding)
+                                    if self._add_finding_deduped(finding):
+                                        self._attach_typed_signal(finding)
                             if len(signals) > 0:
                                 print(f"[Overseer] Wave {wave_num}: Collected {len(signals)} signals from {file_path}")
             except Exception as e:
@@ -1476,7 +1616,7 @@ Output your verdict as JSON.""",
         )
 
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_wave(wave_plan, foundation_context=foundation_ctx)
             await self.emit_log(f"Specialists completed: {result.all_succeeded}")
 
@@ -1625,12 +1765,14 @@ Output your verdict as JSON.""",
             self.signal_tracker.record_stage(signal_id, "specialist", specialist_verdict)
 
         # Stage 3.5: Devil's Advocate - Challenge quick dismissals of high-severity signals
+        da_result = None
         if specialist_result and self._should_challenge_specialist(
             signal_severity, specialist_result, specialist_duration
         ):
             print(f"[Overseer] Signal {signal_id}: Challenging specialist dismissal with Devil's Advocate")
             challenge_result = await self._run_devils_advocate(signal, specialist_result)
             if challenge_result and challenge_result.get("recommendation") == "reconsider":
+                da_result = challenge_result
                 specialist_result["challenged"] = True
                 specialist_result["challenge_findings"] = challenge_result.get("challenge_findings", [])
                 if challenge_result.get("new_evidence"):
@@ -1641,7 +1783,7 @@ Output your verdict as JSON.""",
                 self.signal_tracker.record_stage(signal_id, "devils_advocate", "uphold")
 
         # Stage 4: Triager - Final classification (even if specialist failed/errored)
-        finding = await self._run_triager(signal, specialist_result)
+        finding = await self._run_triager(signal, specialist_result, da_result=da_result)
 
         if finding:
             classification = finding.get("classification", "unknown")
@@ -1683,6 +1825,16 @@ Output your verdict as JSON.""",
             if isinstance(confidence, (int, float)) and confidence < 70:
                 return True
 
+        # Challenge MEDIUM severity with stricter thresholds
+        if signal_severity == "MEDIUM":
+            # Very quick dismissal (half the normal threshold)
+            if duration_seconds < self.QUICK_DISMISSAL_THRESHOLD_SECONDS / 2:
+                return True
+            # Very low confidence
+            confidence = specialist_result.get("confidence", 100)
+            if isinstance(confidence, (int, float)) and confidence < 50:
+                return True
+
         return False
 
     async def _run_devils_advocate(self, signal: dict, specialist_result: dict) -> Optional[dict]:
@@ -1702,7 +1854,7 @@ Output your verdict as JSON.""",
         prompt = get_devils_advocate_prompt(signal_context, dismissal_verdict, signal_id)
 
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
                 agent_type="DevilsAdvocate",
                 objective=prompt,
@@ -1749,7 +1901,7 @@ Decide:
 Output your decision as JSON with keys: decision, rationale"""
 
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
                 agent_type="Decider",
                 objective=objective,
@@ -1791,11 +1943,23 @@ Output your decision as JSON with keys: decision, rationale"""
 
         # Determine the family for this signal
         category_str = signal.get("category", signal.get("vulnerability_type", "unknown"))
+        # Normalize: lowercase, underscored, strip common prefixes from hunters
+        normalized_cat = category_str.lower().replace(" ", "_").replace("-", "_")
+        for prefix in ("potential_", "possible_", "suspected_"):
+            if normalized_cat.startswith(prefix):
+                normalized_cat = normalized_cat[len(prefix):]
+                break
         try:
-            category = SignalCategory(category_str.lower().replace(" ", "_").replace("-", "_"))
+            category = SignalCategory(normalized_cat)
             family = get_family_for_signal(category)
         except (ValueError, KeyError):
-            family = SpecialistFamily.API_DESIGN  # Fallback
+            # Category-based fallback: try fuzzy matching via registry
+            registry_lookup = SpecialistRegistry()
+            best_match = registry_lookup.find_best_specialist_for_category(normalized_cat)
+            if best_match:
+                family = best_match.family
+            else:
+                family = SpecialistFamily.API_DESIGN  # Last resort fallback
 
         # Get specialists in this family
         registry = SpecialistRegistry()
@@ -1804,13 +1968,23 @@ Output your decision as JSON with keys: decision, rationale"""
 
         signal_context = json.dumps(signal, indent=2)
 
+        # Include Decider assessment for context
+        decider_context = ""
+        if decider_result:
+            decider_context = f"""
+## Decider Assessment
+- Recommended action: {decider_result.get('action', decider_result.get('decision', 'unknown'))}
+- Priority: {decider_result.get('priority', 'unknown')}
+- Reasoning: {decider_result.get('rationale', decider_result.get('reasoning', 'N/A'))}
+"""
+
         objective = f"""Coordinate specialist assignment for this signal.
 
 ## Signal
 ```json
 {signal_context}
 ```
-
+{decider_context}
 ## Family: {family.value}
 
 ## Available Specialists
@@ -1822,7 +1996,7 @@ DO NOT include threat model - that's for Triager only.
 Output as JSON with: primary_specialist, secondary_specialist (optional), context_for_specialist"""
 
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
                 agent_type="FamilyCoordinator",
                 objective=objective,
@@ -1920,8 +2094,13 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
             # Promote to cross-validation even if not critical
             return await self._run_specialist_cross_validation(signal, coordinator_result)
 
-        # Format signal for specialist
-        signal_context = f"""## Signal
+        # Format signal for specialist — use typed signal if available
+        typed_signal = signal.get("_typed_signal")
+        if typed_signal:
+            signal_context = typed_signal.to_specialist_context()
+            signal_context += f"\n\n## Additional Context from Coordinator\n{context}"
+        else:
+            signal_context = f"""## Signal
 - ID: {signal_id}
 - Category: {signal.get('category', signal.get('vulnerability_type', 'unknown'))}
 - File: {signal.get('file_path', signal.get('location', 'unknown'))}
@@ -1942,7 +2121,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
 
         start_time = time.time()
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
                 agent_type="Specialist",
                 objective=prompt,
@@ -2089,7 +2268,7 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
         )
 
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
                 agent_type="Arbiter",
                 objective=prompt,
@@ -2113,7 +2292,7 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
             # Fall back to primary specialist result
             return verdict_a
 
-    async def _run_triager(self, signal: dict, specialist_result: Optional[dict]) -> Optional[dict]:
+    async def _run_triager(self, signal: dict, specialist_result: Optional[dict], da_result: Optional[dict] = None) -> Optional[dict]:
         """Stage 4: Triager classifies signal based on threat model.
 
         Triager makes final classification:
@@ -2124,12 +2303,14 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
 
         Triager considers:
         - Specialist's technical verdict (if available)
+        - Devil's Advocate challenge results (if specialist was challenged)
         - Threat model (what attackers are in scope)
         - Business context (what's actually at risk)
 
         Args:
             signal: Signal dict from hunter
             specialist_result: Output from Specialist (may be None or have error)
+            da_result: Output from Devil's Advocate challenge (may be None)
 
         Returns:
             Finding dict if classified as vulnerability, None if dismissed
@@ -2153,13 +2334,38 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
                 verdict = specialist_result.get("verdict", "unknown")
                 confidence = specialist_result.get("confidence", "N/A")
                 reasoning = specialist_result.get("reasoning", "No reasoning provided")
+                evidence = specialist_result.get("evidence", [])
+                poc = specialist_result.get("poc_sketch", "")
+                fix = specialist_result.get("suggested_fix", "")
+                skill = specialist_result.get("skill_used", "")
                 specialist_summary = f"""Verdict: {verdict}
 Confidence: {confidence}
-Reasoning: {reasoning}"""
+Reasoning: {reasoning}
+Evidence: {json.dumps(evidence, indent=2) if evidence else 'None provided'}
+PoC Sketch: {poc if poc else 'None'}
+Suggested Fix: {fix if fix else 'None'}
+Skill Used: {skill if skill else 'None'}"""
+                # Include DA challenge if specialist was challenged
+                if specialist_result.get("challenged"):
+                    challenge_findings = specialist_result.get("challenge_findings", [])
+                    specialist_summary += f"\n\nDevil's Advocate Challenge: RECONSIDER"
+                    specialist_summary += f"\nChallenge Findings: {json.dumps(challenge_findings, indent=2) if challenge_findings else 'None'}"
+                    if specialist_result.get("devils_advocate_override"):
+                        specialist_summary += "\nDA Override: Specialist verdict overridden to needs_more_info"
         else:
             specialist_summary = "No specialist verdict available (specialist failed or timed out)"
 
         signal_context = json.dumps(signal, indent=2)
+
+        # Format Devil's Advocate challenge if available
+        da_section = ""
+        if da_result:
+            da_section = f"""
+## Devil's Advocate Challenge
+- Challenge verdict: {da_result.get('recommendation', 'N/A')}
+- Challenge reasoning: {da_result.get('reasoning', da_result.get('challenge_reasoning', 'N/A'))}
+- New evidence: {json.dumps(da_result.get('new_evidence', da_result.get('challenge_findings', [])), indent=2)}
+"""
 
         objective = f"""Make final classification for this signal.
 
@@ -2170,7 +2376,7 @@ Reasoning: {reasoning}"""
 
 ## Specialist Analysis
 {specialist_summary}
-
+{da_section}
 ## Threat Model
 ```json
 {threat_model}
@@ -2190,7 +2396,7 @@ Required schema (output this directly, not in a code block):
 {{"signal_id": "<from input>", "classification": "SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|DISMISSED", "severity": "CRITICAL|HIGH|MEDIUM|LOW", "confidence": 85, "title": "concise title", "description": "2-4 sentences", "reasoning": "why", "impact": "damage", "attack_path": "exploitation steps", "recommendation": "fix"}}"""
 
         try:
-            foundation_ctx = dispatch_tools.get_foundation_context()
+            foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
                 agent_type="Triager",
                 objective=objective,
@@ -2607,10 +2813,19 @@ Required schema (output this directly, not in a code block):
         dismissed_signal_ids = set()  # Track actually dismissed signals, not just count
         error_count = 0
 
+        # Sort signals by severity: CRITICAL first, then HIGH, MEDIUM, LOW
+        SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        signals.sort(key=lambda f: SEVERITY_ORDER.get(f.get("severity", "medium"), 2))
+
+        routing_start = time.time()
+        phase_budget = self.campaign_state.time_remaining() * 0.8  # Reserve 20% for finalization
+
         for i, signal in enumerate(signals):
-            # Check time budget
-            if self.campaign_state.time_remaining() < 30:
-                await self.emit_log(f"Time budget low, stopping routing at signal {i+1}/{len(signals)}")
+            # Check time budget — reserve time for finalization
+            elapsed = time.time() - routing_start
+            if elapsed > phase_budget or self.campaign_state.time_remaining() < 30:
+                remaining = len(signals) - i
+                await self.emit_log(f"Routing budget exhausted after {elapsed:.0f}s, {remaining} signals skipped (processed {i}/{len(signals)})")
                 break
 
             signal_id = signal.get("signal_id", f"sig-{i}")

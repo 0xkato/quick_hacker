@@ -645,6 +645,28 @@ class SpecialistRegistry:
         """Get all specialists that handle a given signal category."""
         return [s for s in ALL_SPECIALISTS if category in s.triggers]
 
+    def find_best_specialist_for_category(self, category_str: str) -> Optional[SpecialistInfo]:
+        """Fuzzy-match a category string to the best specialist.
+
+        Used as fallback when SignalCategory enum parsing fails.
+        Tries matching against specialist IDs and proficiency descriptions.
+
+        Args:
+            category_str: Normalized category string (lowercase, underscored)
+
+        Returns:
+            Best matching SpecialistInfo or None
+        """
+        # Try matching against specialist IDs first (most specific)
+        for specialist in ALL_SPECIALISTS:
+            if category_str in specialist.id or specialist.id.replace("_auditor", "") in category_str:
+                return specialist
+        # Try matching against proficiency descriptions (broader)
+        for specialist in ALL_SPECIALISTS:
+            if category_str.replace("_", " ") in specialist.proficiency.lower():
+                return specialist
+        return None
+
 
 def get_family_for_signal(category: SignalCategory) -> SpecialistFamily:
     """

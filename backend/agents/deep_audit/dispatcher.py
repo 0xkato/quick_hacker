@@ -10,10 +10,12 @@ Sub-agent execution modes:
 """
 
 import asyncio
+import atexit
 import json
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from datetime import datetime
 from typing import Optional, Callable, Any
@@ -32,7 +34,6 @@ from agents.deep_audit.state import WaveTask
 from agents.deep_audit.utils.json_extractor import extract_json_from_output
 from models.schemas import WSMessage, WSMessageType
 from services.observability_service import observability_service
-import time
 
 
 def _claude_cli_available() -> bool:
@@ -42,6 +43,33 @@ def _claude_cli_available() -> bool:
 
 # Plugin directory for specialist skills (native Claude Code skills mechanism)
 SPECIALIST_PLUGIN_DIR = Path(__file__).resolve().parent / "specialist_plugin"
+
+# Per-agent model selection: lightweight agents use Sonnet, deep analysis agents use Opus.
+# Agents not in this map inherit the default model from provider_config.
+AGENT_MODEL_MAP: dict[str, str] = {
+    # Lightweight routing/triage agents → Sonnet (fast, cheap)
+    "Decider": "sonnet",
+    "FamilyCoordinator": "sonnet",
+    "SinkHunter": "sonnet",
+    "EntrypointHunter": "sonnet",
+    "DataflowTracer": "sonnet",
+    "InvariantViolationHunter": "sonnet",
+    "TrustBoundaryGapHunter": "sonnet",
+    # Deep analysis agents → Opus (quality-critical)
+    "Specialist": "opus",
+    "Triager": "opus",
+    "DevilsAdvocate": "opus",
+    "Arbiter": "opus",
+    # Foundation agents → Sonnet (breadth over depth)
+    "RepoProfiler": "sonnet",
+    "ScopeMapper": "sonnet",
+    "ThreatModeler": "sonnet",
+    # Understanding agents → Sonnet
+    "ModuleAnalyzer": "sonnet",
+    "TrustBoundaryMapper": "sonnet",
+    "DataFlowMapper": "sonnet",
+    "InvariantExtractor": "sonnet",
+}
 
 
 class DispatchTask(BaseModel):
@@ -135,6 +163,19 @@ def get_tools_for_agent_type(agent_type: str) -> list[str]:
     return AGENT_TOOL_SUBSETS.get(agent_type, ["read_file"])
 
 
+# Module-level atexit handler for orphan subprocess cleanup
+_dispatcher_instance: Optional["WaveDispatcher"] = None
+
+
+def _atexit_cleanup():
+    """Kill all tracked subprocesses on interpreter exit."""
+    if _dispatcher_instance:
+        _dispatcher_instance._cleanup_all_processes()
+
+
+atexit.register(_atexit_cleanup)
+
+
 class WaveDispatcher:
     """Dispatches sub-agents in parallel using Claude CLI and collects results.
 
@@ -179,6 +220,27 @@ class WaveDispatcher:
         self.on_agent_complete = on_agent_complete
         self.on_message = on_message
         self.parent_agent_id = parent_agent_id
+        self._active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # Register this instance for atexit cleanup
+        global _dispatcher_instance
+        _dispatcher_instance = self
+
+    def _register_process(self, process: asyncio.subprocess.Process):
+        """Track an active subprocess for cleanup on crash."""
+        self._active_processes[process.pid] = process
+
+    def _unregister_process(self, process: asyncio.subprocess.Process):
+        """Remove a subprocess from tracking after it completes."""
+        self._active_processes.pop(process.pid, None)
+
+    def _cleanup_all_processes(self):
+        """Kill all tracked subprocesses. Called on atexit."""
+        for pid, proc in list(self._active_processes.items()):
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+        self._active_processes.clear()
 
     def _broadcast(self, msg_type: WSMessageType, agent_id: str, data: dict):
         """Broadcast a message to UI if callback is set."""
@@ -201,11 +263,15 @@ class WaveDispatcher:
         """
         started_at = datetime.utcnow()
 
-        # Create coroutines for all tasks
-        tasks = [
-            self._spawn_subagent(task, foundation_context)
-            for task in wave_plan.tasks
-        ]
+        # Limit concurrent agent spawning to prevent system overload
+        sem = asyncio.Semaphore(8)
+
+        async def limited_spawn(task):
+            async with sem:
+                return await self._spawn_subagent(task, foundation_context)
+
+        # Create coroutines for all tasks (semaphore-limited)
+        tasks = [limited_spawn(task) for task in wave_plan.tasks]
 
         # Run all sub-agents in parallel, wait for ALL to complete
         # return_exceptions=True ensures we get results even if some fail
@@ -299,43 +365,65 @@ class WaveDispatcher:
     async def _read_process_output_limited(
         self,
         process: asyncio.subprocess.Process,
-        max_size: int,
+        max_stdout: int = 10 * 1024 * 1024,
+        max_stderr: int = 1 * 1024 * 1024,
     ) -> tuple[str, str, bool, int]:
-        """Read process output with size limit to prevent OOM.
+        """Read process output with separate size limits for stdout and stderr.
+
+        Separate budgets prevent verbose stderr (debug logs, warnings) from
+        starving stdout which contains the actual JSON result.
 
         Args:
             process: The subprocess to read from
-            max_size: Maximum TOTAL bytes to read before truncating (shared between stdout/stderr)
+            max_stdout: Maximum bytes for stdout (default 10MB)
+            max_stderr: Maximum bytes for stderr (default 1MB)
 
         Returns:
             Tuple of (stdout_str, stderr_str, was_truncated, returncode)
         """
-        stdout_chunks = []
-        stderr_chunks = []
-        was_truncated = False
-        total_read = 0  # Shared counter for both streams
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        stdout_truncated = False
+        stderr_truncated = False
+        stdout_read = 0
+        stderr_read = 0
 
-        async def read_stream(stream, chunks):
-            nonlocal was_truncated, total_read
+        async def read_stdout(stream):
+            nonlocal stdout_truncated, stdout_read
             while True:
-                chunk = await stream.read(8192)  # Read in 8KB chunks
+                chunk = await stream.read(8192)
                 if not chunk:
                     break
-                if total_read + len(chunk) > max_size:
-                    # Truncate - shared limit for both streams
-                    remaining = max_size - total_read
+                if stdout_read + len(chunk) > max_stdout:
+                    remaining = max_stdout - stdout_read
                     if remaining > 0:
-                        chunks.append(chunk[:remaining])
-                        total_read += remaining
-                    was_truncated = True
+                        stdout_chunks.append(chunk[:remaining])
+                        stdout_read += remaining
+                    stdout_truncated = True
                     break
-                chunks.append(chunk)
-                total_read += len(chunk)
+                stdout_chunks.append(chunk)
+                stdout_read += len(chunk)
 
-        # Read stdout and stderr concurrently with shared size limit
+        async def read_stderr(stream):
+            nonlocal stderr_truncated, stderr_read
+            while True:
+                chunk = await stream.read(8192)
+                if not chunk:
+                    break
+                if stderr_read + len(chunk) > max_stderr:
+                    remaining = max_stderr - stderr_read
+                    if remaining > 0:
+                        stderr_chunks.append(chunk[:remaining])
+                        stderr_read += remaining
+                    stderr_truncated = True
+                    break
+                stderr_chunks.append(chunk)
+                stderr_read += len(chunk)
+
+        # Read stdout and stderr concurrently with separate limits
         await asyncio.gather(
-            read_stream(process.stdout, stdout_chunks),
-            read_stream(process.stderr, stderr_chunks),
+            read_stdout(process.stdout),
+            read_stderr(process.stderr),
         )
 
         # Wait for process to complete and get returncode
@@ -345,8 +433,11 @@ class WaveDispatcher:
         stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
         stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
 
-        if was_truncated:
-            stdout += "\n\n[OUTPUT TRUNCATED - exceeded size limit]"
+        was_truncated = stdout_truncated or stderr_truncated
+        if stdout_truncated:
+            stdout += "\n\n[STDOUT TRUNCATED - exceeded size limit]"
+        if stderr_truncated:
+            stderr += "\n\n[STDERR TRUNCATED - exceeded size limit]"
 
         return stdout, stderr, was_truncated, returncode
 
@@ -428,11 +519,10 @@ IMPORTANT: Output your result directly as text/JSON to stdout. Do NOT try to wri
 
 Begin your analysis now."""
 
-            # Get model from config - Opus for everything
-            model = self.provider_config.get("model", "claude-opus-4-5-20251101")
-            # Claude CLI accepts both aliases (sonnet, opus, haiku) and full names
-            # We prefer full names for version control, but fall back to alias if needed
-            model_arg = model  # Use exact model name from config
+            # Select model based on agent type — lightweight agents use Sonnet, deep analysis uses Opus
+            default_model = self.provider_config.get("model", "claude-opus-4-5-20251101")
+            agent_model_override = AGENT_MODEL_MAP.get(task.agent_type)
+            model_arg = agent_model_override if agent_model_override else default_model
 
             # Build claude CLI command
             # IMPORTANT: Use --append-system-prompt instead of --system-prompt
@@ -481,43 +571,36 @@ Begin your analysis now."""
             )
 
             # Run claude CLI as subprocess
-            # Specialist agents: pipe prompt via stdin (--plugin-dir is variadic
-            # and would consume a trailing positional argument as another path)
-            # All other agents: pass prompt as positional argument (original behavior)
+            # All agents use stdin for prompt delivery to avoid shell arg length limits
+            # and to work consistently with --plugin-dir (which is variadic)
             is_specialist = task.agent_type == "Specialist" and SPECIALIST_PLUGIN_DIR.is_dir()
-
-            if not is_specialist:
-                # Non-specialist: prompt goes as positional argument
-                cmd.append(user_prompt)
 
             start_time = time.time()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdin=asyncio.subprocess.PIPE if is_specialist else None,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.repo_path,
                 env={**os.environ, "NO_COLOR": "1"},  # Disable color codes in output
             )
+            self._register_process(process)
 
-            if is_specialist:
-                # Feed prompt via stdin and close — process reads it then proceeds
-                process.stdin.write(user_prompt.encode("utf-8"))
-                await process.stdin.drain()
-                process.stdin.close()
-                await process.stdin.wait_closed()
+            # Feed prompt via stdin and close — process reads it then proceeds
+            process.stdin.write(user_prompt.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+            await process.stdin.wait_closed()
 
-            # Wait for completion with timeout and output size limit
-            # Limit output to 10MB to prevent OOM from runaway subagents
-            MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB
+            # Wait for completion with timeout and separate output limits
             try:
                 output, error_output, was_truncated, returncode = await asyncio.wait_for(
-                    self._read_process_output_limited(process, MAX_OUTPUT_SIZE),
+                    self._read_process_output_limited(process),
                     timeout=task.time_budget,
                 )
 
                 if was_truncated:
-                    print(f"[Dispatcher] {agent_id} output truncated at {MAX_OUTPUT_SIZE} bytes")
+                    print(f"[Dispatcher] {agent_id} output truncated")
 
                 # Use returncode from the function (guaranteed valid after wait())
                 if returncode != 0:
@@ -535,11 +618,23 @@ Begin your analysis now."""
                         print(f"[Dispatcher] {agent_id} stderr: {error_output[:200]}...")
 
             except asyncio.TimeoutError:
+                # Try to capture partial output before killing
+                partial_stdout = ""
+                try:
+                    partial_out, partial_err, _, _ = await asyncio.wait_for(
+                        self._read_process_output_limited(process),
+                        timeout=2.0,  # 2 second grace period for buffered output
+                    )
+                    partial_stdout = partial_out
+                except (asyncio.TimeoutError, Exception):
+                    pass
                 process.kill()
                 await process.wait()
                 error_message = f"Task exceeded time budget of {task.time_budget}s"
-                output = ""
-                print(f"[Dispatcher] {agent_id} timed out")
+                output = partial_stdout
+                print(f"[Dispatcher] {agent_id} timed out (captured {len(output)} bytes partial output)")
+            finally:
+                self._unregister_process(process)
 
             completed_at = datetime.utcnow()
             status = "completed" if not error_message else "failed"

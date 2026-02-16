@@ -134,6 +134,8 @@ Map your conclusion to the pipeline verdict:
 - [ ] Alias reachability after free is explained (which pointer remains live and why).
 - [ ] Ordering is established: single-thread path constraints show free-before-use, OR missing sync makes free-before-use plausible in concurrent code.
 - [ ] Attacker control: input source that triggers free + use sequence is identified.
+- [ ] Reachability proven: complete call chain from attacker-reachable entry point to the free+use sequence documented.
+- [ ] Guards evaluated: all lifetime checks, null checks, and validation along the path identified and shown insufficient.
 
 ## High-Signal Bug Patterns
 

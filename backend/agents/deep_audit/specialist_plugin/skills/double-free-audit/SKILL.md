@@ -171,6 +171,8 @@ Map your conclusion to the pipeline verdict:
 - [ ] Ordering established: single-thread path constraints show free_1 before free_2, OR missing synchronization makes concurrent double-free plausible.
 - [ ] Invalidation status: pointer and all aliases checked for NULL-set/ownership-clear after first free.
 - [ ] Attacker control: input source that triggers the double-free sequence is identified.
+- [ ] Reachability proven: complete call chain from attacker-reachable entry point to both free sites documented.
+- [ ] Guards evaluated: all null checks, ownership checks, and validation along the path identified and shown insufficient.
 
 ## Workflow
 

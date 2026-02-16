@@ -195,6 +195,7 @@ Map your conclusion to the pipeline verdict:
 - [ ] Neutralization evaluated: type (allowlist/escape/blacklist/none), correctness for this interpreter/context.
 - [ ] Primitive classified: SHELL_INJECTION, ARGUMENT_INJECTION, PATH_INJECTION, or ENV_INJECTION.
 - [ ] Reachability confirmed: attacker can trigger the sink path and influence the tainted value.
+- [ ] Guards evaluated: all input validation, sanitization, allowlists, and access controls along the path identified and shown insufficient.
 
 ## Workflow
 

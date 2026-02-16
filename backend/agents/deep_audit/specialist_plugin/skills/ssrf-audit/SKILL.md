@@ -182,6 +182,8 @@ Map your conclusion to the pipeline verdict:
 - [ ] Validation evaluated: strategy (allowlist/blocklist/none), what is validated (string/URL/IP), before/after redirects.
 - [ ] DNS/redirect behavior checked: connect-time IP enforcement, redirect revalidation.
 - [ ] Internal reachability assessed: can server reach private/loopback/link-local/metadata endpoints.
+- [ ] Code path reachability proven: complete call chain from attacker-reachable entry point to the request sink documented.
+- [ ] Guards evaluated: all URL validation, allowlists, and access controls along the path identified and shown insufficient.
 
 ## Workflow
 

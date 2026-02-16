@@ -197,6 +197,8 @@ Map your conclusion to the pipeline verdict:
 - [ ] Security-relevant sink identified (alloc, copy, index, loop, offset, refcount).
 - [ ] Mismatch status checked: does the sink use the overflowed value or the original?
 - [ ] Attacker control: input source that controls operands is identified.
+- [ ] Reachability proven: complete call chain from attacker-reachable entry point to the overflow site documented.
+- [ ] Guards evaluated: all range checks, clamping, saturation, and validation along the path identified and shown insufficient.
 
 ## Workflow
 

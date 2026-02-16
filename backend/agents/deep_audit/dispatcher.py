@@ -799,6 +799,7 @@ Begin your analysis now."""
             cmd = [
                 "claude",
                 "-p",  # Print mode (non-interactive)
+                "--verbose",  # Required for stream-json with --print
                 "--model", model_arg,
                 "--permission-mode", "bypassPermissions",
                 "--tools", ",".join(claude_tools),

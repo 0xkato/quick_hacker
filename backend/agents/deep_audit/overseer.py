@@ -1531,6 +1531,12 @@ Output JSON with your analysis for each signal.""",
 
         return signal
 
+    @staticmethod
+    def _signal_to_json(signal: dict) -> str:
+        """Serialize a signal dict to JSON, stripping non-serializable internal fields."""
+        clean = {k: v for k, v in signal.items() if not k.startswith("_")}
+        return json.dumps(clean, indent=2, default=str)
+
     # =========================================================================
     # SIGNAL ROUTING PIPELINE
     # =========================================================================
@@ -1697,7 +1703,7 @@ Output JSON with your analysis for each signal.""",
         from agents.deep_audit.subagents import get_devils_advocate_prompt
 
         signal_id = signal.get("signal_id", "unknown")
-        signal_context = json.dumps(signal, indent=2)
+        signal_context = self._signal_to_json(signal)
         dismissal_verdict = json.dumps(specialist_result, indent=2)
 
         prompt = get_devils_advocate_prompt(signal_context, dismissal_verdict, signal_id)
@@ -1734,7 +1740,7 @@ Output JSON with your analysis for each signal.""",
         Returns:
             Dict with decision and routing info, or None on error
         """
-        signal_context = json.dumps(signal, indent=2)
+        signal_context = self._signal_to_json(signal)
 
         objective = f"""Evaluate this signal and decide if it's worth investigating.
 
@@ -1815,7 +1821,7 @@ Output your decision as JSON with keys: decision, rationale"""
         family_specialists = registry.get_by_family(family)
         specialist_list = "\n".join([f"- {s.id}: {s.proficiency}" for s in family_specialists])
 
-        signal_context = json.dumps(signal, indent=2)
+        signal_context = self._signal_to_json(signal)
 
         # Include Decider assessment for context
         decider_context = ""
@@ -2098,7 +2104,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
         from agents.deep_audit.subagents import get_arbiter_prompt
 
         signal_id = signal.get('signal_id', 'unknown')
-        signal_context = json.dumps(signal, indent=2)
+        signal_context = self._signal_to_json(signal)
 
         specialist_verdicts = f"""### Specialist A: {verdict_a.get('specialist_id', 'unknown')}
 Verdict: {verdict_a.get('verdict', 'unknown')}
@@ -2204,7 +2210,7 @@ Skill Used: {skill if skill else 'None'}"""
         else:
             specialist_summary = "No specialist verdict available (specialist failed or timed out)"
 
-        signal_context = json.dumps(signal, indent=2)
+        signal_context = self._signal_to_json(signal)
 
         # Format Devil's Advocate challenge if available
         da_section = ""

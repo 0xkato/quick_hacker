@@ -658,8 +658,9 @@ class AgentOrchestrator:
                 data={"type": "flow_update", "flow": flow.to_dict()}
             ))
 
-        # Set broadcast callback for observability service
+        # Set broadcast callback for observability and behavior tree services
         observability_service.set_broadcast_callback(self._broadcast_message)
+        behavior_tree_service.set_broadcast_callback(self._broadcast_message)
 
         # Create ClaudeSDKOrchestrator first to get make_fresh_limits
         # We need a temporary orchestrator to get the limits factory
@@ -1684,8 +1685,9 @@ class AgentOrchestrator:
             threat_model_block = ""
             threat_model_profile_for_gating = None
 
-        # Set broadcast callback for observability service.
+        # Set broadcast callback for observability and behavior tree services.
         observability_service.set_broadcast_callback(self._broadcast_message)
+        behavior_tree_service.set_broadcast_callback(self._broadcast_message)
 
         # Track state for tool call correlation and finding extraction.
         current_tool_calls: list[dict] = []

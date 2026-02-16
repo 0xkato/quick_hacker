@@ -512,6 +512,7 @@ Begin now. Use ALL available time productively."""
 
         # Initialize behavior tree for real-time LLM action visualization
         from services.behavior_tree_service import behavior_tree_service
+        self._behavior_tree_service = behavior_tree_service  # Store on self for use in other methods
         behavior_tree_service.initialize_tree(self.id)
 
         try:
@@ -1549,7 +1550,7 @@ Output JSON with your analysis for each signal.""",
 
         # Track this signal through the pipeline
         self.signal_tracker.enter(signal_id, signal_title, signal_severity)
-        behavior_tree_service.start_signal(self.id, signal_title, signal_severity)
+        self._behavior_tree_service.start_signal(self.id, signal_title, signal_severity)
 
         # Pre-screen: adjust confidence based on guards and language mismatch
         signal = self._pre_screen_signal(signal)

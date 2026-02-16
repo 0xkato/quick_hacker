@@ -224,7 +224,7 @@ class SignalFlowTracker:
                     f"  |-- {d['signal_id']}: \"{d['title']}\" ({d['severity']})"
                 )
                 lines.append(
-                    f"  |   Dropped at: {d['drop_stage']} -> {d['drop_reason'][:100]}"
+                    f"  |   Dropped at: {d['drop_stage']} -> {(d['drop_reason'] or 'unknown')[:100]}"
                 )
 
         lines.append("=" * 55)

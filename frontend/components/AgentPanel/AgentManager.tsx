@@ -71,7 +71,6 @@ const SCAN_TIERS: { value: ScanTier; label: string; icon: React.ReactNode; descr
 const PROVIDERS: { value: ProviderType; label: string }[] = [
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
-  { value: 'codex_cli', label: 'OpenAI Codex CLI (Local)' },
   { value: 'ollama', label: 'Ollama (Local)' },
 ];
 
@@ -116,8 +115,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [customPrompt, setCustomPrompt] = useState('');
-  const [useClaudeSDK, setUseClaudeSDK] = useState(true);  // Default to SDK for Anthropic
-  const [useClaudeCodeAuth, setUseClaudeCodeAuth] = useState(false);  // Default to API key mode (will be updated based on settings)
+  const [useLocalCLI, setUseLocalCLI] = useState(true);  // Claude Code (anthropic) or Codex CLI (openai)
   const [useOverseer, setUseOverseer] = useState(false);  // Enable parallel sub-agents
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -164,20 +162,26 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
     loadSettings();
   }, []);
 
-  // Get model suggestions from settings (combine available + custom) or fallback
-  const providerModels = appSettings?.providers[provider];
+  // Update model when toggling CLI/API mode (different model lists)
+  useEffect(() => {
+    const suggestKey: ProviderType = (provider === 'openai' && useLocalCLI) ? 'codex_cli' : provider;
+    const provSettings = appSettings?.providers[suggestKey] || appSettings?.providers[provider];
+    setModel(provSettings?.default_model || SUGGESTED_MODELS[suggestKey]?.[0] || '');
+  }, [useLocalCLI]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Get model suggestions — use codex_cli suggestions when OpenAI + CLI mode
+  const effectiveSuggestionKey: ProviderType = (provider === 'openai' && useLocalCLI) ? 'codex_cli' : provider;
+  const providerModels = appSettings?.providers[effectiveSuggestionKey] || appSettings?.providers[provider];
   const modelSuggestions = providerModels
     ? [...(providerModels.available_models || []), ...(providerModels.custom_models || [])]
-    : SUGGESTED_MODELS[provider] || [];
+    : SUGGESTED_MODELS[effectiveSuggestionKey] || [];
 
   // Check if API key is configured for current provider
   const hasApiKeyConfigured = appSettings?.providers[provider]?.api_key
     && appSettings.providers[provider].api_key !== '****'
     && appSettings.providers[provider].api_key.length > 4;
-  // API key is required unless:
-  // - Provider is ollama or codex_cli (no key needed)
-  // - Provider is anthropic with Claude SDK and Claude Code auth enabled
-  const requiresApiKey = provider !== 'ollama' && provider !== 'codex_cli' && !(provider === 'anthropic' && useClaudeSDK && useClaudeCodeAuth);
+  // API key is required unless using local CLI mode (Claude Code or Codex CLI) or Ollama
+  const requiresApiKey = provider !== 'ollama' && !useLocalCLI;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -185,19 +189,23 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
     setError(null);
 
     try {
-      // Always use deep_audit agent type (simplified agent system)
+      // Map provider + runtime to request fields
+      // Anthropic + CLI = Claude Code subscription auth
+      // OpenAI + CLI = Codex CLI (local)
+      // Either + API = API key mode
+      const effectiveProvider: ProviderType = (provider === 'openai' && useLocalCLI) ? 'codex_cli' : provider;
       const request: AgentCreateRequest = {
         repo_id: repoId,
         agent_type: 'deep_audit',
         provider_config: {
-          provider,
+          provider: effectiveProvider,
           model,
           api_key: apiKey || undefined,
         },
         scan_tier: scanTier,
         custom_prompt: customPrompt || undefined,
-        use_claude_sdk: provider === 'anthropic' ? useClaudeSDK : undefined,
-        use_claude_code_auth: provider === 'anthropic' && useClaudeSDK ? useClaudeCodeAuth : undefined,
+        use_claude_sdk: provider === 'anthropic' ? true : undefined,
+        use_claude_code_auth: provider === 'anthropic' && useLocalCLI ? true : undefined,
         use_overseer: useOverseer,
       };
 
@@ -316,24 +324,25 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
               onChange={(e) => {
                 const p = e.target.value as ProviderType;
                 setProvider(p);
-                // Set model from settings or first suggested model
-                const provSettings = appSettings?.providers[p];
-                setModel(provSettings?.default_model || SUGGESTED_MODELS[p]?.[0] || '');
+                // Reset to CLI mode default model for new provider
+                const suggestKey: ProviderType = (p === 'openai' && useLocalCLI) ? 'codex_cli' : p;
+                const provSettings = appSettings?.providers[suggestKey] || appSettings?.providers[p];
+                setModel(provSettings?.default_model || SUGGESTED_MODELS[suggestKey]?.[0] || '');
               }}
               className="select"
             >
               {PROVIDERS.map((p) => {
                 const provSettings = appSettings?.providers[p.value];
                 const hasKey = provSettings?.api_key && provSettings.api_key !== '****' && provSettings.api_key.length > 4;
-                const isNoKeyProvider = p.value === 'ollama' || p.value === 'codex_cli';
+                const isNoKeyProvider = p.value === 'ollama';
                 return (
                   <option key={p.value} value={p.value}>
-                    {p.label} {hasKey || isNoKeyProvider ? '✓' : '(no API key)'}
+                    {p.label} {hasKey || isNoKeyProvider ? '✓' : ''}
                   </option>
                 );
               })}
             </select>
-            {hasApiKeyConfigured && (
+            {!useLocalCLI && hasApiKeyConfigured && (
               <p className="text-vsc-xs text-vsc-success mt-1 flex items-center gap-1">
                 <Settings className="w-3 h-3" />
                 Using API key from settings
@@ -341,60 +350,48 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
             )}
           </div>
 
-          {/* Claude SDK Toggle - Only for Anthropic */}
-          {provider === 'anthropic' && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-3 p-3 rounded border border-vsc-border-subtle bg-vsc-input">
-                <input
-                  type="checkbox"
-                  id="use-claude-sdk"
-                  checked={useClaudeSDK}
-                  onChange={(e) => setUseClaudeSDK(e.target.checked)}
-                  className="rounded"
-                />
-                <label htmlFor="use-claude-sdk" className="flex-1 cursor-pointer">
-                  <span className="text-vsc-sm font-medium text-vsc-text">Use Claude Agent SDK</span>
-                  <p className="text-vsc-xs text-vsc-text-muted mt-0.5">
-                    Native tool loop with better performance.
-                  </p>
+          {/* Runtime Mode - CLI vs API Key */}
+          {provider !== 'ollama' && (
+            <div className="p-3 rounded border border-vsc-border-subtle bg-vsc-input">
+              <div className="text-vsc-xs text-vsc-text-muted uppercase tracking-wider mb-2">Runtime</div>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="runtime-mode"
+                    checked={useLocalCLI}
+                    onChange={() => setUseLocalCLI(true)}
+                    className="rounded"
+                  />
+                  <div>
+                    <span className="text-vsc-sm font-medium text-vsc-text">
+                      {provider === 'anthropic' ? 'Claude Code (subscription)' : 'Codex CLI (local)'}
+                    </span>
+                    <p className="text-vsc-xs text-vsc-text-muted">
+                      {provider === 'anthropic'
+                        ? 'Uses your Claude Code login — no API key needed'
+                        : 'Uses local Codex CLI — no API key needed'}
+                    </p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="runtime-mode"
+                    checked={!useLocalCLI}
+                    onChange={() => setUseLocalCLI(false)}
+                    className="rounded"
+                  />
+                  <div>
+                    <span className="text-vsc-sm font-medium text-vsc-text">API Key</span>
+                    <p className="text-vsc-xs text-vsc-text-muted">
+                      {provider === 'anthropic'
+                        ? 'Uses Anthropic API key directly'
+                        : 'Uses OpenAI API key directly'}
+                    </p>
+                  </div>
                 </label>
               </div>
-
-              {/* Auth Mode Toggle - Only when Claude SDK is enabled */}
-              {useClaudeSDK && (
-                <div className="ml-6 p-3 rounded border border-vsc-border-subtle bg-vsc-bg">
-                  <div className="text-vsc-xs text-vsc-text-muted uppercase tracking-wider mb-2">Authentication</div>
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="auth-mode"
-                        checked={useClaudeCodeAuth}
-                        onChange={() => setUseClaudeCodeAuth(true)}
-                        className="rounded"
-                      />
-                      <div>
-                        <span className="text-vsc-sm font-medium text-vsc-text">Claude Code (subscription)</span>
-                        <p className="text-vsc-xs text-vsc-text-muted">Uses your Claude Code login - no API key needed</p>
-                        <p className="text-vsc-xs text-yellow-500">May conflict with custom tools/hooks</p>
-                      </div>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="auth-mode"
-                        checked={!useClaudeCodeAuth}
-                        onChange={() => setUseClaudeCodeAuth(false)}
-                        className="rounded"
-                      />
-                      <div>
-                        <span className="text-vsc-sm font-medium text-vsc-text">API Key (Recommended)</span>
-                        <p className="text-vsc-xs text-vsc-text-muted">Uses Anthropic API key - avoids tool conflicts</p>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 

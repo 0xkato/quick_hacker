@@ -447,13 +447,15 @@ class AgentOrchestrator:
             use_overseer = getattr(agent, 'use_overseer', False)
             print(f"[Orchestrator] Agent {agent.id}: use_overseer={use_overseer}, use_sdk={use_sdk}")
 
-            if use_codex:
-                findings = await self._run_codex_cli_agent(agent)
-            elif use_overseer:
+            if use_overseer:
                 # Overseer mode - Use native Overseer.run() which spawns real sub-agents
                 # This enables Foundation-first flow with 64 specialists
-                print("[Orchestrator] Running NATIVE Overseer with Foundation-first sub-agents...")
+                # Works with both Claude CLI and Codex CLI (dispatcher routes by provider)
+                provider_label = "Codex CLI" if use_codex else "Claude CLI"
+                print(f"[Orchestrator] Running NATIVE Overseer with Foundation-first sub-agents ({provider_label})...")
                 findings = await agent.run()
+            elif use_codex:
+                findings = await self._run_codex_cli_agent(agent)
             elif use_sdk:
                 # SDK mode - Single agent with enhanced prompt
                 findings = await self._run_sdk_agent(agent, use_overseer=False)

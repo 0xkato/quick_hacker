@@ -567,9 +567,11 @@ class AgentOrchestrator:
             flow_service.clear_flow(agent.id)
             # Cleanup spans to prevent memory leaks
             span_service.clear_agent_spans(agent.id)
-            # NOTE: Do NOT clear observability data here — it's bounded by
-            # MAX_INTERACTIONS_PER_AGENT (1000) and users need it to survive
-            # page refreshes. Data clears naturally on server restart.
+            # Persist LLM interactions and tool details to database
+            try:
+                await observability_service.save_to_db(agent.id)
+            except Exception as e:
+                print(f"[Orchestrator] Failed to save observability to DB: {e}")
 
     async def _run_sdk_agent(self, agent: BaseAgent, use_overseer: bool = False) -> list[Finding]:
         """Run an agent using the Claude SDK provider.

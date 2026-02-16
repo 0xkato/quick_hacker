@@ -599,17 +599,24 @@ async def get_llm_interactions(
     offset: int = Query(0, description="Number of interactions to skip"),
 ):
     """Get LLM interactions for an agent."""
+    # Tier 1: In-memory (active scans)
     interactions = observability_service.get_interactions(agent_id, limit, offset)
-    if not interactions:
-        snapshot = persistence_service.load_agent_state(agent_id)
-        if snapshot and snapshot.llm_interactions:
-            persisted = snapshot.llm_interactions
-            if offset:
-                persisted = persisted[offset:]
-            if limit:
-                persisted = persisted[:limit]
-            return persisted
-    return [i.model_dump(exclude_none=True) for i in interactions]
+    if interactions:
+        return [i.model_dump(exclude_none=True) for i in interactions]
+    # Tier 2: Database (completed scans)
+    db_interactions = await observability_service.load_interactions_from_db(agent_id, limit, offset)
+    if db_interactions:
+        return db_interactions
+    # Tier 3: JSON snapshot (legacy fallback)
+    snapshot = persistence_service.load_agent_state(agent_id)
+    if snapshot and snapshot.llm_interactions:
+        persisted = snapshot.llm_interactions
+        if offset:
+            persisted = persisted[offset:]
+        if limit:
+            persisted = persisted[:limit]
+        return persisted
+    return []
 
 
 @router.get("/{agent_id}/tool-details")
@@ -619,17 +626,24 @@ async def get_tool_details(
     offset: int = Query(0, description="Number of tool details to skip"),
 ):
     """Get tool execution details for an agent."""
+    # Tier 1: In-memory (active scans)
     details = observability_service.get_tool_details(agent_id, limit, offset)
-    if not details:
-        snapshot = persistence_service.load_agent_state(agent_id)
-        if snapshot and snapshot.tool_details:
-            persisted = snapshot.tool_details
-            if offset:
-                persisted = persisted[offset:]
-            if limit:
-                persisted = persisted[:limit]
-            return persisted
-    return [d.model_dump(exclude_none=True) for d in details]
+    if details:
+        return [d.model_dump(exclude_none=True) for d in details]
+    # Tier 2: Database (completed scans)
+    db_details = await observability_service.load_tool_details_from_db(agent_id, limit, offset)
+    if db_details:
+        return db_details
+    # Tier 3: JSON snapshot (legacy fallback)
+    snapshot = persistence_service.load_agent_state(agent_id)
+    if snapshot and snapshot.tool_details:
+        persisted = snapshot.tool_details
+        if offset:
+            persisted = persisted[offset:]
+        if limit:
+            persisted = persisted[:limit]
+        return persisted
+    return []
 
 
 @router.get("/{agent_id}/observability-stats")

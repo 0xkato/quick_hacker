@@ -4,6 +4,7 @@ Observability Service - Tracks LLM interactions and tool executions.
 Provides real-time visibility into agent decision-making process.
 """
 
+import json
 import uuid
 from datetime import datetime
 from typing import Optional, Callable, Any
@@ -459,6 +460,180 @@ class ObservabilityService:
             "tool_details": [t.model_dump() for t in self._tool_details.get(agent_id, [])],
             "token_usage": self.get_token_usage(agent_id).model_dump(),
         }
+
+    # === Database Persistence ===
+
+    async def save_to_db(self, agent_id: str) -> int:
+        """Flush in-memory interactions and tool details to database.
+
+        Called on agent completion/failure/cancel. Returns total records saved.
+        """
+        from database.connection import get_session
+        from database.models import DBLLMInteraction, DBToolDetail
+
+        interactions = self._interactions.get(agent_id, [])
+        tool_details = self._tool_details.get(agent_id, [])
+
+        if not interactions and not tool_details:
+            return 0
+
+        saved = 0
+        try:
+            async with get_session() as session:
+                for i in interactions:
+                    db_row = DBLLMInteraction(
+                        id=i.id,
+                        agent_id=i.agent_id,
+                        interaction_type=i.interaction_type.value if hasattr(i.interaction_type, 'value') else str(i.interaction_type),
+                        timestamp=i.timestamp,
+                        summary=i.summary,
+                        full_content=i.full_content,
+                        messages=i.messages,
+                        tools_available=i.tools_available,
+                        tool_calls=i.tool_calls,
+                        prompt_tokens=i.prompt_tokens,
+                        completion_tokens=i.completion_tokens,
+                        total_tokens=i.total_tokens,
+                        duration_ms=i.duration_ms,
+                        model=i.model,
+                        provider=i.provider,
+                        request_id=i.request_id,
+                        subagent=i.subagent,
+                    )
+                    session.add(db_row)
+                    saved += 1
+
+                for t in tool_details:
+                    result_str = None
+                    if t.result is not None:
+                        try:
+                            result_str = json.dumps(t.result, default=str)
+                        except Exception:
+                            result_str = str(t.result)[:10000]
+
+                    db_row = DBToolDetail(
+                        id=t.id,
+                        agent_id=t.agent_id,
+                        timestamp=t.timestamp,
+                        tool_name=t.tool_name,
+                        tool_call_id=t.tool_call_id,
+                        arguments=t.arguments,
+                        arguments_summary=t.arguments_summary,
+                        result_data=result_str,
+                        result_summary=t.result_summary,
+                        success=t.success,
+                        error_message=t.error_message,
+                        code_context=t.code_context,
+                        duration_ms=t.duration_ms,
+                        llm_reasoning=t.llm_reasoning,
+                        confidence_score=t.confidence_score,
+                        subagent=t.subagent,
+                    )
+                    session.add(db_row)
+                    saved += 1
+
+                await session.commit()
+        except Exception as e:
+            print(f"[Observability] DB save error for {agent_id}: {e}")
+            return 0
+
+        print(f"[Observability] Saved {saved} records to DB for agent {agent_id}")
+        return saved
+
+    @staticmethod
+    async def load_interactions_from_db(
+        agent_id: str, limit: int | None = None, offset: int = 0
+    ) -> list[dict]:
+        """Load LLM interactions from database for completed agents."""
+        from database.connection import get_session
+        from database.models import DBLLMInteraction
+        from sqlalchemy import select
+
+        try:
+            async with get_session() as session:
+                query = (
+                    select(DBLLMInteraction)
+                    .where(DBLLMInteraction.agent_id == agent_id)
+                    .order_by(DBLLMInteraction.timestamp.asc())
+                    .offset(offset)
+                )
+                if limit:
+                    query = query.limit(limit)
+                result = await session.execute(query)
+                rows = result.scalars().all()
+        except Exception as e:
+            print(f"[Observability] DB load error for interactions {agent_id}: {e}")
+            return []
+
+        return [
+            {
+                "id": r.id,
+                "agent_id": r.agent_id,
+                "interaction_type": r.interaction_type,
+                "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                "summary": r.summary,
+                "full_content": r.full_content,
+                "messages": r.messages,
+                "tools_available": r.tools_available,
+                "tool_calls": r.tool_calls,
+                "prompt_tokens": r.prompt_tokens,
+                "completion_tokens": r.completion_tokens,
+                "total_tokens": r.total_tokens,
+                "duration_ms": r.duration_ms,
+                "model": r.model,
+                "provider": r.provider,
+                "request_id": r.request_id,
+                "subagent": r.subagent,
+            }
+            for r in rows
+        ]
+
+    @staticmethod
+    async def load_tool_details_from_db(
+        agent_id: str, limit: int | None = None, offset: int = 0
+    ) -> list[dict]:
+        """Load tool details from database for completed agents."""
+        from database.connection import get_session
+        from database.models import DBToolDetail
+        from sqlalchemy import select
+
+        try:
+            async with get_session() as session:
+                query = (
+                    select(DBToolDetail)
+                    .where(DBToolDetail.agent_id == agent_id)
+                    .order_by(DBToolDetail.timestamp.asc())
+                    .offset(offset)
+                )
+                if limit:
+                    query = query.limit(limit)
+                result = await session.execute(query)
+                rows = result.scalars().all()
+        except Exception as e:
+            print(f"[Observability] DB load error for tool details {agent_id}: {e}")
+            return []
+
+        return [
+            {
+                "id": r.id,
+                "agent_id": r.agent_id,
+                "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                "tool_name": r.tool_name,
+                "tool_call_id": r.tool_call_id,
+                "arguments": r.arguments,
+                "arguments_summary": r.arguments_summary,
+                "result": json.loads(r.result_data) if r.result_data else None,
+                "result_summary": r.result_summary,
+                "success": r.success,
+                "error_message": r.error_message,
+                "code_context": r.code_context,
+                "duration_ms": r.duration_ms,
+                "llm_reasoning": r.llm_reasoning,
+                "confidence_score": r.confidence_score,
+                "subagent": r.subagent,
+            }
+            for r in rows
+        ]
 
 
 # Global instance

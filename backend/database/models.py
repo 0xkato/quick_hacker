@@ -295,3 +295,62 @@ class Scan(Base):
 
     def __repr__(self) -> str:
         return f"<Scan(id={self.id}, repo_id={self.repo_id}, status={self.status})>"
+
+
+class DBLLMInteraction(Base):
+    """Persisted LLM interaction (request or response)."""
+    __tablename__ = "llm_interactions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    interaction_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    full_content: Mapped[str] = mapped_column(Text, nullable=False)
+    messages: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    tools_available: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    tool_calls: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    subagent: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    __table_args__ = (
+        Index("idx_llm_interactions_agent_ts", "agent_id", "timestamp"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DBLLMInteraction(id={self.id}, agent_id={self.agent_id}, type={self.interaction_type})>"
+
+
+class DBToolDetail(Base):
+    """Persisted tool execution detail."""
+    __tablename__ = "tool_details"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    tool_call_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    arguments: Mapped[dict] = mapped_column(JSON, nullable=False)
+    arguments_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    result_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    code_context: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    llm_reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    subagent: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    __table_args__ = (
+        Index("idx_tool_details_agent_ts", "agent_id", "timestamp"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DBToolDetail(id={self.id}, tool={self.tool_name})>"

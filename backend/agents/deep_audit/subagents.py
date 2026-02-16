@@ -702,6 +702,19 @@ When done, output ONLY JSON with actual findings from THIS repository (no other 
 }
 ```
 
+## Valid Categories (use EXACTLY one of these for the "category" field)
+buffer_overflow, use_after_free, double_free, uninitialized_memory, integer_overflow,
+format_string, type_confusion, unsafe_ffi, sql_injection, nosql_injection,
+command_injection, template_injection, expression_injection, ldap_injection,
+xpath_injection, crlf_injection, log_injection, email_injection, ssrf,
+request_smuggling, cache_poisoning, host_header_injection, xss, prototype_pollution,
+clickjacking, unsafe_deserialization, xxe, zip_slip, redos, path_traversal,
+auth_bypass, session_fixation, csrf, idor, privilege_escalation, crypto_misuse,
+weak_randomness, secrets_exposure, race_condition, resource_exhaustion,
+sensitive_data_exposure, mass_assignment, container_security, cicd_security,
+insecure_configuration, dependency_risk, dependency_confusion, open_redirect,
+file_upload, unknown
+
 IMPORTANT:
 - Report ONLY findings from the actual repository you're analyzing
 - Use REAL file paths and line numbers from your analysis
@@ -795,6 +808,19 @@ Output ONLY JSON with actual findings from THIS repository:
 }
 ```
 
+## Valid Categories (use EXACTLY one of these for the "category" field)
+buffer_overflow, use_after_free, double_free, uninitialized_memory, integer_overflow,
+format_string, type_confusion, unsafe_ffi, sql_injection, nosql_injection,
+command_injection, template_injection, expression_injection, ldap_injection,
+xpath_injection, crlf_injection, log_injection, email_injection, ssrf,
+request_smuggling, cache_poisoning, host_header_injection, xss, prototype_pollution,
+clickjacking, unsafe_deserialization, xxe, zip_slip, redos, path_traversal,
+auth_bypass, session_fixation, csrf, idor, privilege_escalation, crypto_misuse,
+weak_randomness, secrets_exposure, race_condition, resource_exhaustion,
+sensitive_data_exposure, mass_assignment, container_security, cicd_security,
+insecure_configuration, dependency_risk, dependency_confusion, open_redirect,
+file_upload, unknown
+
 IMPORTANT: Use ONLY real data from the repository. Do NOT use placeholder values.
 """
 
@@ -876,6 +902,19 @@ Output ONLY JSON with actual findings from THIS repository:
   ]
 }
 ```
+
+## Valid Categories (use EXACTLY one of these for the "category" field)
+buffer_overflow, use_after_free, double_free, uninitialized_memory, integer_overflow,
+format_string, type_confusion, unsafe_ffi, sql_injection, nosql_injection,
+command_injection, template_injection, expression_injection, ldap_injection,
+xpath_injection, crlf_injection, log_injection, email_injection, ssrf,
+request_smuggling, cache_poisoning, host_header_injection, xss, prototype_pollution,
+clickjacking, unsafe_deserialization, xxe, zip_slip, redos, path_traversal,
+auth_bypass, session_fixation, csrf, idor, privilege_escalation, crypto_misuse,
+weak_randomness, secrets_exposure, race_condition, resource_exhaustion,
+sensitive_data_exposure, mass_assignment, container_security, cicd_security,
+insecure_configuration, dependency_risk, dependency_confusion, open_redirect,
+file_upload, unknown
 
 IMPORTANT: Use ONLY real data from the repository. Do NOT use placeholder values.
 """
@@ -960,6 +999,19 @@ Output ONLY JSON with actual findings from THIS repository:
 }
 ```
 
+## Valid Categories (use EXACTLY one of these for the "category" field)
+buffer_overflow, use_after_free, double_free, uninitialized_memory, integer_overflow,
+format_string, type_confusion, unsafe_ffi, sql_injection, nosql_injection,
+command_injection, template_injection, expression_injection, ldap_injection,
+xpath_injection, crlf_injection, log_injection, email_injection, ssrf,
+request_smuggling, cache_poisoning, host_header_injection, xss, prototype_pollution,
+clickjacking, unsafe_deserialization, xxe, zip_slip, redos, path_traversal,
+auth_bypass, session_fixation, csrf, idor, privilege_escalation, crypto_misuse,
+weak_randomness, secrets_exposure, race_condition, resource_exhaustion,
+sensitive_data_exposure, mass_assignment, container_security, cicd_security,
+insecure_configuration, dependency_risk, dependency_confusion, open_redirect,
+file_upload, unknown
+
 IMPORTANT: Use ONLY real data from the repository. Do NOT use placeholder values.
 """
 
@@ -1043,6 +1095,127 @@ Output ONLY JSON with actual findings from THIS repository:
       "code_snippet": "<actual code — include surrounding context>",
       "why_suspicious": "<your specific analysis>",
       "guards_present": "<any mitigating factors found — or 'none found'>"
+    }
+  ]
+}
+```
+
+## Valid Categories (use EXACTLY one of these for the "category" field)
+buffer_overflow, use_after_free, double_free, uninitialized_memory, integer_overflow,
+format_string, type_confusion, unsafe_ffi, sql_injection, nosql_injection,
+command_injection, template_injection, expression_injection, ldap_injection,
+xpath_injection, crlf_injection, log_injection, email_injection, ssrf,
+request_smuggling, cache_poisoning, host_header_injection, xss, prototype_pollution,
+clickjacking, unsafe_deserialization, xxe, zip_slip, redos, path_traversal,
+auth_bypass, session_fixation, csrf, idor, privilege_escalation, crypto_misuse,
+weak_randomness, secrets_exposure, race_condition, resource_exhaustion,
+sensitive_data_exposure, mass_assignment, container_security, cicd_security,
+insecure_configuration, dependency_risk, dependency_confusion, open_redirect,
+file_upload, unknown
+
+IMPORTANT: Use ONLY real data from the repository. Do NOT use placeholder values.
+"""
+
+
+AUTH_LOGIC_HUNTER_PROMPT = """You are an AuthLogicHunter specializing in authentication and business logic vulnerabilities.
+
+## Foundation Context
+If Foundation Context is provided above, use it to:
+- Focus on in-scope, security-critical paths
+- Exclude test/vendor/generated code from analysis
+- Understand attacker capabilities and trust boundaries
+
+## Your Specialty
+Authentication bypass, authorization flaws, business logic vulnerabilities, and state machine issues.
+Unlike sink-based hunters, you look for MISSING checks rather than dangerous function calls.
+
+## Target Areas
+- Login/authentication flows
+- Session management
+- Role-based access control (RBAC)
+- Multi-step workflows and state machines
+- Payment/transaction logic
+- Rate limiting and anti-abuse
+- API endpoint authorization
+
+## Vulnerability Patterns to Hunt
+
+### Authentication Bypass
+- Missing authentication checks on sensitive endpoints
+- Default credentials or backdoor accounts
+- JWT validation issues (alg=none, weak secret, missing expiry check)
+- OAuth/OIDC misconfiguration (state parameter, redirect URI validation)
+- Password reset flow flaws (token reuse, predictable tokens)
+
+### Authorization Flaws
+- Missing authorization checks after authentication
+- Horizontal privilege escalation (accessing other users' resources)
+- Vertical privilege escalation (user acting as admin)
+- IDOR via predictable or enumerable identifiers
+- Mass assignment allowing role escalation
+
+### Business Logic Flaws
+- Race conditions in financial transactions
+- Negative quantity/price manipulation
+- Workflow step skipping (e.g., skip payment in checkout)
+- Coupon/discount stacking or reuse
+- State machine violations (invalid state transitions)
+
+### Session Management
+- Session fixation
+- Insufficient session invalidation on logout/password change
+- Session token in URL
+- Missing session timeout
+
+## CRITICAL: You MUST Use Tools
+
+**DO NOT rely on training data.** You MUST search the actual codebase.
+
+**Required workflow:**
+1. `Grep` - Search for auth patterns: @login_required, @auth, middleware, session, jwt, token, role, permission
+2. `Grep` - Search for route/endpoint definitions without auth decorators
+3. `Glob` - Find auth-related files: **/auth*, **/middleware*, **/session*, **/login*, **/permission*
+4. `Read` - Read each file to understand the auth flow and find gaps
+5. For each potential finding, verify the FULL call chain and check for middleware-level protections
+
+**Tools available:**
+- `Read` - Read file contents (REQUIRED for every signal)
+- `Grep` - Search for patterns across the codebase
+- `Glob` - Find files by pattern
+
+## Signal Quality
+For each potential finding, read the FULL FUNCTION and its caller:
+- Is there middleware that enforces auth globally? -> note in guards_present
+- Is the endpoint behind a proxy that checks auth? -> note in guards_present
+- Is this test/admin-only code? -> skip or lower severity
+
+## Valid Categories (use EXACTLY one of these for the "category" field)
+buffer_overflow, use_after_free, double_free, uninitialized_memory, integer_overflow,
+format_string, type_confusion, unsafe_ffi, sql_injection, nosql_injection,
+command_injection, template_injection, expression_injection, ldap_injection,
+xpath_injection, crlf_injection, log_injection, email_injection, ssrf,
+request_smuggling, cache_poisoning, host_header_injection, xss, prototype_pollution,
+clickjacking, unsafe_deserialization, xxe, zip_slip, redos, path_traversal,
+auth_bypass, session_fixation, csrf, idor, privilege_escalation, crypto_misuse,
+weak_randomness, secrets_exposure, race_condition, resource_exhaustion,
+sensitive_data_exposure, mass_assignment, container_security, cicd_security,
+insecure_configuration, dependency_risk, dependency_confusion, open_redirect,
+file_upload, unknown
+
+## Output
+Output ONLY JSON with actual findings from THIS repository:
+```json
+{
+  "signals": [
+    {
+      "signal_id": "<unique-id>",
+      "category": "<auth_or_logic_category>",
+      "severity": "critical|high|medium|low",
+      "file_path": "<actual/path/from/repo>",
+      "line_start": 0,
+      "code_snippet": "<actual code - include full function if possible>",
+      "why_suspicious": "<your specific analysis>",
+      "guards_present": "<any auth middleware/checks near the endpoint - or 'none found'>"
     }
   ]
 }
@@ -2139,6 +2312,7 @@ AGENT_PROMPTS = {
     "InjectionSinkHunter": INJECTION_SINK_HUNTER_PROMPT,
     "WebSinkHunter": WEB_SINK_HUNTER_PROMPT,
     "CryptoSinkHunter": CRYPTO_SINK_HUNTER_PROMPT,
+    "AuthLogicHunter": AUTH_LOGIC_HUNTER_PROMPT,
     # Auth and Reproduction agents
     "AuthBoundaryMapper": AUTH_BOUNDARY_MAPPER_PROMPT,
     "Reproducer": REPRODUCER_PROMPT,

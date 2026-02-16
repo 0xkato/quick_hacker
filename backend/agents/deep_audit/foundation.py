@@ -372,6 +372,17 @@ class SignalCategory(Enum):
     SENSITIVE_DATA_EXPOSURE = "sensitive_data_exposure"
     MASS_ASSIGNMENT = "mass_assignment"
 
+    # Infrastructure
+    CONTAINER_SECURITY = "container_security"
+    CICD_SECURITY = "cicd_security"
+    INSECURE_CONFIGURATION = "insecure_configuration"
+    # Supply Chain
+    DEPENDENCY_RISK = "dependency_risk"
+    DEPENDENCY_CONFUSION = "dependency_confusion"
+    # Business Logic / Web
+    OPEN_REDIRECT = "open_redirect"
+    FILE_UPLOAD = "file_upload"
+
     # Generic
     UNKNOWN = "unknown"
 

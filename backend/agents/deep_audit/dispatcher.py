@@ -74,6 +74,7 @@ AGENT_MODEL_MAP: dict[str, str] = {
     "InjectionSinkHunter": "sonnet",
     "WebSinkHunter": "sonnet",
     "CryptoSinkHunter": "sonnet",
+    "AuthLogicHunter": "opus",
     "AuthBoundaryMapper": "sonnet",
     # Verification agents → Opus
     "Auditor": "opus",
@@ -715,7 +716,7 @@ Begin your analysis now."""
                 agent_type=task.agent_type,
                 status=status,
                 output_path=task.deliverable,
-                output=output if not error_message else None,  # Include raw output
+                output=output,  # Always preserve raw output for downstream extraction
                 started_at=started_at,
                 completed_at=completed_at,
                 error=error_message,

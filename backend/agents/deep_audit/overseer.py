@@ -752,6 +752,25 @@ Begin now. Use ALL available time productively."""
                 ("Dependency vulnerabilities, outdated libraries, known CVEs", "supply_chain"),
             ]
 
+            # Map hunt focus names to specialized SinkHunter agent types.
+            # Specialized hunters have domain-specific prompts with targeted sink patterns.
+            FOCUS_TO_AGENT_TYPE = {
+                "injection": "InjectionSinkHunter",
+                "network": "WebSinkHunter",
+                "deserialization": "SinkHunter",
+                "memory": "MemorySinkHunter",
+                "auth": "AuthLogicHunter",
+                "crypto": "CryptoSinkHunter",
+                "race": "SinkHunter",
+                "input": "WebSinkHunter",
+                "idor": "AuthLogicHunter",
+                "api_misuse": "SinkHunter",
+                "logic": "AuthLogicHunter",
+                "randomness": "CryptoSinkHunter",
+                "disclosure": "SinkHunter",
+                "supply_chain": "SinkHunter",
+            }
+
             while (self.campaign_state.time_remaining() > MIN_TIME_FOR_WAVE
                    and self.waves_completed < EFFECTIVE_MAX_WAVES
                    and not self._cancelled):
@@ -789,8 +808,10 @@ Begin now. Use ALL available time productively."""
                 signals_count = len(self.campaign_state.confirmed_findings)
 
                 # Always hunt for MORE vulnerabilities with a specific focus
+                # Use specialized hunter type when available for better domain coverage
+                wave_agent_type = FOCUS_TO_AGENT_TYPE.get(focus_name, "SinkHunter")
                 tasks.append(DispatchTask(
-                    agent_type="SinkHunter",
+                    agent_type=wave_agent_type,
                     objective=f"Hunt specifically for {hunt_focus} vulnerabilities. Look for dangerous function calls, unsafe patterns, and exploitable code paths.",
                     scope=self.repo_path_str,
                     deliverable=f"/memories/waves/wave_{wave_num}/sinks_{focus_name}.json",
@@ -1136,6 +1157,9 @@ Output JSON with your analysis for each signal.""",
                     if isinstance(signals, list):
                         for signal in signals:
                             if isinstance(signal, dict):
+                                # Minimum required fields — skip signals without location info
+                                if not (signal.get("file_path") or signal.get("location")):
+                                    continue
                                 # Convert signal to finding format
                                 # CRITICAL: Preserve signal_id for downstream routing
                                 # Generate title from category if no explicit title
@@ -1324,6 +1348,9 @@ Output JSON with your analysis for each signal.""",
                         if isinstance(signals, list):
                             for signal in signals:
                                 if isinstance(signal, dict):
+                                    # Minimum required fields — skip signals without location info
+                                    if not (signal.get("file_path") or signal.get("location")):
+                                        continue
                                     # CRITICAL: Preserve signal_id for downstream routing
                                     # Generate title from category if no explicit title (SinkHunter outputs category, not title)
                                     category = signal.get("category", signal.get("vulnerability_type", "unknown"))
@@ -1416,6 +1443,63 @@ Output JSON with your analysis for each signal.""",
             print(f"[Overseer] Error collecting specialist verdicts: {e}")
 
     # =========================================================================
+    # SIGNAL PRE-SCREENING
+    # =========================================================================
+
+    def _pre_screen_signal(self, signal: dict) -> dict:
+        """Pre-screen a signal before routing: adjust confidence based on guards and language mismatch.
+
+        This lightweight check avoids sending obviously low-value signals through
+        the full Decider -> Specialist -> Triager pipeline by lowering their confidence.
+        """
+        original_confidence = signal.get("confidence", 0.7)
+        if not isinstance(original_confidence, (int, float)):
+            original_confidence = 0.7
+        confidence_adjustment = 0.0
+
+        # Check guards_present for strong mitigation indicators
+        guards = signal.get("guards_present", "")
+        if isinstance(guards, list):
+            guards = " ".join(str(g) for g in guards)
+        guards_lower = str(guards).lower()
+
+        strong_mitigations = [
+            "parameterized", "prepared statement", "bounds check",
+            "sanitized", "validated", "allowlist", "whitelist",
+            "encoded", "escaped", "csrf token", "rate limit",
+        ]
+        for mitigation in strong_mitigations:
+            if mitigation in guards_lower:
+                confidence_adjustment -= 0.15
+                break
+
+        # Check if signal category matches repo languages
+        if self.foundation_ctx and self.foundation_ctx.repo_profile:
+            languages = [lang.lower() for lang in (self.foundation_ctx.repo_profile.languages or [])]
+            category = signal.get("category", "").lower()
+
+            # Memory safety issues in non-native-code repos
+            memory_categories = {"buffer_overflow", "use_after_free", "double_free",
+                                 "uninitialized_memory", "format_string", "type_confusion", "unsafe_ffi"}
+            native_languages = {"c", "c++", "cpp", "rust", "zig", "assembly"}
+            if category in memory_categories and not any(lang in native_languages for lang in languages):
+                confidence_adjustment -= 0.2
+
+            # Web categories in non-web repos (CLI tools, embedded systems)
+            web_categories = {"xss", "csrf", "clickjacking", "open_redirect", "ssrf",
+                              "request_smuggling", "cache_poisoning", "host_header_injection"}
+            web_indicators = {"javascript", "typescript", "python", "ruby", "php", "java", "go", "html"}
+            if category in web_categories and not any(lang in web_indicators for lang in languages):
+                confidence_adjustment -= 0.15
+
+        if confidence_adjustment != 0.0:
+            new_confidence = max(0.1, min(1.0, float(original_confidence) + confidence_adjustment))
+            signal["confidence"] = new_confidence
+            signal["pre_screened"] = True
+
+        return signal
+
+    # =========================================================================
     # SIGNAL ROUTING PIPELINE
     # =========================================================================
 
@@ -1434,6 +1518,9 @@ Output JSON with your analysis for each signal.""",
 
         # Track this signal through the pipeline
         self.signal_tracker.enter(signal_id, signal_title, signal_severity)
+
+        # Pre-screen: adjust confidence based on guards and language mismatch
+        signal = self._pre_screen_signal(signal)
 
         # Pre-check: skip signals that were dismissed in a previous scan.
         # Load cache on first call, then O(1) set lookups for subsequent signals.
@@ -1550,7 +1637,7 @@ Output JSON with your analysis for each signal.""",
             if duration_seconds < self.quick_dismissal_threshold:
                 return True
             # Low confidence
-            confidence = specialist_result.get("confidence", 100)
+            confidence = specialist_result.get("confidence", 50)
             if isinstance(confidence, (int, float)) and confidence < 70:
                 return True
 
@@ -1560,7 +1647,7 @@ Output JSON with your analysis for each signal.""",
             if duration_seconds < self.quick_dismissal_threshold / 2:
                 return True
             # Very low confidence
-            confidence = specialist_result.get("confidence", 100)
+            confidence = specialist_result.get("confidence", 50)
             if isinstance(confidence, (int, float)) and confidence < 50:
                 return True
 
@@ -2229,10 +2316,23 @@ Required schema (output this directly, not in a code block):
         text = raw_output.upper()
 
         # Determine classification from prose
+        # Search conclusion (last paragraph) first, then full text
+        # Check for negation words near the keyword to avoid "NOT a SECURITY_VULNERABILITY"
+        paragraphs = raw_output.strip().split("\n\n")
         classification = None
-        for candidate in ["SECURITY_VULNERABILITY", "HARDENING", "BY_DESIGN", "DISMISSED", "BUG", "MISCONFIGURATION"]:
-            if candidate in text:
+        for search_text in [paragraphs[-1].upper() if paragraphs else "", text]:
+            for candidate in ["SECURITY_VULNERABILITY", "HARDENING", "BY_DESIGN", "DISMISSED", "BUG", "MISCONFIGURATION"]:
+                # Find the LAST occurrence and check prefix for negation
+                idx = search_text.rfind(candidate)
+                if idx == -1:
+                    continue
+                # Check 30 chars before the keyword for negation
+                prefix = search_text[max(0, idx - 30):idx]
+                if any(neg in prefix for neg in ("NOT ", "NOT A ", "ISN'T ", "IS NOT ")):
+                    continue
                 classification = candidate
+                break
+            if classification:
                 break
 
         if not classification:
@@ -2704,15 +2804,16 @@ Required schema (output this directly, not in a code block):
         This ensures findings survive page refreshes and server restarts even
         if the audit is still running or gets interrupted.
         """
-        # Block unverified findings — these should never reach the database.
-        # They are created when the triager fails (parse error, exception) and
-        # carry classification="UNVERIFIED" with a fallback description from the
-        # hunter's raw signal. Persisting them would mislabel them as SECURITY_ISSUE
-        # (the FindingCreate default) and show phantom findings in the UI.
+        # Downgrade unverified findings to low-confidence SECURITY_ISSUE instead of dropping.
+        # These are created when the triager fails (parse error, exception). Rather than
+        # silently losing potentially real vulnerabilities, persist them with low confidence
+        # and an unverified flag so they appear in reports for manual review.
         if finding.get("classification") == "UNVERIFIED":
-            print(f"[Overseer] Skipping unverified finding: {finding.get('title', '?')} (reason: {finding.get('unverified_reason', '?')})")
-            self.signal_tracker.record_persist("unverified_blocked")
-            return None
+            print(f"[Overseer] Persisting unverified finding with low confidence: {finding.get('title', '?')}")
+            finding["classification"] = "SECURITY_ISSUE"
+            finding["confidence"] = 0.3
+            finding["unverified"] = True
+            self.signal_tracker.record_persist("unverified_persisted")
 
         try:
             location = finding.get("file_path") or finding.get("location", "")
@@ -2787,13 +2888,13 @@ Required schema (output this directly, not in a code block):
                     skipped_count += 1
                     continue
 
-                # Block unverified findings — same guard as _persist_finding_immediately.
-                # These are created when the triager fails and would be mislabeled as
-                # SECURITY_ISSUE (FindingCreate default) if persisted.
+                # Downgrade unverified findings to low-confidence SECURITY_ISSUE instead of dropping
                 if finding_data.get("classification") == "UNVERIFIED":
-                    print(f"[Overseer] _process_findings: Skipping unverified finding: {finding_data.get('title', '?')}")
-                    skipped_count += 1
-                    continue
+                    print(f"[Overseer] _process_findings: Persisting unverified finding with low confidence: {finding_data.get('title', '?')}")
+                    finding_data["classification"] = "SECURITY_ISSUE"
+                    finding_data["confidence"] = 0.3
+                    finding_data["unverified"] = True
+                    # Fall through to persist
 
                 # Debug: show what we're processing
                 if i < 3:  # Only show first 3 to avoid log spam

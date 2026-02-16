@@ -131,6 +131,17 @@ CATEGORY_TO_FAMILY: dict[SignalCategory, SpecialistFamily] = {
     SignalCategory.SENSITIVE_DATA_EXPOSURE: SpecialistFamily.DATA_EXPOSURE,
     SignalCategory.MASS_ASSIGNMENT: SpecialistFamily.API_DESIGN,
 
+    # Infrastructure
+    SignalCategory.CONTAINER_SECURITY: SpecialistFamily.INFRASTRUCTURE,
+    SignalCategory.CICD_SECURITY: SpecialistFamily.INFRASTRUCTURE,
+    SignalCategory.INSECURE_CONFIGURATION: SpecialistFamily.INFRASTRUCTURE,
+    # Supply Chain
+    SignalCategory.DEPENDENCY_RISK: SpecialistFamily.SUPPLY_CHAIN,
+    SignalCategory.DEPENDENCY_CONFUSION: SpecialistFamily.SUPPLY_CHAIN,
+    # Business Logic / Web
+    SignalCategory.OPEN_REDIRECT: SpecialistFamily.WEB_EDGE_CASES,
+    SignalCategory.FILE_UPLOAD: SpecialistFamily.FILE_SYSTEM,
+
     # Generic - routes to API_DESIGN as catchall
     SignalCategory.UNKNOWN: SpecialistFamily.API_DESIGN,
 }
@@ -511,28 +522,28 @@ ALL_SPECIALISTS: list[SpecialistInfo] = [
         id="insecure_config_auditor",
         name="Insecure Configuration Auditor",
         family=SpecialistFamily.INFRASTRUCTURE,
-        triggers=[SignalCategory.SECRETS_EXPOSURE],
+        triggers=[SignalCategory.INSECURE_CONFIGURATION, SignalCategory.SECRETS_EXPOSURE],
         proficiency="Expert at finding security misconfigurations in application and infrastructure settings.",
     ),
     SpecialistInfo(
         id="container_auditor",
         name="Container Security Auditor",
         family=SpecialistFamily.INFRASTRUCTURE,
-        triggers=[SignalCategory.PRIVILEGE_ESCALATION],
+        triggers=[SignalCategory.CONTAINER_SECURITY, SignalCategory.PRIVILEGE_ESCALATION],
         proficiency="Expert at detecting Docker/container security issues including escape vectors and privileged containers.",
     ),
     SpecialistInfo(
         id="k8s_auditor",
         name="Kubernetes Security Auditor",
         family=SpecialistFamily.INFRASTRUCTURE,
-        triggers=[SignalCategory.PRIVILEGE_ESCALATION, SignalCategory.SECRETS_EXPOSURE],
+        triggers=[SignalCategory.CONTAINER_SECURITY, SignalCategory.PRIVILEGE_ESCALATION, SignalCategory.SECRETS_EXPOSURE],
         proficiency="Expert at finding Kubernetes misconfigurations, RBAC issues, and pod security violations.",
     ),
     SpecialistInfo(
         id="cicd_auditor",
         name="CI/CD Security Auditor",
         family=SpecialistFamily.INFRASTRUCTURE,
-        triggers=[SignalCategory.COMMAND_INJECTION, SignalCategory.SECRETS_EXPOSURE],
+        triggers=[SignalCategory.CICD_SECURITY, SignalCategory.COMMAND_INJECTION, SignalCategory.SECRETS_EXPOSURE],
         proficiency="Expert at detecting CI/CD pipeline vulnerabilities including poisoned pipelines and secrets exposure.",
     ),
 
@@ -541,21 +552,21 @@ ALL_SPECIALISTS: list[SpecialistInfo] = [
         id="dependency_risk_auditor",
         name="Dependency Risk Auditor",
         family=SpecialistFamily.SUPPLY_CHAIN,
-        triggers=[SignalCategory.UNKNOWN],
+        triggers=[SignalCategory.DEPENDENCY_RISK],
         proficiency="Expert at assessing dependency vulnerabilities and transitive risk in package ecosystems.",
     ),
     SpecialistInfo(
         id="dependency_confusion_auditor",
         name="Dependency Confusion Auditor",
         family=SpecialistFamily.SUPPLY_CHAIN,
-        triggers=[SignalCategory.UNKNOWN],
+        triggers=[SignalCategory.DEPENDENCY_CONFUSION],
         proficiency="Expert at detecting dependency confusion and namespace hijacking attacks.",
     ),
     SpecialistInfo(
         id="plugin_auditor",
         name="Plugin/Extension Auditor",
         family=SpecialistFamily.SUPPLY_CHAIN,
-        triggers=[SignalCategory.UNKNOWN],
+        triggers=[SignalCategory.DEPENDENCY_RISK, SignalCategory.DEPENDENCY_CONFUSION],
         proficiency="Expert at auditing plugin systems and extension mechanisms for sandbox escapes.",
     ),
 

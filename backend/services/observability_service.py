@@ -4,6 +4,7 @@ Observability Service - Tracks LLM interactions and tool executions.
 Provides real-time visibility into agent decision-making process.
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -127,6 +128,92 @@ class ObservabilityService:
             except Exception as e:
                 print(f"[Observability] Broadcast error: {e}")
 
+    # === Background DB Persistence ===
+
+    def _schedule_persist_interaction(self, interaction: LLMInteraction) -> None:
+        """Schedule async DB write for an interaction. Fire-and-forget."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_interaction(interaction))
+        except RuntimeError:
+            pass  # No event loop — skip DB write (will be caught by batch save)
+
+    def _schedule_persist_tool_detail(self, tool_detail: ToolDetail) -> None:
+        """Schedule async DB write for a tool detail. Fire-and-forget."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_tool_detail(tool_detail))
+        except RuntimeError:
+            pass
+
+    async def _persist_interaction(self, interaction: LLMInteraction) -> None:
+        """Write a single LLM interaction to the database."""
+        try:
+            from database.connection import get_session
+            from database.models import DBLLMInteraction
+
+            async with get_session() as session:
+                db_row = DBLLMInteraction(
+                    id=interaction.id,
+                    agent_id=interaction.agent_id,
+                    interaction_type=interaction.interaction_type.value if hasattr(interaction.interaction_type, 'value') else str(interaction.interaction_type),
+                    timestamp=interaction.timestamp,
+                    summary=interaction.summary,
+                    full_content=interaction.full_content,
+                    messages=interaction.messages,
+                    tools_available=interaction.tools_available,
+                    tool_calls=interaction.tool_calls,
+                    prompt_tokens=interaction.prompt_tokens,
+                    completion_tokens=interaction.completion_tokens,
+                    total_tokens=interaction.total_tokens,
+                    duration_ms=interaction.duration_ms,
+                    model=interaction.model,
+                    provider=interaction.provider,
+                    request_id=interaction.request_id,
+                    subagent=interaction.subagent,
+                )
+                await session.merge(db_row)
+                await session.commit()
+        except Exception as e:
+            print(f"[Observability] DB persist interaction error: {e}")
+
+    async def _persist_tool_detail(self, tool_detail: ToolDetail) -> None:
+        """Write a single tool detail to the database."""
+        try:
+            from database.connection import get_session
+            from database.models import DBToolDetail
+
+            result_str = None
+            if tool_detail.result is not None:
+                try:
+                    result_str = json.dumps(tool_detail.result, default=str)
+                except Exception:
+                    result_str = str(tool_detail.result)[:10000]
+
+            async with get_session() as session:
+                db_row = DBToolDetail(
+                    id=tool_detail.id,
+                    agent_id=tool_detail.agent_id,
+                    timestamp=tool_detail.timestamp,
+                    tool_name=tool_detail.tool_name,
+                    tool_call_id=tool_detail.tool_call_id,
+                    arguments=tool_detail.arguments,
+                    arguments_summary=tool_detail.arguments_summary,
+                    result_data=result_str,
+                    result_summary=tool_detail.result_summary,
+                    success=tool_detail.success,
+                    error_message=tool_detail.error_message,
+                    code_context=tool_detail.code_context,
+                    duration_ms=tool_detail.duration_ms,
+                    llm_reasoning=tool_detail.llm_reasoning,
+                    confidence_score=tool_detail.confidence_score,
+                    subagent=tool_detail.subagent,
+                )
+                await session.merge(db_row)
+                await session.commit()
+        except Exception as e:
+            print(f"[Observability] DB persist tool detail error: {e}")
+
     # === LLM Interaction Logging ===
 
     def log_llm_request(
@@ -171,6 +258,9 @@ class ObservabilityService:
             agent_id=agent_id,
             data=interaction.model_dump(exclude_none=True),
         ))
+
+        # Persist to DB in background
+        self._schedule_persist_interaction(interaction)
 
         return request_id
 
@@ -252,6 +342,9 @@ class ObservabilityService:
             data=interaction.model_dump(exclude_none=True),
         ))
 
+        # Persist to DB in background
+        self._schedule_persist_interaction(interaction)
+
     # === Tool Execution Logging ===
 
     def log_tool_execution(
@@ -301,6 +394,9 @@ class ObservabilityService:
             agent_id=agent_id,
             data=tool_detail.model_dump(exclude_none=True),
         ))
+
+        # Persist to DB in background
+        self._schedule_persist_tool_detail(tool_detail)
 
         return detail_id
 
@@ -464,9 +560,10 @@ class ObservabilityService:
     # === Database Persistence ===
 
     async def save_to_db(self, agent_id: str) -> int:
-        """Flush in-memory interactions and tool details to database.
+        """Safety-net batch flush on agent completion.
 
-        Called on agent completion/failure/cancel. Returns total records saved.
+        Most records are already written by write-through (_schedule_persist_*).
+        Uses merge() to handle duplicates gracefully.
         """
         from database.connection import get_session
         from database.models import DBLLMInteraction, DBToolDetail
@@ -500,7 +597,7 @@ class ObservabilityService:
                         request_id=i.request_id,
                         subagent=i.subagent,
                     )
-                    session.add(db_row)
+                    await session.merge(db_row)
                     saved += 1
 
                 for t in tool_details:
@@ -529,12 +626,12 @@ class ObservabilityService:
                         confidence_score=t.confidence_score,
                         subagent=t.subagent,
                     )
-                    session.add(db_row)
+                    await session.merge(db_row)
                     saved += 1
 
                 await session.commit()
         except Exception as e:
-            print(f"[Observability] DB save error for {agent_id}: {e}")
+            print(f"[Observability] DB batch save error for {agent_id}: {e}")
             return 0
 
         print(f"[Observability] Saved {saved} records to DB for agent {agent_id}")

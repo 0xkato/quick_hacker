@@ -567,8 +567,9 @@ class AgentOrchestrator:
             flow_service.clear_flow(agent.id)
             # Cleanup spans to prevent memory leaks
             span_service.clear_agent_spans(agent.id)
-            # Cleanup observability data to prevent memory leaks
-            observability_service.clear_agent(agent.id)
+            # NOTE: Do NOT clear observability data here — it's bounded by
+            # MAX_INTERACTIONS_PER_AGENT (1000) and users need it to survive
+            # page refreshes. Data clears naturally on server restart.
 
     async def _run_sdk_agent(self, agent: BaseAgent, use_overseer: bool = False) -> list[Finding]:
         """Run an agent using the Claude SDK provider.

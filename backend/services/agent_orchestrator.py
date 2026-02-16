@@ -59,6 +59,7 @@ from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
 from services.span_service import span_service
 from services.observability_service import observability_service
+from services.behavior_tree_service import behavior_tree_service
 from services.finding_triage_service import triage_service
 from services.findings_service import findings_service
 from services.threat_model_prompt_block import build_threat_model_prompt_block
@@ -635,6 +636,17 @@ class AgentOrchestrator:
         )
         flow_service.update_node_status(agent.id, start_node.id, "completed")
 
+        # === Initialize Behavior Tree ===
+        try:
+            behavior_tree_service.initialize_tree(agent.id)
+            behavior_tree_service.start_phase(agent.id, "scanner")
+            behavior_tree_service.start_agent(
+                agent.id, agent.id, agent.name or "sdk_agent",
+                model=getattr(config, "model", "") if config else "",
+            )
+        except Exception as bt_err:
+            logger.warning("BehaviorTree init failed for %s: %s", agent.id, bt_err)
+
         # Broadcast initial flow
         flow = flow_service.get_flow(agent.id)
         if flow:
@@ -821,6 +833,13 @@ class AgentOrchestrator:
                     provider="claude_sdk",
                 )
 
+                # Behavior tree: track turn start and LLM request
+                try:
+                    behavior_tree_service.start_turn(agent_id, event.get("turn", 0))
+                    behavior_tree_service.add_llm_request(agent_id, event.get("prompt", "")[:300], event.get("model", ""))
+                except Exception:
+                    pass
+
                 return
 
             elif event_type_str == "agent_text":
@@ -838,11 +857,25 @@ class AgentOrchestrator:
                         subagent=current_subagent[0] if _use_overseer else None,
                     )
                     current_tool_calls = []  # Reset for next response
+
+                # Behavior tree: track LLM response
+                try:
+                    behavior_tree_service.add_llm_response(agent_id, event.get("text", "")[:500])
+                except Exception:
+                    pass
+
                 return
 
             elif event_type_str == "agent_thinking":
                 # Don't emit raw SDK thinking blocks to the UI as LLM interactions; they don't match
                 # the LLMInteraction schema and are not user-facing by default.
+
+                # Behavior tree: track LLM thinking
+                try:
+                    behavior_tree_service.add_llm_thinking(agent_id, event.get("thinking", "")[:300])
+                except Exception:
+                    pass
+
                 return
 
             elif event_type_str == "tool_call":
@@ -909,6 +942,13 @@ class AgentOrchestrator:
                         agent_id=agent_id,
                         data={"type": "flow_update", "flow": flow.to_dict()}
                     ))
+
+                # Behavior tree: track tool call
+                try:
+                    behavior_tree_service.add_tool_call(agent_id, event.get("tool_name", event.get("name", "")), event.get("arguments", event.get("args", {})))
+                except Exception:
+                    pass
+
                 return
 
             elif event_type_str == "tool_result":
@@ -1137,6 +1177,13 @@ class AgentOrchestrator:
                             agent_id=agent_id,
                             data={"type": "flow_update", "flow": flow.to_dict()}
                         ))
+
+                # Behavior tree: track tool result
+                try:
+                    behavior_tree_service.add_tool_result(agent_id, event.get("tool_use_id", ""), str(event.get("result", ""))[:500], event.get("is_error", False))
+                except Exception:
+                    pass
+
                 return
 
             # Handle "finding" events from SDK orchestrator
@@ -1211,6 +1258,19 @@ class AgentOrchestrator:
                     import traceback
                     traceback.print_exc()
                 return
+
+            # Behavior tree: track turn_complete and phase_change events
+            if event_type_str == "turn_complete":
+                try:
+                    behavior_tree_service.complete_turn(agent_id)
+                except Exception:
+                    pass
+            elif event_type_str == "phase_change":
+                try:
+                    behavior_tree_service.complete_phase(agent_id)
+                    behavior_tree_service.start_phase(agent_id, event.get("phase", "unknown"))
+                except Exception:
+                    pass
 
             self._broadcast_message(
                 WSMessage(type=ws_type, agent_id=agent_id, data=ws_data)
@@ -1463,6 +1523,12 @@ class AgentOrchestrator:
                 except Exception as e:
                     print(f"[Orchestrator] Failed to generate report: {e}")
 
+            # Behavior tree: complete session
+            try:
+                behavior_tree_service.complete_session(agent_id)
+            except Exception:
+                pass
+
             # If the SDK run failed, propagate an error so the agent is marked FAILED.
             if not result.get("success", True):
                 raise RuntimeError(result.get("error_message") or "Claude SDK audit failed")
@@ -1696,6 +1762,14 @@ class AgentOrchestrator:
                     model=str(config.model),
                     provider="codex_cli",
                 )
+
+                # Behavior tree: track turn start and LLM request
+                try:
+                    behavior_tree_service.start_turn(agent.id, event.get("turn", 0))
+                    behavior_tree_service.add_llm_request(agent.id, event.get("prompt", "")[:300], event.get("model", ""))
+                except Exception:
+                    pass
+
                 return
 
             if event_type_str == "agent_text":
@@ -1710,6 +1784,13 @@ class AgentOrchestrator:
                         provider="codex_cli",
                     )
                     current_tool_calls.clear()
+
+                # Behavior tree: track LLM response
+                try:
+                    behavior_tree_service.add_llm_response(agent.id, event.get("text", "")[:500])
+                except Exception:
+                    pass
+
                 return
 
             if event_type_str == "tool_call":
@@ -1766,6 +1847,13 @@ class AgentOrchestrator:
                             data={"type": "flow_update", "flow": flow.to_dict()},
                         )
                     )
+
+                # Behavior tree: track tool call
+                try:
+                    behavior_tree_service.add_tool_call(agent.id, event.get("tool_name", event.get("name", "")), event.get("arguments", event.get("args", {})))
+                except Exception:
+                    pass
+
                 return
 
             if event_type_str == "tool_result":
@@ -1893,6 +1981,13 @@ class AgentOrchestrator:
                     self._broadcast_message(
                         WSMessage(type=WSMessageType.PROGRESS, agent_id=agent.id, data={"type": "flow_update", "flow": flow.to_dict()})
                     )
+
+                # Behavior tree: track tool result
+                try:
+                    behavior_tree_service.add_tool_result(agent.id, event.get("tool_use_id", ""), str(event.get("result", ""))[:500], event.get("is_error", False))
+                except Exception:
+                    pass
+
                 return
 
             if event_type_str == "turn_complete":
@@ -1909,6 +2004,30 @@ class AgentOrchestrator:
                         },
                     )
                 )
+
+                # Behavior tree: track turn completion
+                try:
+                    behavior_tree_service.complete_turn(agent.id)
+                except Exception:
+                    pass
+
+                return
+
+            if event_type_str == "agent_thinking":
+                # Behavior tree: track LLM thinking
+                try:
+                    behavior_tree_service.add_llm_thinking(agent.id, event.get("thinking", "")[:300])
+                except Exception:
+                    pass
+                return
+
+            if event_type_str == "phase_change":
+                # Behavior tree: track phase transition
+                try:
+                    behavior_tree_service.complete_phase(agent.id)
+                    behavior_tree_service.start_phase(agent.id, event.get("phase", "unknown"))
+                except Exception:
+                    pass
                 return
 
             if event_type_str == "error":
@@ -2000,6 +2119,17 @@ class AgentOrchestrator:
         # Initialize flow root (best-effort).
         flow_service.initialize_flow(agent.id)
         flow_service.add_node(agent.id, "user_input", "Start codex_cli audit", {"provider": "codex_cli"})
+
+        # === Initialize Behavior Tree ===
+        try:
+            behavior_tree_service.initialize_tree(agent.id)
+            behavior_tree_service.start_phase(agent.id, "scanner")
+            behavior_tree_service.start_agent(
+                agent.id, agent.id, agent.name or "codex_agent",
+                model="codex",
+            )
+        except Exception as bt_err:
+            logger.warning("BehaviorTree init failed for %s: %s", agent.id, bt_err)
 
         initial_prompt = self._build_initial_audit_prompt(agent)
         current_prompt = initial_prompt
@@ -2277,6 +2407,12 @@ class AgentOrchestrator:
                 print(f"[Orchestrator] Codex: Saved {db_save_count}/{len(triaged_findings)} findings to database")
             except Exception as db_err:
                 print(f"[Orchestrator] Codex: Database save failed: {db_err}")
+
+            # Behavior tree: complete session
+            try:
+                behavior_tree_service.complete_session(agent.id)
+            except Exception:
+                pass
 
             agent.completed_at = datetime.utcnow()
             agent.status = AgentStatus.COMPLETED

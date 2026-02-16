@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { WSMessage, Finding, AgentProgress, LLMInteraction, ToolDetail, InvestigationFlow } from '@/types';
+import type { WSMessage, Finding, AgentProgress, LLMInteraction, ToolDetail, InvestigationFlow, BTNode, BTNodeUpdate } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
 
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
@@ -23,6 +23,9 @@ interface UseWebSocketOptions {
   onStateSync?: (agentId: string, state: Record<string, unknown>) => void;
   onReportReady?: (agentId: string, reportId: string) => void;
   onFlowUpdate?: (agentId: string, flow: InvestigationFlow) => void;
+  onBTNodeAdd?: (agentId: string, node: BTNode) => void;
+  onBTNodeUpdate?: (agentId: string, update: BTNodeUpdate) => void;
+  onBTNodeBatch?: (agentId: string, nodes: BTNode[]) => void;
   autoReconnect?: boolean;
   enabled?: boolean; // Only connect when true (default: true)
 }
@@ -253,6 +256,15 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
                 message.agent_id,
                 message.data as unknown as InvestigationFlow
               );
+              break;
+            case 'bt_node_add':
+              opts.onBTNodeAdd?.(message.agent_id, message.data as unknown as BTNode);
+              break;
+            case 'bt_node_update':
+              opts.onBTNodeUpdate?.(message.agent_id, message.data as unknown as BTNodeUpdate);
+              break;
+            case 'bt_node_batch':
+              opts.onBTNodeBatch?.(message.agent_id, (message.data as any).nodes as BTNode[]);
               break;
           }
         } catch (e) {

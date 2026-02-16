@@ -138,6 +138,10 @@ observability_service.set_broadcast_callback(broadcast_agent_message)
 persistence_service.set_broadcast_callback(broadcast_agent_message)
 report_service.set_broadcast_callback(broadcast_agent_message)
 
+# Register the callback with the behavior tree service
+from services.behavior_tree_service import behavior_tree_service
+behavior_tree_service.set_broadcast_callback(broadcast_agent_message)
+
 
 @router.websocket("")
 async def websocket_endpoint(

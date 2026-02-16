@@ -454,6 +454,192 @@ class WaveDispatcher:
 
         return stdout, stderr, was_truncated, returncode
 
+    async def _stream_parse_process_output(
+        self,
+        process: asyncio.subprocess.Process,
+        agent_id: str,
+        subagent_type: str,
+        parent_agent_id: str,
+        max_stdout: int = 10 * 1024 * 1024,
+    ) -> tuple[str, str, bool, int]:
+        """Stream-parse Claude CLI stream-json output, feeding behavior tree in real-time.
+
+        Handles both Claude Code high-level events (assistant/user/result)
+        and raw Messages API streaming events (message_start/content_block_delta/etc).
+
+        Returns: (result_text, stderr, was_truncated, returncode)
+        """
+        from services.behavior_tree_service import behavior_tree_service
+
+        result_text = ""
+        all_text_parts: list[str] = []  # Accumulate all text for fallback result
+        turn_count = 0
+        total_stdout = 0
+        truncated = False
+
+        # State for accumulating streaming deltas
+        current_content_block_type: str = ""
+        current_text_accum: str = ""
+        current_tool_name: str = ""
+        current_tool_input_json: str = ""
+
+        def _flush_text_block():
+            """Flush accumulated text from streaming deltas."""
+            nonlocal current_text_accum
+            if current_text_accum.strip():
+                behavior_tree_service.add_llm_response(
+                    parent_agent_id, current_text_accum[:500]
+                )
+                all_text_parts.append(current_text_accum)
+            current_text_accum = ""
+
+        def _flush_tool_block():
+            """Flush accumulated tool_use from streaming deltas."""
+            nonlocal current_tool_name, current_tool_input_json
+            if current_tool_name:
+                try:
+                    args = json.loads(current_tool_input_json) if current_tool_input_json else {}
+                except json.JSONDecodeError:
+                    args = {"raw": current_tool_input_json[:200]}
+                behavior_tree_service.add_tool_call(
+                    parent_agent_id, current_tool_name, args
+                )
+            current_tool_name = ""
+            current_tool_input_json = ""
+
+        async def read_stream():
+            nonlocal result_text, turn_count, total_stdout, truncated
+            nonlocal current_content_block_type, current_text_accum
+            nonlocal current_tool_name, current_tool_input_json
+
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                total_stdout += len(line)
+                if total_stdout > max_stdout:
+                    truncated = True
+                    break
+
+                line_str = line.decode("utf-8", errors="replace").strip()
+                if not line_str:
+                    continue
+
+                try:
+                    event = json.loads(line_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type", "")
+
+                # ── Claude Code high-level events ──
+                if event_type == "assistant":
+                    msg = event.get("message", {})
+                    for block in msg.get("content", []):
+                        block_type = block.get("type", "")
+                        if block_type == "text":
+                            text = block.get("text", "")
+                            if text.strip():
+                                behavior_tree_service.add_llm_response(
+                                    parent_agent_id, text[:500],
+                                    tokens=msg.get("usage", {}).get("output_tokens")
+                                )
+                                all_text_parts.append(text)
+                        elif block_type == "thinking":
+                            behavior_tree_service.add_llm_thinking(
+                                parent_agent_id, block.get("thinking", "")[:300]
+                            )
+                        elif block_type == "tool_use":
+                            behavior_tree_service.add_tool_call(
+                                parent_agent_id,
+                                block.get("name", "unknown"),
+                                block.get("input", {})
+                            )
+
+                elif event_type == "user":
+                    msg = event.get("message", {})
+                    for block in msg.get("content", []):
+                        if block.get("type") == "tool_result":
+                            content = block.get("content", "")
+                            is_error = block.get("is_error", False)
+                            result_str = content[:500] if isinstance(content, str) else str(content)[:500]
+                            behavior_tree_service.add_tool_result(
+                                parent_agent_id,
+                                block.get("tool_use_id", ""),
+                                result_str,
+                                is_error
+                            )
+                    turn_count += 1
+                    behavior_tree_service.start_turn(parent_agent_id, turn_count)
+
+                elif event_type == "result":
+                    result_text = event.get("result", "")
+                    cost = event.get("cost_usd")
+                    duration = event.get("duration_ms")
+                    behavior_tree_service.complete_agent(
+                        parent_agent_id, agent_id,
+                        cost_usd=cost, duration_ms=duration
+                    )
+
+                # ── Raw Messages API streaming events (fallback) ──
+                elif event_type == "content_block_start":
+                    block = event.get("content_block", {})
+                    current_content_block_type = block.get("type", "")
+                    if current_content_block_type == "tool_use":
+                        current_tool_name = block.get("name", "")
+                        current_tool_input_json = ""
+                    elif current_content_block_type == "text":
+                        current_text_accum = block.get("text", "")
+
+                elif event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    delta_type = delta.get("type", "")
+                    if delta_type == "text_delta":
+                        current_text_accum += delta.get("text", "")
+                    elif delta_type == "input_json_delta":
+                        current_tool_input_json += delta.get("partial_json", "")
+                    elif delta_type == "thinking_delta":
+                        thinking = delta.get("thinking", "")
+                        if thinking.strip():
+                            behavior_tree_service.add_llm_thinking(
+                                parent_agent_id, thinking[:300]
+                            )
+
+                elif event_type == "content_block_stop":
+                    if current_content_block_type == "text":
+                        _flush_text_block()
+                    elif current_content_block_type == "tool_use":
+                        _flush_tool_block()
+                    current_content_block_type = ""
+
+                elif event_type == "message_stop":
+                    # Flush any remaining accumulated content
+                    _flush_text_block()
+                    _flush_tool_block()
+
+                # Ignore ping, message_start, message_delta, system, error silently
+
+        # Read stderr separately (buffered, same as before)
+        stderr_chunks: list[bytes] = []
+
+        async def read_stderr():
+            while True:
+                chunk = await process.stderr.read(8192)
+                if not chunk:
+                    break
+                stderr_chunks.append(chunk)
+
+        await asyncio.gather(read_stream(), read_stderr())
+        await process.wait()
+
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+
+        # If no explicit result event, concatenate all text parts
+        if not result_text and all_text_parts:
+            result_text = "\n".join(all_text_parts)
+
+        return result_text, stderr, truncated, process.returncode
+
     async def _spawn_subagent_cli(
         self,
         task: DispatchTask,
@@ -548,7 +734,7 @@ Begin your analysis now."""
                 "--permission-mode", "bypassPermissions",
                 "--tools", ",".join(claude_tools),
                 "--append-system-prompt", system_prompt,  # Append to preserve tool instructions
-                "--output-format", "text",
+                "--output-format", "stream-json",
                 "--no-session-persistence",  # Don't save session to disk
             ]
 
@@ -603,10 +789,22 @@ Begin your analysis now."""
             process.stdin.close()
             await process.stdin.wait_closed()
 
-            # Wait for completion with timeout and separate output limits
+            # Start behavior tree agent node for real-time visualization
+            from services.behavior_tree_service import behavior_tree_service
+            behavior_tree_service.start_agent(
+                log_agent_id, agent_id, task.agent_type, model_arg, task.objective
+            )
+            behavior_tree_service.start_turn(log_agent_id, 1)
+            behavior_tree_service.add_llm_request(
+                log_agent_id, user_prompt[:300], model_arg
+            )
+
+            # Wait for completion with timeout — stream-parse for real-time BT updates
             try:
                 output, error_output, was_truncated, returncode = await asyncio.wait_for(
-                    self._read_process_output_limited(process),
+                    self._stream_parse_process_output(
+                        process, agent_id, task.agent_type, log_agent_id
+                    ),
                     timeout=task.time_budget,
                 )
 
@@ -617,10 +815,12 @@ Begin your analysis now."""
                 if returncode != 0:
                     error_message = f"Claude CLI exited with code {returncode}: {error_output}"
                     print(f"[Dispatcher] {agent_id} failed: {error_message}")
+                    behavior_tree_service.add_error(log_agent_id, error_message[:200])
                 elif not output or not output.strip():
                     # Zero exit but empty output — may indicate stdin bug or silent failure
                     error_message = "Claude CLI produced no output"
                     print(f"[Dispatcher] {agent_id} produced no output")
+                    behavior_tree_service.add_error(log_agent_id, error_message)
                 else:
                     error_message = None
                     print(f"[Dispatcher] {agent_id} completed successfully")
@@ -629,21 +829,12 @@ Begin your analysis now."""
                         print(f"[Dispatcher] {agent_id} stderr: {error_output[:200]}...")
 
             except asyncio.TimeoutError:
-                # Try to capture partial output before killing
-                partial_stdout = ""
-                try:
-                    partial_out, partial_err, _, _ = await asyncio.wait_for(
-                        self._read_process_output_limited(process),
-                        timeout=2.0,  # 2 second grace period for buffered output
-                    )
-                    partial_stdout = partial_out
-                except (asyncio.TimeoutError, OSError) as e:
-                    print(f"[Dispatcher] Grace period read failed: {e}")
                 process.kill()
                 await process.wait()
                 error_message = f"Task exceeded time budget of {task.time_budget}s"
-                output = partial_stdout
-                print(f"[Dispatcher] {agent_id} timed out (captured {len(output)} bytes partial output)")
+                output = ""
+                print(f"[Dispatcher] {agent_id} timed out")
+                behavior_tree_service.add_error(log_agent_id, error_message)
             finally:
                 self._unregister_process(process)
 
@@ -727,6 +918,10 @@ Begin your analysis now."""
             completed_at = datetime.utcnow()
             error_msg = str(e)
             print(f"[Dispatcher] {agent_id} exception: {error_msg}")
+            try:
+                behavior_tree_service.add_error(log_agent_id, f"Exception: {error_msg[:180]}")
+            except Exception:
+                pass
             # Broadcast failure
             self._broadcast(
                 WSMessageType.AGENT_STATUS,

@@ -262,6 +262,9 @@ export type WSMessageType =
   | 'session_paused'
   | 'session_resumed'
   | 'flow_update'
+  | 'bt_node_add'
+  | 'bt_node_update'
+  | 'bt_node_batch'
   | 'auth_required'
   | 'auth_ok';
 
@@ -589,4 +592,45 @@ export interface GraphStats {
   visited: number;
   high_relevance_unvisited: number;
   by_relevance: Record<RelevanceLevel, number>;
+}
+
+// === Behavior Tree Types ===
+
+export type BTNodeType =
+  | 'session'
+  | 'phase'
+  | 'wave'
+  | 'signal'
+  | 'agent'
+  | 'turn'
+  | 'llm_request'
+  | 'llm_response'
+  | 'llm_thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'finding'
+  | 'error';
+
+export type BTNodeStatus = 'pending' | 'active' | 'completed' | 'failed';
+
+export interface BTNode {
+  id: string;
+  agent_id: string;
+  parent_id: string | null;
+  node_type: BTNodeType;
+  label: string;
+  status: BTNodeStatus;
+  timestamp: string;
+  data: Record<string, unknown>;
+  children_count: number;
+  depth: number;
+}
+
+export interface BTNodeUpdate {
+  id: string;
+  agent_id: string;
+  status?: BTNodeStatus;
+  label?: string;
+  data_merge?: Record<string, unknown>;
+  children_count?: number;
 }

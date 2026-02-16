@@ -497,8 +497,13 @@ Begin now. Use ALL available time productively."""
         )
         await self.emit_flow_update()
 
+        # Initialize behavior tree for real-time LLM action visualization
+        from services.behavior_tree_service import behavior_tree_service
+        behavior_tree_service.initialize_tree(self.id)
+
         try:
             # === PHASE 1: FOUNDATION ===
+            behavior_tree_service.start_phase(self.id, "Foundation")
             await self.emit_log("Phase 1: Running Foundation Phase...")
             print("[Overseer] Dispatching Foundation Phase sub-agents...")
 
@@ -559,10 +564,12 @@ Begin now. Use ALL available time productively."""
                 return
 
             # === PHASE 2: DEEP UNDERSTANDING (v2) ===
+            behavior_tree_service.complete_phase(self.id)
             # Build Security Map: trust boundaries, invariants, data flows, module analysis
             # Skip for quick tier (not enough time budget)
             scan_tier = self.campaign_state.scan_tier
             if scan_tier not in SKIP_UNDERSTANDING_TIERS and self.phase_budgets.get("understanding", 0) > 0:
+                behavior_tree_service.start_phase(self.id, "Understanding")
                 await self.emit_log("Phase 2: Running Deep Understanding Phase...")
                 print("[Overseer] Dispatching Understanding Phase sub-agents...")
 
@@ -628,6 +635,8 @@ Begin now. Use ALL available time productively."""
                 await self.emit_log(f"Skipping Understanding Phase (tier={scan_tier})")
 
             # === PHASE 3: HUNTING ===
+            behavior_tree_service.complete_phase(self.id)
+            behavior_tree_service.start_phase(self.id, "Hunting")
             await self.emit_log("Phase 3: Running Hunting Phase...")
             print("[Overseer] Dispatching Hunting Phase sub-agents...")
 
@@ -784,6 +793,7 @@ Begin now. Use ALL available time productively."""
                 focus_idx = (wave_num - 1) % len(HUNT_FOCUSES)
                 hunt_focus, focus_name = HUNT_FOCUSES[focus_idx]
 
+                behavior_tree_service.start_wave(self.id, wave_num, focus_name)
                 await self.emit_log(f"Wave {wave_num}: {remaining:.0f}s remaining - hunting for {focus_name} vulnerabilities")
                 print(f"[Overseer] Starting Wave {wave_num} with {remaining:.0f}s remaining, focus: {focus_name}")
 
@@ -925,6 +935,8 @@ Output JSON with your analysis for each signal.""",
             await self._save_campaign_state()
 
             # === PHASE 4: VERIFICATION (Signal Routing) ===
+            behavior_tree_service.complete_phase(self.id)
+            behavior_tree_service.start_phase(self.id, "Verification")
             # Route each signal through: Decider → FamilyCoordinator → Specialist → Triager
             # v2: Triager now has invariant awareness from Security Map
             findings_count = len(self.campaign_state.confirmed_findings)
@@ -948,6 +960,8 @@ Output JSON with your analysis for each signal.""",
             await self._save_campaign_state()
 
             # === PHASE 5: FINALIZE ===
+            behavior_tree_service.complete_phase(self.id)
+            behavior_tree_service.start_phase(self.id, "Finalize")
             await self.emit_log("Phase 5: Generating final report...")
 
             # Create flow node for Finalize Phase
@@ -979,6 +993,10 @@ Output JSON with your analysis for each signal.""",
 
         # Convert confirmed findings to Finding objects
         await self._process_findings()
+
+        # Complete behavior tree session
+        behavior_tree_service.complete_phase(self.id)
+        behavior_tree_service.complete_session(self.id)
 
         # Print pipeline health report — makes signal drops visible
         self.signal_tracker.print_report()
@@ -1518,6 +1536,7 @@ Output JSON with your analysis for each signal.""",
 
         # Track this signal through the pipeline
         self.signal_tracker.enter(signal_id, signal_title, signal_severity)
+        behavior_tree_service.start_signal(self.id, signal_title, signal_severity)
 
         # Pre-screen: adjust confidence based on guards and language mismatch
         signal = self._pre_screen_signal(signal)

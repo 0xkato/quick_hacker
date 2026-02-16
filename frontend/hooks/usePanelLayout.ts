@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 
-export type ActivityView = 'explorer' | 'search' | 'agents' | 'findings' | 'flow' | 'llm';
+export type ActivityView = 'explorer' | 'search' | 'agents' | 'findings' | 'flow' | 'llm' | 'behavior';
 
 export interface UsePanelLayoutResult {
   activeView: ActivityView;

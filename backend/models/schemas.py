@@ -818,6 +818,10 @@ class WSMessageType(str, Enum):
     TOOL_DETAIL = "tool_detail"  # Detailed tool execution info
     STATE_SYNC = "state_sync"  # Full state snapshot on pause/stop
     REPORT_READY = "report_ready"  # Report generated, ready for download
+    # Behavior Tree events (incremental updates)
+    BT_NODE_ADD = "bt_node_add"        # New node added to behavior tree
+    BT_NODE_UPDATE = "bt_node_update"  # Existing node status/data changed
+    BT_NODE_BATCH = "bt_node_batch"    # Batched node additions
     # Session hibernation events
     SESSION_PAUSING = "session_pausing"
     SESSION_PAUSED = "session_paused"

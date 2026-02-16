@@ -29,6 +29,7 @@ import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
 import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
 import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualization';
 import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
+import { BehaviorTree, BTNodeDetail } from '@/components/BehaviorTree';
 import { ReportModal } from '@/components/ReportPanel';
 import { ThreatModelModal } from '@/components/ThreatModel/ThreatModelModal';
 import { AuthModal, AuthScreen } from '@/components/Auth';
@@ -42,6 +43,7 @@ import { useProjectWorkspace } from '@/hooks/useProjectWorkspace';
 import { usePanelLayout, type ActivityView } from '@/hooks/usePanelLayout';
 import { useSessionManagement } from '@/hooks/useSessionManagement';
 import { useObservability } from '@/hooks/useObservability';
+import { useBehaviorTree } from '@/hooks/useBehaviorTree';
 import { agents as agentsApi, projects as projectsApi, files as filesApi, setAuthFunctions, type Project } from '@/lib/api';
 import type {
   InvestigationReport,
@@ -95,6 +97,10 @@ export default function Home() {
     agents: agentMgmt.agents,
   });
   const observability = useObservability({
+    selectedAgentId: agentMgmt.selectedAgentId,
+    isAuthenticated,
+  });
+  const behaviorTree = useBehaviorTree({
     selectedAgentId: agentMgmt.selectedAgentId,
     isAuthenticated,
   });
@@ -308,6 +314,19 @@ export default function Home() {
         agentMgmt.setAgentFlow(flow);
       }
     }, [agentMgmt.selectedAgentId, agentMgmt.setAgentFlow]),
+    // Behavior Tree handlers
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onBTNodeAdd: useCallback((_agentId: string, node: any) => {
+      behaviorTree.addNode(node);
+    }, [behaviorTree.addNode]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onBTNodeUpdate: useCallback((_agentId: string, update: any) => {
+      behaviorTree.updateNode(update);
+    }, [behaviorTree.updateNode]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    onBTNodeBatch: useCallback((_agentId: string, nodes: any[]) => {
+      behaviorTree.addNodes(nodes);
+    }, [behaviorTree.addNodes]),
     onReportReady: useCallback(async (agentId: string, reportId: string) => {
       // Auto-fetch and show report when ready
       try {
@@ -775,6 +794,19 @@ export default function Home() {
               <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full" />
             )}
           </button>
+          <button
+            onClick={() => {
+              panels.setActiveView('behavior');
+              panels.setShowSidebar(false);
+            }}
+            className={`activity-icon ${panels.activeView === 'behavior' ? 'active' : ''}`}
+            title="LLM Behavior Tree"
+          >
+            <GitBranch className="w-6 h-6" />
+            {behaviorTree.nodes.size > 0 && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full" />
+            )}
+          </button>
 
           <div className="flex-1" />
 
@@ -966,6 +998,64 @@ export default function Home() {
             </div>
           )}
 
+          {/* LLM Behavior Tree view */}
+          {panels.activeView === 'behavior' && (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
+                <GitBranch className="w-4 h-4 text-text-muted" />
+                <span className="text-sm text-text-muted">LLM Behavior Tree</span>
+                <select
+                  value={agentMgmt.selectedAgentId || ''}
+                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
+                  className="ml-2 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
+                >
+                  <option value="">Select agent...</option>
+                  {agentMgmt.agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name} ({agent.status})
+                    </option>
+                  ))}
+                </select>
+                <div className="ml-auto flex items-center gap-1">
+                  <button
+                    onClick={behaviorTree.expandAll}
+                    className="px-2 py-0.5 text-xs bg-bg-tertiary border border-border-subtle rounded hover:bg-bg-primary text-text-muted"
+                  >
+                    Expand All
+                  </button>
+                  <button
+                    onClick={behaviorTree.collapseAll}
+                    className="px-2 py-0.5 text-xs bg-bg-tertiary border border-border-subtle rounded hover:bg-bg-primary text-text-muted"
+                  >
+                    Collapse All
+                  </button>
+                  <span className="text-[10px] text-text-muted ml-2">
+                    {behaviorTree.nodes.size} nodes
+                  </span>
+                </div>
+              </div>
+              <div className="flex-1 flex overflow-hidden min-h-0">
+                <BehaviorTree
+                  nodes={behaviorTree.nodes}
+                  childIndex={behaviorTree.childIndex}
+                  rootId={behaviorTree.rootId}
+                  expandedNodes={behaviorTree.expandedNodes}
+                  selectedNodeId={behaviorTree.selectedNodeId}
+                  isLoading={behaviorTree.isLoading}
+                  onToggleExpand={behaviorTree.toggleExpand}
+                  onSelectNode={behaviorTree.selectNode}
+                  getChildren={behaviorTree.getChildren}
+                />
+                {behaviorTree.selectedNodeId && behaviorTree.nodes.get(behaviorTree.selectedNodeId) && (
+                  <BTNodeDetail
+                    node={behaviorTree.nodes.get(behaviorTree.selectedNodeId)!}
+                    onClose={() => behaviorTree.selectNode(null)}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Full-screen Findings view */}
           {panels.activeView === 'findings' && panels.showSidebar === false && (
             <div className="flex-1 flex overflow-hidden">
@@ -1034,7 +1124,7 @@ export default function Home() {
           )}
 
           {/* Tab bar */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && panels.activeView !== 'behavior' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
             <div className="h-9 bg-bg-secondary flex items-end border-b border-border-subtle">
               <div className="tab active">
                 <span className="truncate max-w-[200px]">
@@ -1051,7 +1141,7 @@ export default function Home() {
           )}
 
           {/* Breadcrumb */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && panels.activeView !== 'behavior' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
             <div className="breadcrumb border-b border-border-subtle">
               {workspace.currentFile.path.split('/').map((part, idx, arr) => (
                 <span key={idx} className="flex items-center">
@@ -1065,7 +1155,7 @@ export default function Home() {
           )}
 
           {/* Editor */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && (panels.activeView !== 'findings' || panels.showSidebar) && (
+          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && panels.activeView !== 'behavior' && (panels.activeView !== 'findings' || panels.showSidebar) && (
             <div className="flex-1 overflow-hidden">
               <MonacoEditor
                 file={workspace.currentFile}

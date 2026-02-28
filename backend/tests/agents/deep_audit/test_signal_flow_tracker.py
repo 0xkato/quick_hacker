@@ -319,6 +319,52 @@ class TestSignalSource:
         assert s["by_signal_source"]["behavioral_sink"] == 1
 
 
+class TestDismissedWithUnknowns:
+    def test_record_drop_with_unknowns_flag(self):
+        """record_drop() accepts has_unknowns flag to track dismissed-with-unknowns."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "Test", "HIGH")
+        tracker.record_drop("sig-1", "triager", "dismissed/by_design", has_unknowns=True)
+        trace = tracker.traces["sig-1"]
+        assert trace.has_unknowns is True
+
+    def test_record_drop_defaults_no_unknowns(self):
+        """record_drop() defaults has_unknowns to False."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "Test", "HIGH")
+        tracker.record_drop("sig-1", "triager", "dismissed/by_design")
+        trace = tracker.traces["sig-1"]
+        assert trace.has_unknowns is False
+
+    def test_summary_includes_dismissed_with_unknowns_count(self):
+        """summary() includes dismissed_with_unknowns count."""
+        tracker = SignalFlowTracker()
+
+        # Dismissed with unknowns
+        tracker.enter("sig-1", "Guard unclear", "HIGH")
+        tracker.record_drop("sig-1", "triager", "dismissed/by_design", has_unknowns=True)
+
+        # Dismissed without unknowns
+        tracker.enter("sig-2", "Not real", "LOW")
+        tracker.record_drop("sig-2", "decider", "not in scope")
+
+        # Verified (not dismissed)
+        tracker.enter("sig-3", "Real vuln", "HIGH")
+        tracker.record_stage("sig-3", "triager", "SECURITY_VULNERABILITY")
+
+        s = tracker.summary()
+        assert s["dismissed_with_unknowns"] == 1
+
+    def test_dismissed_with_unknowns_in_warnings(self):
+        """summary() warns when signals were dismissed despite unresolved unknowns."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "Guard unclear", "HIGH")
+        tracker.record_drop("sig-1", "triager", "dismissed/by_design", has_unknowns=True)
+
+        s = tracker.summary()
+        assert any("dismissed with unresolved unknowns" in w for w in s["warnings"])
+
+
 class TestFullPipelineFlow:
     """End-to-end test simulating the exact sequence of calls overseer.py makes."""
 

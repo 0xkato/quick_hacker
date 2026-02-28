@@ -22,6 +22,7 @@ class SignalTrace:
     drop_stage: Optional[str] = None
     drop_reason: Optional[str] = None
     signal_source: str = "sink_hunter"
+    has_unknowns: bool = False
 
 
 class SignalFlowTracker:
@@ -67,7 +68,7 @@ class SignalFlowTracker:
             trace.final_disposition = "verified"
             trace.classification = result
 
-    def record_drop(self, signal_id: str, stage: str, reason: str):
+    def record_drop(self, signal_id: str, stage: str, reason: str, has_unknowns: bool = False):
         """Signal was dropped at this stage."""
         trace = self.traces.get(signal_id)
         if not trace:
@@ -76,6 +77,7 @@ class SignalFlowTracker:
         trace.final_disposition = "dismissed"
         trace.drop_stage = stage
         trace.drop_reason = reason[:200] if reason else ""
+        trace.has_unknowns = has_unknowns
 
     def record_parse(self, parse_type: str):
         """Track triager output parsing: json_ok, markdown_fallback, parse_failure."""
@@ -111,7 +113,16 @@ class SignalFlowTracker:
             and t.severity in ("critical", "high", "CRITICAL", "HIGH")
         ]
 
+        dismissed_with_unknowns = sum(
+            1 for t in self.traces.values()
+            if t.final_disposition == "dismissed" and t.has_unknowns
+        )
+
         warnings = []
+        if dismissed_with_unknowns > 0:
+            warnings.append(
+                f"{dismissed_with_unknowns} signal(s) dismissed with unresolved unknowns"
+            )
         if self.parse_stats["markdown_fallback"] > 0:
             warnings.append(
                 f"{self.parse_stats['markdown_fallback']} signal(s) required markdown fallback parsing"
@@ -138,6 +149,7 @@ class SignalFlowTracker:
             "parse_stats": dict(self.parse_stats),
             "persist_stats": dict(self.persist_stats),
             "dropped_high_severity": dropped_signals,
+            "dismissed_with_unknowns": dismissed_with_unknowns,
             "warnings": warnings,
         }
 

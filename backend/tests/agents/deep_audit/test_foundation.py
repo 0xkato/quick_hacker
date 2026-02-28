@@ -292,3 +292,118 @@ class TestGuardInfo:
         assert restored.file_path == original.file_path
         assert restored.effectiveness == "partial"
         assert restored.bypass_reason == "Only checks role, not resource ownership"
+
+
+class TestComputeTraceQuality:
+    def _make_signal(self, trace_steps=None, guards=None):
+        """Helper to build a SuspiciousSignal with specific trace data."""
+        return SuspiciousSignal(
+            signal_id="test-sig",
+            category=SignalCategory.COMMAND_INJECTION,
+            severity=SignalSeverity.HIGH,
+            file_path="src/api/run.py",
+            line_start=10,
+            code_snippet="os.system(cmd)",
+            why_suspicious="User input in command",
+            entry_point_trace=["POST /run"],
+            trace_steps=trace_steps or [],
+            guards=guards or [],
+        )
+
+    def test_unknown_guards_get_no_credit(self):
+        """Guards with 'unknown' effectiveness contribute 0 to trace quality."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "validate(x)", "effectiveness": "unknown"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.8)
+
+    def test_effective_guards_get_credit(self):
+        """Guards with 'effective' effectiveness get the +0.1 credit."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "validate(x)", "effectiveness": "effective"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.9)
+
+    def test_partial_guards_get_credit(self):
+        """Guards with 'partial' effectiveness get credit (they were evaluated)."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "validate(x)", "effectiveness": "partial"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.9)
+
+    def test_bypassable_guards_get_credit(self):
+        """Guards with 'bypassable' effectiveness get credit (they were evaluated)."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "validate(x)", "effectiveness": "bypassable", "bypass_reason": "encoding bypass"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.9)
+
+    def test_no_guards_no_guard_credit(self):
+        """Signals with no guards get 0 guard credit."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.8)
+
+    def test_guard_without_snippet_gets_no_credit(self):
+        """Guards without code_snippet get no credit, even if marked effective."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "", "effectiveness": "effective"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.8)
+
+    def test_mixed_guards_only_evaluated_get_credit(self):
+        """Only guards with evaluated (non-unknown) effectiveness AND code snippets get credit."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "propagation", "file_path": "a.py", "line_number": 5},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "check(x)", "effectiveness": "unknown"},
+                {"code_snippet": "sanitize(x)", "effectiveness": "effective"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(1.0)

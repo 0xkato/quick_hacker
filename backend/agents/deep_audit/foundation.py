@@ -523,8 +523,11 @@ class SuspiciousSignal:
             step_quality = valid_steps / len(self.trace_steps)
             score += 0.2 * step_quality
 
-        # Only count guards with actual code evidence (not placeholders from unstructured guards_present)
-        if self.guards and any(g.get("code_snippet") for g in self.guards):
+        # Only count guards with code evidence AND evaluated effectiveness (not unknown/defaulted)
+        if self.guards and any(
+            g.get("code_snippet") and g.get("effectiveness", "unknown") != "unknown"
+            for g in self.guards
+        ):
             score += 0.1
 
         if len(self.trace_steps) >= 3:

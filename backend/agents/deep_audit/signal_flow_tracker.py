@@ -46,6 +46,9 @@ class SignalFlowTracker:
         self.traces: dict[str, SignalTrace] = {}
         self.parse_stats = Counter()  # json_ok, markdown_fallback, parse_failure
         self.persist_stats = Counter()  # saved, unverified_blocked, deduped, db_error
+        self.guard_total = 0
+        self.guard_with_evidence = 0
+        self.guard_unknown = 0
 
     def enter(self, signal_id: str, title: str, severity: str, signal_source: str = "sink_hunter"):
         """Signal enters the routing pipeline."""
@@ -87,6 +90,12 @@ class SignalFlowTracker:
         """Track persistence: saved, unverified_blocked, deduped, db_error."""
         self.persist_stats[result] += 1
 
+    def record_guard_stats(self, total: int, with_evidence: int, unknown: int):
+        """Track guard evidence stats (accumulates across calls)."""
+        self.guard_total += total
+        self.guard_with_evidence += with_evidence
+        self.guard_unknown += unknown
+
     def summary(self) -> dict:
         """Return structured summary of all signal flows."""
         total = len(self.traces)
@@ -118,10 +127,26 @@ class SignalFlowTracker:
             if t.final_disposition == "dismissed" and t.has_unknowns
         )
 
+        evidence_rate = (
+            self.guard_with_evidence / self.guard_total
+            if self.guard_total > 0
+            else 0.0
+        )
+        guard_stats = {
+            "total_guards": self.guard_total,
+            "with_evidence": self.guard_with_evidence,
+            "unknown": self.guard_unknown,
+            "evidence_rate": evidence_rate,
+        }
+
         warnings = []
         if dismissed_with_unknowns > 0:
             warnings.append(
                 f"{dismissed_with_unknowns} signal(s) dismissed with unresolved unknowns"
+            )
+        if self.guard_total > 0 and evidence_rate < 0.5:
+            warnings.append(
+                f"Low guard evidence rate: {self.guard_with_evidence}/{self.guard_total} ({evidence_rate:.0%}) guards have validated evidence"
             )
         if self.parse_stats["markdown_fallback"] > 0:
             warnings.append(
@@ -150,6 +175,7 @@ class SignalFlowTracker:
             "persist_stats": dict(self.persist_stats),
             "dropped_high_severity": dropped_signals,
             "dismissed_with_unknowns": dismissed_with_unknowns,
+            "guard_stats": guard_stats,
             "warnings": warnings,
         }
 

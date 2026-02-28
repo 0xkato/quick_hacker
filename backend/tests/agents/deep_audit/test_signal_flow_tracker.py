@@ -365,6 +365,43 @@ class TestDismissedWithUnknowns:
         assert any("dismissed with unresolved unknowns" in w for w in s["warnings"])
 
 
+class TestGuardEvidenceRate:
+    def test_record_guard_stats(self):
+        """record_guard_stats() tracks guard evidence for evaluation."""
+        tracker = SignalFlowTracker()
+        tracker.record_guard_stats(total=5, with_evidence=3, unknown=2)
+        s = tracker.summary()
+        assert s["guard_stats"]["total_guards"] == 5
+        assert s["guard_stats"]["with_evidence"] == 3
+        assert s["guard_stats"]["unknown"] == 2
+        assert s["guard_stats"]["evidence_rate"] == pytest.approx(0.6)
+
+    def test_record_guard_stats_accumulates(self):
+        """Multiple calls to record_guard_stats() accumulate."""
+        tracker = SignalFlowTracker()
+        tracker.record_guard_stats(total=3, with_evidence=2, unknown=1)
+        tracker.record_guard_stats(total=2, with_evidence=0, unknown=2)
+        s = tracker.summary()
+        assert s["guard_stats"]["total_guards"] == 5
+        assert s["guard_stats"]["with_evidence"] == 2
+        assert s["guard_stats"]["unknown"] == 3
+        assert s["guard_stats"]["evidence_rate"] == pytest.approx(0.4)
+
+    def test_guard_stats_default_empty(self):
+        """Guard stats default to zeros when no guards recorded."""
+        tracker = SignalFlowTracker()
+        s = tracker.summary()
+        assert s["guard_stats"]["total_guards"] == 0
+        assert s["guard_stats"]["evidence_rate"] == 0.0
+
+    def test_low_evidence_rate_warning(self):
+        """summary() warns when guard evidence rate is below 50%."""
+        tracker = SignalFlowTracker()
+        tracker.record_guard_stats(total=10, with_evidence=3, unknown=7)
+        s = tracker.summary()
+        assert any("guard evidence rate" in w.lower() for w in s["warnings"])
+
+
 class TestFullPipelineFlow:
     """End-to-end test simulating the exact sequence of calls overseer.py makes."""
 

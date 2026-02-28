@@ -293,6 +293,100 @@ class TestGuardInfo:
         assert restored.effectiveness == "partial"
         assert restored.bypass_reason == "Only checks role, not resource ownership"
 
+    def test_validate_downgrades_effective_without_snippet(self):
+        """A guard marked 'effective' without code_snippet is downgraded to 'unknown'."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="validation",
+            code_snippet="",
+            description="Validates input",
+            effectiveness="effective",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "unknown"
+
+    def test_validate_downgrades_effective_without_bypass_resistance(self):
+        """A guard marked 'effective' without bypass_reason explanation is downgraded to 'unknown'."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="validation",
+            code_snippet="if not re.match(r'^[a-z]+$', user_input):",
+            description="Validates input is lowercase alpha",
+            effectiveness="effective",
+            bypass_reason="",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "unknown"
+
+    def test_validate_keeps_effective_with_full_evidence(self):
+        """A guard with code_snippet AND bypass_reason stays 'effective'."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="validation",
+            code_snippet="if not re.match(r'^[a-z]+$', user_input): raise ValueError",
+            description="Validates input is lowercase alpha only",
+            effectiveness="effective",
+            bypass_reason="Regex is anchored and restrictive; no bypass feasible",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "effective"
+
+    def test_validate_keeps_partial_with_snippet(self):
+        """A guard marked 'partial' with code_snippet stays 'partial'."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="sanitization",
+            code_snippet="html.escape(user_input)",
+            description="HTML escapes user input",
+            effectiveness="partial",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "partial"
+
+    def test_validate_downgrades_partial_without_snippet(self):
+        """A guard marked 'partial' without code_snippet is downgraded to 'unknown'."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="sanitization",
+            code_snippet="",
+            description="Sanitizes input",
+            effectiveness="partial",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "unknown"
+
+    def test_validate_keeps_bypassable(self):
+        """A guard marked 'bypassable' stays 'bypassable' (already weakest evaluated state)."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="validation",
+            code_snippet="",
+            description="Validates input",
+            effectiveness="bypassable",
+            bypass_reason="Encoding bypass allows special chars",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "bypassable"
+
+    def test_validate_keeps_unknown(self):
+        """A guard already 'unknown' stays 'unknown'."""
+        guard = GuardInfo(
+            file_path="src/auth.py",
+            line_number=10,
+            guard_type="validation",
+            code_snippet="",
+            description="Validates input",
+            effectiveness="unknown",
+        )
+        guard.validate_effectiveness()
+        assert guard.effectiveness == "unknown"
+
 
 class TestComputeTraceQuality:
     def _make_signal(self, trace_steps=None, guards=None):

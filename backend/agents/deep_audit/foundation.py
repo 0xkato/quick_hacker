@@ -739,3 +739,22 @@ class GuardInfo:
             effectiveness=data.get("effectiveness", "unknown"),
             bypass_reason=data.get("bypass_reason", ""),
         )
+
+    def validate_effectiveness(self) -> None:
+        """System-enforced guard validation. Downgrades unsupported claims.
+
+        Rules:
+        - A guard without code_snippet is automatically 'unknown' (regardless of LLM claim)
+        - A guard marked 'effective' without bypass_reason is downgraded to 'unknown'
+        - 'partial' requires code_snippet
+        - 'bypassable' and 'unknown' are not downgraded (already weak/honest)
+        """
+        if self.effectiveness in ("bypassable", "unknown"):
+            return
+
+        if not self.code_snippet or not self.code_snippet.strip():
+            self.effectiveness = "unknown"
+            return
+
+        if self.effectiveness == "effective" and (not self.bypass_reason or not self.bypass_reason.strip()):
+            self.effectiveness = "unknown"

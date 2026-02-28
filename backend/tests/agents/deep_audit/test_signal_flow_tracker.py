@@ -287,6 +287,38 @@ class TestPrintReport:
         assert "specialist" in output
 
 
+class TestSignalSource:
+    def test_signal_trace_has_signal_source_field(self):
+        """SignalTrace has a signal_source field defaulting to 'sink_hunter'."""
+        trace = SignalTrace(signal_id="sig-1", title="Test", severity="HIGH")
+        assert trace.signal_source == "sink_hunter"
+
+    def test_enter_accepts_signal_source(self):
+        """SignalFlowTracker.enter() accepts optional signal_source parameter."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "Test", "HIGH", signal_source="behavioral_sink")
+        assert tracker.traces["sig-1"].signal_source == "behavioral_sink"
+
+    def test_enter_defaults_signal_source(self):
+        """SignalFlowTracker.enter() defaults signal_source to 'sink_hunter'."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "Test", "HIGH")
+        assert tracker.traces["sig-1"].signal_source == "sink_hunter"
+
+    def test_summary_includes_by_signal_source(self):
+        """summary() includes by_signal_source counts."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "SQL Injection", "HIGH", signal_source="sink_hunter")
+        tracker.enter("sig-2", "Missing auth", "HIGH", signal_source="policy_deviation")
+        tracker.enter("sig-3", "IDOR", "MEDIUM", signal_source="behavioral_sink")
+
+        s = tracker.summary()
+        assert "by_signal_source" in s
+        assert s["by_signal_source"]["sink_hunter"] == 1
+        assert s["by_signal_source"]["policy_deviation"] == 1
+        assert s["by_signal_source"]["behavioral_sink"] == 1
+
+
 class TestFullPipelineFlow:
     """End-to-end test simulating the exact sequence of calls overseer.py makes."""
 

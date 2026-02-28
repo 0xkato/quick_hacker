@@ -21,6 +21,7 @@ class SignalTrace:
     classification: Optional[str] = None
     drop_stage: Optional[str] = None
     drop_reason: Optional[str] = None
+    signal_source: str = "sink_hunter"
 
 
 class SignalFlowTracker:
@@ -30,6 +31,8 @@ class SignalFlowTracker:
         tracker = SignalFlowTracker()
         tracker.enter(signal_id, title, severity)
         tracker.record_stage(signal_id, "decider", "investigate")
+        tracker.record_stage(signal_id, "dataflow_tracer", "taint_confirmed")
+        tracker.record_stage(signal_id, "coordinator", "api_design")
         tracker.record_stage(signal_id, "specialist", "vulnerable")
         tracker.record_stage(signal_id, "triager", "SECURITY_VULNERABILITY")
         tracker.record_parse("json_ok")
@@ -43,12 +46,13 @@ class SignalFlowTracker:
         self.parse_stats = Counter()  # json_ok, markdown_fallback, parse_failure
         self.persist_stats = Counter()  # saved, unverified_blocked, deduped, db_error
 
-    def enter(self, signal_id: str, title: str, severity: str):
+    def enter(self, signal_id: str, title: str, severity: str, signal_source: str = "sink_hunter"):
         """Signal enters the routing pipeline."""
         self.traces[signal_id] = SignalTrace(
             signal_id=signal_id,
             title=title[:80],
             severity=severity,
+            signal_source=signal_source,
         )
 
     def record_stage(self, signal_id: str, stage: str, result: str, detail: str = ""):
@@ -91,6 +95,9 @@ class SignalFlowTracker:
         by_classification = Counter(
             t.classification for t in self.traces.values() if t.classification
         )
+        by_signal_source = Counter(
+            t.signal_source for t in self.traces.values()
+        )
         dropped_signals = [
             {
                 "signal_id": t.signal_id,
@@ -127,6 +134,7 @@ class SignalFlowTracker:
             "by_disposition": dict(by_disposition),
             "by_drop_stage": dict(by_drop_stage),
             "by_classification": dict(by_classification),
+            "by_signal_source": dict(by_signal_source),
             "parse_stats": dict(self.parse_stats),
             "persist_stats": dict(self.persist_stats),
             "dropped_high_severity": dropped_signals,
@@ -142,6 +150,8 @@ class SignalFlowTracker:
         parse = s["parse_stats"]
         persist = s["persist_stats"]
 
+        drop = s["by_drop_stage"]
+
         parts = [
             f"Pipeline: {total} signals entered",
             f"{disp.get('verified', 0)} verified",
@@ -150,6 +160,9 @@ class SignalFlowTracker:
         if cls:
             cls_parts = [f"{v}x {k}" for k, v in sorted(cls.items())]
             parts.append(f"[{', '.join(cls_parts)}]")
+        dataflow_drops = drop.get("dataflow_tracer", 0)
+        if dataflow_drops > 0:
+            parts.append(f"{dataflow_drops} dataflow-dropped")
         if parse.get("markdown_fallback", 0) > 0:
             parts.append(f"{parse['markdown_fallback']} markdown-fallback")
         if parse.get("parse_failure", 0) > 0:
@@ -188,6 +201,8 @@ class SignalFlowTracker:
             "  |",
             "  Routing Outcomes:",
             f"  |-- Decider Dismiss: {drop.get('decider', 0):>3}",
+            f"  |-- Dataflow Drop:   {drop.get('dataflow_tracer', 0):>3}",
+            f"  |-- Coordinator Skip:{drop.get('coordinator', 0):>3}",
             f"  |-- Specialist Rej:  {drop.get('specialist', 0):>3}",
             f"  |-- Triager Dismiss: {drop.get('triager', 0):>3}",
             f"  |-- Verified:        {verified:>3}",

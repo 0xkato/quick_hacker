@@ -524,8 +524,9 @@ class SuspiciousSignal:
             score += 0.2 * step_quality
 
         # Only count guards with code evidence AND evaluated effectiveness (not unknown/defaulted)
+        _evaluated = ("effective", "partial", "bypassable")
         if self.guards and any(
-            g.get("code_snippet") and g.get("effectiveness", "unknown") != "unknown"
+            g.get("code_snippet") and g.get("effectiveness") in _evaluated
             for g in self.guards
         ):
             score += 0.1

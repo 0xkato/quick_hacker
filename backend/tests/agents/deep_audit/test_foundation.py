@@ -392,6 +392,34 @@ class TestComputeTraceQuality:
         quality = signal.compute_trace_quality()
         assert quality == pytest.approx(0.8)
 
+    def test_guard_with_none_effectiveness_gets_no_credit(self):
+        """Guards with None effectiveness should not get credit."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "validate(x)", "effectiveness": None},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.8)
+
+    def test_guard_with_invalid_effectiveness_gets_no_credit(self):
+        """Guards with invalid effectiveness values should not get credit."""
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {"code_snippet": "validate(x)", "effectiveness": "invalid"},
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        assert quality == pytest.approx(0.8)
+
     def test_mixed_guards_only_evaluated_get_credit(self):
         """Only guards with evaluated (non-unknown) effectiveness AND code snippets get credit."""
         signal = self._make_signal(

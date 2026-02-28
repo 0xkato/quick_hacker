@@ -2,6 +2,7 @@
 import pytest
 from agents.deep_audit.foundation import (
     FoundationContext,
+    GuardInfo,
     RepoProfile,
     ScopeMap,
     ThreatModel,
@@ -258,3 +259,36 @@ class TestSuspiciousSignal:
         assert "SQL_INJECTION" in context
         assert "src/db/query.py:100" in context
         assert "String interpolation" in context
+
+
+class TestGuardInfo:
+    def test_from_dict_defaults_effectiveness_to_unknown(self):
+        """GuardInfo.from_dict() must default effectiveness to 'unknown', not 'effective'."""
+        guard = GuardInfo.from_dict({})
+        assert guard.effectiveness == "unknown"
+
+    def test_from_dict_preserves_explicit_effective(self):
+        """GuardInfo.from_dict() preserves 'effective' when explicitly provided."""
+        guard = GuardInfo.from_dict({"effectiveness": "effective"})
+        assert guard.effectiveness == "effective"
+
+    def test_from_dict_accepts_unknown_effectiveness(self):
+        """GuardInfo.from_dict() accepts 'unknown' as a valid effectiveness value."""
+        guard = GuardInfo.from_dict({"effectiveness": "unknown"})
+        assert guard.effectiveness == "unknown"
+
+    def test_from_dict_roundtrip(self):
+        """GuardInfo.to_dict() -> from_dict() preserves all fields."""
+        original = GuardInfo(
+            file_path="src/auth.py",
+            line_number=42,
+            guard_type="authorization",
+            code_snippet="if user.is_admin:",
+            description="Admin check",
+            effectiveness="partial",
+            bypass_reason="Only checks role, not resource ownership",
+        )
+        restored = GuardInfo.from_dict(original.to_dict())
+        assert restored.file_path == original.file_path
+        assert restored.effectiveness == "partial"
+        assert restored.bypass_reason == "Only checks role, not resource ownership"

@@ -14,6 +14,47 @@ from fnmatch import fnmatch
 from typing import Any
 
 
+# Maps detected languages to relevant vulnerability focus areas.
+# Keys are lowercase. Values are lists of focus short_names from HUNT_FOCUSES.
+LANG_TO_FOCUSES: dict[str, list[str]] = {
+    # Native code — memory safety is primary concern
+    "c":            ["memory", "injection", "race", "crypto", "disclosure"],
+    "c++":          ["memory", "injection", "race", "crypto", "deserialization", "disclosure"],
+    "rust":         ["memory", "injection", "race", "crypto"],
+    # Web backend languages — injection + web + auth
+    "python":       ["injection", "network", "deserialization", "auth", "crypto", "input", "idor", "race", "logic"],
+    "javascript":   ["injection", "network", "deserialization", "input", "auth", "idor", "race", "logic"],
+    "typescript":   ["injection", "network", "deserialization", "input", "auth", "idor", "race", "logic"],
+    "java":         ["injection", "network", "deserialization", "auth", "crypto", "race", "idor", "logic"],
+    "go":           ["injection", "network", "race", "crypto", "auth"],
+    "php":          ["injection", "network", "deserialization", "input", "auth", "idor", "disclosure"],
+    "ruby":         ["injection", "network", "deserialization", "auth", "idor", "logic"],
+    "csharp":       ["injection", "network", "deserialization", "auth", "crypto", "race", "idor"],
+    "c#":           ["injection", "network", "deserialization", "auth", "crypto", "race", "idor"],
+    "kotlin":       ["injection", "network", "deserialization", "auth", "race", "idor"],
+    "swift":        ["injection", "network", "auth", "crypto"],
+}
+
+# Frameworks can add focuses the language alone wouldn't suggest.
+FRAMEWORK_TO_FOCUSES: dict[str, list[str]] = {
+    "fastapi":   ["network", "auth", "idor"],
+    "flask":     ["network", "auth", "input"],
+    "django":    ["network", "auth", "input", "idor"],
+    "express":   ["network", "auth", "input", "idor"],
+    "spring":    ["network", "auth", "deserialization", "idor"],
+    "react":     ["input"],
+    "angular":   ["input"],
+    "rails":     ["network", "auth", "input", "idor"],
+    "laravel":   ["network", "auth", "input", "idor", "deserialization"],
+    "asp.net":   ["network", "auth", "deserialization", "idor"],
+    "gin":       ["network", "auth"],
+    "actix":     ["network", "auth"],
+}
+
+# Always include at least one general-purpose pass
+UNIVERSAL_FOCUSES: list[str] = ["injection"]
+
+
 class AttackerCapability(Enum):
     """Defines what an attacker can do in the threat model."""
     NETWORK_ACCESS = "network_access"
@@ -199,6 +240,35 @@ class FoundationContext:
             lines.append(self.security_map_summary)
 
         return "\n".join(lines)
+
+    def get_relevant_focus_names(self) -> list[str]:
+        """Return focus short_names relevant to this repo's languages/frameworks.
+
+        Returns empty list if nothing matched (caller should use all focuses).
+        """
+        focuses: set[str] = set(UNIVERSAL_FOCUSES)
+
+        for lang in self.repo_profile.languages:
+            normalized = lang.strip().lower().replace("#", "sharp")
+            if normalized in LANG_TO_FOCUSES:
+                focuses.update(LANG_TO_FOCUSES[normalized])
+            else:
+                for key in LANG_TO_FOCUSES:
+                    if normalized.startswith(key) or key.startswith(normalized):
+                        focuses.update(LANG_TO_FOCUSES[key])
+
+        for fw in self.repo_profile.frameworks:
+            normalized = fw.strip().lower().replace(" ", "").replace(".", "")
+            for key in FRAMEWORK_TO_FOCUSES:
+                if key in normalized or normalized in key:
+                    focuses.update(FRAMEWORK_TO_FOCUSES[key])
+
+        # If only universal focuses matched (no language/framework hit), return empty
+        # to signal "use all focuses" — we don't know enough to filter.
+        if focuses == set(UNIVERSAL_FOCUSES) and len(self.repo_profile.languages) == 0:
+            return []
+
+        return sorted(focuses)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the foundation context to a dictionary for serialization."""
@@ -414,14 +484,61 @@ class SuspiciousSignal:
     hunter_notes: str | None = None
     foundation_context_summary: str | None = None
 
+    # Structured trace fields (populated by DataflowTracer, accumulated across pipeline)
+    trace_steps: list[dict] = field(default_factory=list)    # List of TraceStep-shaped dicts
+    guards: list[dict] = field(default_factory=list)          # List of GuardInfo-shaped dicts
+    trace_verified: bool = False                               # True after DataflowTracer verifies
+    trace_quality: float = 0.0                                 # 0.0-1.0, computed by system
+
     def __post_init__(self):
         if self.line_start < 0:
             self.line_start = 0
         if self.line_end is not None and self.line_end < self.line_start:
             self.line_end = self.line_start
 
+    def compute_trace_quality(self) -> float:
+        """Compute trace quality score (0.0-1.0) based on structural completeness.
+
+        The SYSTEM computes this — not the LLM. This is the enforcement gate.
+        """
+        if not self.trace_steps:
+            self.trace_quality = 0.0
+            return 0.0
+
+        score = 0.0
+        has_source = any(s.get("role") == "source" for s in self.trace_steps)
+        has_sink = any(s.get("role") == "sink" for s in self.trace_steps)
+
+        if has_source:
+            score += 0.3
+        if has_sink:
+            score += 0.3
+
+        # Each step must have file:line (not empty/zero)
+        valid_steps = sum(
+            1 for s in self.trace_steps
+            if s.get("file_path") and s.get("line_number", 0) > 0
+        )
+        if self.trace_steps:
+            step_quality = valid_steps / len(self.trace_steps)
+            score += 0.2 * step_quality
+
+        # Only count guards with actual code evidence (not placeholders from unstructured guards_present)
+        if self.guards and any(g.get("code_snippet") for g in self.guards):
+            score += 0.1
+
+        if len(self.trace_steps) >= 3:
+            score += 0.1
+
+        self.trace_quality = min(1.0, score)
+        return self.trace_quality
+
     def to_specialist_context(self) -> str:
-        """Format signal for specialist agent consumption."""
+        """Format signal for specialist agent consumption.
+
+        When a verified trace is available, formats structured source-to-sink path.
+        Otherwise falls back to unstructured entry_point_trace list.
+        """
         lines = [
             f"## Signal: {self.signal_id}",
             "",
@@ -435,11 +552,62 @@ class SuspiciousSignal:
             "```",
             "",
             f"**Why Suspicious:** {self.why_suspicious}",
-            "",
-            "**Entry Point Trace:**",
         ]
-        for i, step in enumerate(self.entry_point_trace):
-            lines.append(f"  {i + 1}. {step}")
+
+        # Structured trace (from DataflowTracer) — preferred
+        if self.trace_steps:
+            lines.append("")
+            lines.append(f"## {'Verified ' if self.trace_verified else ''}Source-to-Sink Trace (quality: {self.trace_quality:.1f})")
+            lines.append("")
+            role_labels = {
+                "source": "SOURCE (attacker input)",
+                "propagation": "PROPAGATION",
+                "transform": "TRANSFORM",
+                "guard": "GUARD",
+                "sink": "SINK (dangerous function)",
+            }
+            for i, step in enumerate(self.trace_steps):
+                role = step.get("role", "propagation")
+                label = role_labels.get(role, role.upper())
+                fp = step.get("file_path", "?")
+                ln = step.get("line_number", "?")
+                func = step.get("function_name", "?")
+                var = step.get("variable", "")
+                snippet = step.get("code_snippet", "")
+                var_str = f" — variable: `{var}`" if var else ""
+                lines.append(f"### {i + 1}. {label}")
+                lines.append(f"`{fp}:{ln}` — `{func}()`{var_str}")
+                if snippet:
+                    lines.append("```")
+                    lines.append(snippet.strip())
+                    lines.append("```")
+                note = step.get("note", "")
+                if note:
+                    lines.append(f"*{note}*")
+                lines.append("")
+
+            # Guards section
+            if self.guards:
+                lines.append("### Guards Found Along Path")
+                for guard in self.guards:
+                    gfp = guard.get("file_path", "?")
+                    gln = guard.get("line_number", "?")
+                    gtype = guard.get("guard_type", "unknown").replace("_", " ").title()
+                    gdesc = guard.get("description", "")
+                    geff = guard.get("effectiveness", "unknown").upper()
+                    gsnippet = guard.get("code_snippet", "")
+                    gbypass = guard.get("bypass_reason", "")
+                    lines.append(f"- `{gfp}:{gln}` — {gtype}: {gdesc}")
+                    if gsnippet:
+                        lines.append(f"  `{gsnippet.strip()}`")
+                    lines.append(f"  **{geff}**{': ' + gbypass if gbypass else ''}")
+                lines.append("")
+        else:
+            # Fallback: unstructured entry_point_trace
+            lines.append("")
+            lines.append("**Entry Point Trace:**")
+            for i, step in enumerate(self.entry_point_trace):
+                lines.append(f"  {i + 1}. {step}")
 
         if self.sink_function:
             lines.append(f"\n**Sink Function:** {self.sink_function}")
@@ -465,12 +633,16 @@ class SuspiciousSignal:
             "related_signals": self.related_signals,
             "hunter_notes": self.hunter_notes,
             "foundation_context_summary": self.foundation_context_summary,
+            "trace_steps": self.trace_steps,
+            "guards": self.guards,
+            "trace_verified": self.trace_verified,
+            "trace_quality": self.trace_quality,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SuspiciousSignal":
         """Deserialize from dictionary."""
-        return cls(
+        signal = cls(
             signal_id=data["signal_id"],
             category=SignalCategory(data["category"]),
             severity=SignalSeverity(data["severity"]),
@@ -484,4 +656,82 @@ class SuspiciousSignal:
             related_signals=data.get("related_signals", []),
             hunter_notes=data.get("hunter_notes"),
             foundation_context_summary=data.get("foundation_context_summary"),
+            trace_steps=data.get("trace_steps", []),
+            guards=data.get("guards", []),
+            trace_verified=data.get("trace_verified", False),
+            trace_quality=data.get("trace_quality", 0.0),
+        )
+        return signal
+
+
+@dataclass
+class TraceStep:
+    """A single verified step in a source-to-sink data flow trace.
+
+    Each step MUST have file_path and line_number from actual tool reads.
+    """
+    file_path: str
+    line_number: int
+    function_name: str
+    code_snippet: str
+    role: str                # "source" | "propagation" | "transform" | "guard" | "sink"
+    variable: str = ""
+    note: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "file_path": self.file_path,
+            "line_number": self.line_number,
+            "function_name": self.function_name,
+            "code_snippet": self.code_snippet,
+            "role": self.role,
+            "variable": self.variable,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TraceStep":
+        return cls(
+            file_path=data.get("file_path", ""),
+            line_number=data.get("line_number", 0),
+            function_name=data.get("function_name", ""),
+            code_snippet=data.get("code_snippet", ""),
+            role=data.get("role", "propagation"),
+            variable=data.get("variable", ""),
+            note=data.get("note", ""),
+        )
+
+
+@dataclass
+class GuardInfo:
+    """A guard/sanitization found along the trace path."""
+    file_path: str
+    line_number: int
+    guard_type: str          # "validation" | "sanitization" | "authorization" | "bounds_check" | "type_check"
+    code_snippet: str
+    description: str
+    effectiveness: str       # "effective" | "partial" | "bypassable" | "unknown"
+    bypass_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "file_path": self.file_path,
+            "line_number": self.line_number,
+            "guard_type": self.guard_type,
+            "code_snippet": self.code_snippet,
+            "description": self.description,
+            "effectiveness": self.effectiveness,
+            "bypass_reason": self.bypass_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GuardInfo":
+        return cls(
+            file_path=data.get("file_path", ""),
+            line_number=data.get("line_number", 0),
+            guard_type=data.get("guard_type", "validation"),
+            code_snippet=data.get("code_snippet", ""),
+            description=data.get("description", ""),
+            effectiveness=data.get("effectiveness", "unknown"),
+            bypass_reason=data.get("bypass_reason", ""),
         )

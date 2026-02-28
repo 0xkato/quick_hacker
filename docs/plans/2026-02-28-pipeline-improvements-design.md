@@ -1,7 +1,7 @@
 # Deep Audit Pipeline Improvements Design
 
 **Date:** 2026-02-28
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Draft
 
 ## Purpose
@@ -9,6 +9,58 @@
 This document defines 11 behavioral corrections and capability expansions for the deep audit pipeline. Each item identifies a wrong assumption in the current system, the rule that replaces it, which pipeline decisions change, what mistakes are reduced, and how success is measured.
 
 Items are grouped into tiers by dependency and implementation order.
+
+---
+
+## Glossary
+
+Two terms are used throughout this document and must not be conflated:
+
+- **Unknown** — the system evaluated something but cannot justify its effect. The analysis was attempted; the conclusion is "we don't know what this does." Unknown blocks unjustified dismissal: a guard with unknown effectiveness cannot be used to argue a path is safe.
+
+- **Unverified** — the proof step itself has not been completed. The analysis was not attempted, or was attempted but did not finish. Unverified means the pipeline owes more work before strong conclusions in either direction.
+
+The distinction matters because they imply different responses:
+
+| State | Meaning | Pipeline response |
+|-------|---------|-------------------|
+| Unknown | Looked, can't justify | Cannot clear the path; flag for reviewer |
+| Unverified | Didn't look yet | Cannot conclude either way; schedule more work if budget allows |
+
+Both states share one rule: **neither clears a path on its own.**
+
+---
+
+## Evidence Layers
+
+Several items in this design reference evidence that comes from different sources with different reliability. The system must distinguish three layers:
+
+1. **Codebase evidence** — what the code structurally says. Route registrations, decorator presence, function calls, data flow. This is the most reliable layer because it comes from reading actual source files.
+
+2. **Threat-model-dependent interpretation** — whether the observed behavior matters given the attacker model. A vulnerability behind an admin-only endpoint is real in the code, but only exploitable if the threat model includes authenticated attackers. This layer depends on `ThreatModelProfile.attacker_capabilities` (threat_model_profile.py:22-29) and the threat model preset (`A`, `AB`, `ABC`).
+
+3. **Deployment-dependent interpretation** — whether the observed behavior is active in the target deployment. A debug endpoint exists in code, but may be disabled in production via environment variable. A feature-flag-gated code path is real, but may not be reachable in the deployed configuration.
+
+The system should always be able to state:
+
+- "This behavior exists in the code" (codebase evidence)
+- "This attacker can / cannot reach it" (threat model interpretation)
+- "This is / is not active in the assumed deployment" (deployment interpretation)
+
+These layers are especially relevant to #1 (Expected Behavior), #3 (Preconditions), #5 (Expanded Sources), and #7 (Reachability). A finding should never be dismissed by collapsing these layers — "this is debug-only" is a deployment claim, not a codebase claim, and requires deployment evidence.
+
+---
+
+## Non-Goals
+
+These are not goals of this design. Each is a common misreading of the proposals:
+
+- **Unknown does not automatically mean vulnerable.** Unknown means not established. It blocks dismissal, but it does not create a finding.
+- **The intent map does not automatically mean safe.** Inferred intent is a reference, not an authority. It supports classification but does not override evidence.
+- **Pattern match does not auto-confirm sibling findings.** A confirmed pattern creates a high-priority signal. That signal still goes through the full pipeline.
+- **Reachability does not erase real issues without evidence.** Unreachability must be established, not assumed. `debug_test_only` classification requires proof that the code is actually gated.
+- **New signal sources do not lower the proof bar.** Every signal — from deviation detection, error-path hunting, pattern matching, or behavioral sink analysis — goes through the same DataflowTracer → Specialist → Devil's Advocate → Triager pipeline.
+- **The evaluation record does not prove objective security ground truth.** It measures pipeline behavior, consistency, productivity, and regression. Ground-truth validation still comes from benchmarked cases, known findings, or manual review.
 
 ---
 
@@ -198,6 +250,16 @@ Every scan produces a structured **evaluation record** that can be compared agai
 
 Meta-mistakes — changes that make the system worse without anyone noticing. Prompt tweaks that raise the dismissal rate. Threshold adjustments that filter legitimate signals. New hunters that generate noise without true positives.
 
+**What the evaluation record proves and does not prove:**
+
+The evaluation record measures pipeline behavior, consistency, productivity, and regression. It does not measure objective security ground truth by itself.
+
+- "Finding count went up" means the pipeline is producing more output. It does not mean the output is more correct.
+- "Dismissal rate went down" means the pipeline is filtering less. It does not mean the filtering was wrong before.
+- "Unknown burden went up" means the pipeline is being more honest about uncertainty. Whether that honesty leads to better outcomes is measured by comparing against known findings, benchmarked cases, or manual review.
+
+The evaluation record is internal performance evidence. Ground-truth validation is a separate concern that requires external reference data.
+
 **How you will know it worked:**
 
 - You can answer "is the system better this week than last week" with data
@@ -229,6 +291,16 @@ The foundation phase produces an **endpoint intent map** alongside the existing 
 - **Confidence**: `explicit` (from decorators/annotations) vs `inferred` (from naming/context)
 
 The intent map is descriptive, not prescriptive. It records what the codebase appears to intend based on structural evidence.
+
+**BY_DESIGN classification standard:**
+
+The confidence level of the intent map entry determines how much weight it carries in classification:
+
+- **Explicit intent** (from decorators, annotations, access control config) can strongly support `BY_DESIGN`. Example: `@public_api` decorator on an endpoint that exposes data — the code explicitly marks this as intended public access.
+- **Inferred intent** (from naming, context, module structure) can support `BY_DESIGN` only when corroborated by other evidence — such as consistent patterns across sibling endpoints, documentation, or absence of any guard suggesting the behavior was meant to be restricted.
+- **Risky behavior with only inferred intent should stay contestable.** If the intent map says "this endpoint is probably public" based on naming alone, and the endpoint performs a destructive operation (delete, write, execute), the inferred intent is not strong enough to clear `BY_DESIGN`. The finding should remain open or be classified with a flag indicating the intent basis was weak.
+
+This prevents the system from moving the old problem into a more structured artifact: instead of "LLM guessed this was intended" → "intent map inferred this was intended." The structured outfit does not change the strength of the evidence.
 
 **Where this connects to existing code:**
 
@@ -608,6 +680,139 @@ Missed sibling vulnerabilities — same bug repeated across multiple endpoints. 
 - After confirming a finding, pattern_match signals are generated for siblings
 - Some pattern matches survive triage as additional confirmed findings
 - On repos with repeated patterns, recall improves after the first confirmation
+
+---
+
+## Disposition Matrix
+
+This is the single canonical decision layer for classification. All factors from #1, #3, #7, #11 combine here. The Triager uses this matrix — not ad-hoc reasoning — to map evidence to disposition.
+
+### Inputs to Classification
+
+| Factor | Source | Values |
+|--------|--------|--------|
+| Data flow | TraceStep chain | Complete (source→sink) / Partial / None |
+| Guard effectiveness | GuardInfo (validated) | Effective / Partial / Bypassable / Unknown |
+| Intent match | Intent map (#1) | Matches intent / Contradicts intent / No intent entry / Inferred only |
+| Preconditions | Precondition assessment (#3) | All satisfied / Some unsatisfied / Some unknown / All unknown |
+| Reachability | Reachability classification (#7) | Production / Config-dependent / Debug-test-only / Unreachable / Unknown |
+| Threat model | ThreatModelProfile | Attacker has capability / Attacker lacks capability |
+| Unknown burden | Aggregate from above | None / Low (1-2 unknowns) / High (3+ unknowns) |
+
+### Classification Rules
+
+**SECURITY_VULNERABILITY** — all of the following:
+- Data flow is complete (source→sink verified)
+- Guards are bypassable, partial, or unknown (no effective guard blocks the path)
+- Preconditions are satisfied under the threat model (attacker can reach it)
+- Reachability is production or config-dependent (with config likely active)
+- Threat model includes the required attacker capability
+- Intent map either has no entry, or the behavior contradicts the stated intent
+
+**HARDENING** — the behavior is real but one of:
+- Preconditions are unsatisfied under the current threat model (attacker can't reach it, but the code is still weak)
+- Reachability is config-dependent with config unlikely active in production
+- Guard is partial (reduces but doesn't eliminate risk)
+- Threat model excludes the required attacker capability, but a broader model would include it
+
+**BY_DESIGN** — requires all of:
+- Intent map has an entry with `explicit` confidence that matches the observed behavior, OR
+- Intent map has an entry with `inferred` confidence AND corroborating evidence (consistent sibling patterns, documentation, explicit absence of guards across all similar endpoints)
+- The behavior is within the stated allowed operations for the endpoint
+- The finding does not involve a risky operation (delete, execute, write to sensitive resource) with only inferred intent support
+
+**DISMISSED** — the signal is not a real issue:
+- Data flow is disproven (no path from source to sink exists)
+- Guard is effective with validated evidence (code snippet + bypass resistance explanation)
+- Reachability is established as unreachable with evidence
+- The code is in test/vendor/generated scope (already handled by `FoundationContext.is_in_scope()`)
+
+**SPECULATIVE** — the signal requires assumptions to be exploitable:
+- Data flow depends on conditions not established in code ("if the attacker bypasses...")
+- Preconditions are unknown and the signal lacks other supporting evidence
+- The attack scenario requires capabilities not in the threat model and not plausibly obtainable
+
+### Unknown Burden Rules
+
+When unknowns are present, the classification shifts conservatively:
+
+| Unknown factor | Effect on classification |
+|---------------|------------------------|
+| Guard effectiveness unknown | Cannot dismiss based on guard presence. Signal stays open. |
+| Preconditions unknown | Cannot confirm as SECURITY_VULNERABILITY with full confidence. Flag for review. |
+| Reachability unknown | Cannot deprioritize. Treat as production-reachable until established otherwise. |
+| Intent unknown | Cannot classify as BY_DESIGN. Signal stays open. |
+| Multiple unknowns (3+) | High unknown burden. Finding is flagged in evaluation record. Requires manual review or additional analysis before strong classification. |
+
+### Evidence Layer Requirements
+
+Each classification must state which evidence layer supports it (see Evidence Layers section):
+
+- Codebase evidence: what the code says (required for all classifications)
+- Threat model interpretation: whether the attacker can exploit it (required for SECURITY_VULNERABILITY vs HARDENING)
+- Deployment interpretation: whether it's active in production (required for reachability-based deprioritization)
+
+A classification that depends on deployment interpretation must explicitly state the deployment assumption. "This is debug-only" must cite the gating mechanism (env var, feature flag, conditional compilation), not just the module name or file path.
+
+---
+
+## Signal Provenance and Deduplication
+
+After the changes in this design, the same real issue may be surfaced by multiple sources:
+
+- Behavioral sink hunter finds `db.get(user_supplied_id)` as selector control
+- Policy deviation detector finds the endpoint missing an ownership check its siblings have
+- Error-path hunter finds the same endpoint's error handler leaks the full query
+- Pattern matcher finds a sibling endpoint with the same missing guard
+
+This is good for corroboration but creates three operational problems: noise, inflated metrics, and unclear ownership. The following rules resolve them.
+
+### Merge Rules
+
+Signals are **merged** when they refer to the same code location (file + line range) AND the same vulnerability class (same `SignalCategory` or parent family). Merged signals become a single pipeline entry with multiple provenance tags.
+
+Signals **remain separate** when they:
+- Refer to different code locations (even if the same root cause)
+- Refer to different vulnerability classes at the same location (e.g., IDOR + data exposure at the same endpoint)
+- Come from pattern matching — pattern match signals always remain separate from the original confirmed finding, since they are at different locations
+
+### Corroboration Rules
+
+When multiple signal sources identify the same issue (merged signal), the signal's priority and confidence are strengthened:
+
+| Sources | Effect |
+|---------|--------|
+| 1 source | Normal priority |
+| 2 independent sources | Priority boost: processed before single-source signals of the same severity |
+| 3+ independent sources | High-confidence signal: Specialist is informed of convergent evidence |
+
+Corroboration strengthens priority, not disposition. A multi-source signal still goes through the full pipeline and can still be dismissed if the evidence doesn't hold up.
+
+### Metrics Rules
+
+The evaluation record (#10) counts discoveries as follows:
+
+- **Unique findings**: deduplicated by (file_path, line_range, vulnerability_class). This is the primary metric. One real issue = one count, regardless of how many sources found it.
+- **Signal yield per source**: how many raw signals each source generated before dedup. This measures source productivity.
+- **Source contribution**: for each unique finding, which sources contributed signals. This measures which sources are finding real issues vs generating noise.
+- **Corroboration rate**: what fraction of confirmed findings were identified by 2+ independent sources. Higher corroboration rate suggests the signal sources are finding real issues, not noise.
+
+A single issue found by 4 sources counts as 1 unique finding with 4 source contributions. It does not inflate the finding count to 4.
+
+### Provenance Tracking
+
+Every signal entering the pipeline carries a `signal_source` tag:
+
+- `sink_hunter` — traditional function-based sink detection
+- `behavioral_sink` — capability-based detection (#6)
+- `entrypoint_hunter` — entry point discovery
+- `policy_deviation` — baseline comparison (#2)
+- `error_path` — error/fallback branch analysis (#8)
+- `boundary_crossing` — outbound data flow analysis (#8)
+- `config_conditional` — feature-flag/debug-gated code (#8)
+- `pattern_match` — sibling of confirmed finding (#9)
+
+The `SignalFlowTracker` (signal_flow_tracker.py) is extended to record `signal_source` on each `SignalTrace` entry, enabling per-source analysis in the health report.
 
 ---
 

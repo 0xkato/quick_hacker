@@ -523,6 +523,12 @@ class SuspiciousSignal:
             step_quality = valid_steps / len(self.trace_steps)
             score += 0.2 * step_quality
 
+        # Validate guard effectiveness claims (system-enforced)
+        for g in self.guards:
+            guard = GuardInfo.from_dict(g)
+            guard.validate_effectiveness()
+            g["effectiveness"] = guard.effectiveness
+
         # Only count guards with code evidence AND evaluated effectiveness (not unknown/defaulted)
         _evaluated = ("effective", "partial", "bypassable")
         if self.guards and any(

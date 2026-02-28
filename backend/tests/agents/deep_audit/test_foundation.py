@@ -426,7 +426,7 @@ class TestComputeTraceQuality:
                 {"role": "sink", "file_path": "b.py", "line_number": 2},
             ],
             guards=[
-                {"code_snippet": "validate(x)", "effectiveness": "effective"},
+                {"code_snippet": "validate(x)", "effectiveness": "effective", "bypass_reason": "Strict allowlist; no bypass feasible"},
             ],
         )
         quality = signal.compute_trace_quality()
@@ -524,8 +524,33 @@ class TestComputeTraceQuality:
             ],
             guards=[
                 {"code_snippet": "check(x)", "effectiveness": "unknown"},
-                {"code_snippet": "sanitize(x)", "effectiveness": "effective"},
+                {"code_snippet": "sanitize(x)", "effectiveness": "effective", "bypass_reason": "Strict allowlist; no bypass feasible"},
             ],
         )
         quality = signal.compute_trace_quality()
         assert quality == pytest.approx(1.0)
+
+    def test_compute_trace_quality_validates_guards(self):
+        """compute_trace_quality() runs validate_effectiveness() on guards before scoring.
+
+        A guard marked 'effective' by the LLM but without bypass_reason
+        should be auto-downgraded to 'unknown' and get no credit.
+        """
+        signal = self._make_signal(
+            trace_steps=[
+                {"role": "source", "file_path": "a.py", "line_number": 1},
+                {"role": "sink", "file_path": "b.py", "line_number": 2},
+            ],
+            guards=[
+                {
+                    "code_snippet": "sanitize(x)",
+                    "effectiveness": "effective",
+                    # Missing bypass_reason → will be downgraded to unknown
+                },
+            ],
+        )
+        quality = signal.compute_trace_quality()
+        # Guard gets downgraded to unknown → no credit → 0.3+0.3+0.2 = 0.8
+        assert quality == pytest.approx(0.8)
+        # Verify the guard was actually downgraded
+        assert signal.guards[0]["effectiveness"] == "unknown"

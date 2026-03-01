@@ -207,6 +207,17 @@ class SignalFlowTracker:
             parts.append(f"{parse['parse_failure']} parse-fail")
         parts.append(f"{persist.get('saved', 0)} saved to DB")
 
+        # Signal source distribution
+        by_source = s.get("by_signal_source", {})
+        if by_source and len(by_source) > 1:
+            source_parts = [f"{v}x {k}" for k, v in sorted(by_source.items())]
+            parts.append(f"sources: [{', '.join(source_parts)}]")
+
+        # Unknown burden
+        dwu = s.get("dismissed_with_unknowns", 0)
+        if dwu > 0:
+            parts.append(f"{dwu} dismissed-with-unknowns")
+
         return " | ".join(parts)
 
     def print_report(self):
@@ -261,6 +272,23 @@ class SignalFlowTracker:
         lines.append(f"  |-- UNVERIFIED Block: {persist.get('unverified_blocked', 0):>3}")
         lines.append(f"  |-- Dedup Caught:    {persist.get('deduped', 0):>3}")
         lines.append(f"  |-- DB Error:        {persist.get('db_error', 0):>3}")
+
+        # Guard Evidence section
+        guard = s.get("guard_stats", {})
+        if guard.get("total_guards", 0) > 0:
+            rate = guard["evidence_rate"]
+            lines.append("  |")
+            lines.append("  Guard Evidence:")
+            lines.append(f"  |-- Total Guards:    {guard['total_guards']:>3}")
+            lines.append(f"  |-- With Evidence:   {guard['with_evidence']:>3}")
+            lines.append(f"  |-- Unknown:         {guard['unknown']:>3}")
+            lines.append(f"  |-- Evidence Rate:   {rate:>5.0%}")
+
+        # Dismissed with unknowns
+        dwu = s.get("dismissed_with_unknowns", 0)
+        if dwu > 0:
+            lines.append("  |")
+            lines.append(f"  Unknown Burden:      {dwu:>3} dismissed with unknowns")
 
         if warnings:
             lines.append("  |")

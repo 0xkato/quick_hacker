@@ -402,6 +402,57 @@ class TestGuardEvidenceRate:
         assert any("guard evidence rate" in w.lower() for w in s["warnings"])
 
 
+class TestExtendedReport:
+    def test_summary_text_includes_signal_sources(self):
+        """summary_text() mentions signal source distribution."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "SQL Injection", "HIGH", signal_source="sink_hunter")
+        tracker.enter("sig-2", "Missing auth", "HIGH", signal_source="policy_deviation")
+        tracker.record_stage("sig-1", "triager", "SECURITY_VULNERABILITY")
+        tracker.record_parse("json_ok")
+        tracker.record_persist("saved")
+        tracker.record_drop("sig-2", "specialist", "not exploitable")
+
+        text = tracker.summary_text()
+        assert "sources:" in text.lower() or "sink_hunter" in text
+
+    def test_print_report_includes_guard_stats(self):
+        """print_report() includes guard evidence section."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "SQL Injection", "HIGH")
+        tracker.record_stage("sig-1", "triager", "SECURITY_VULNERABILITY")
+        tracker.record_parse("json_ok")
+        tracker.record_persist("saved")
+        tracker.record_guard_stats(total=4, with_evidence=3, unknown=1)
+
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            tracker.print_report()
+        finally:
+            sys.stdout = sys.__stdout__
+
+        output = captured.getvalue()
+        assert "Guard Evidence" in output
+        assert "3/4" in output or "75%" in output
+
+    def test_print_report_includes_dismissed_with_unknowns(self):
+        """print_report() includes dismissed-with-unknowns section."""
+        tracker = SignalFlowTracker()
+        tracker.enter("sig-1", "Unclear guard", "HIGH")
+        tracker.record_drop("sig-1", "triager", "dismissed/by_design", has_unknowns=True)
+
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            tracker.print_report()
+        finally:
+            sys.stdout = sys.__stdout__
+
+        output = captured.getvalue()
+        assert "unknown" in output.lower()
+
+
 class TestFullPipelineFlow:
     """End-to-end test simulating the exact sequence of calls overseer.py makes."""
 

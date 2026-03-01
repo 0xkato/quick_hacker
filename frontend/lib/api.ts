@@ -23,6 +23,7 @@ import type {
   CodeGraph,
   GraphStats,
   GraphNode,
+  BTNode,
 } from '@/types';
 import type {
   ProtocolPolicy,
@@ -463,6 +464,10 @@ export const agents = {
 
   async getObservabilityStats(agentId: string): Promise<ObservabilityStats> {
     return request(`/api/agents/${agentId}/observability-stats`);
+  },
+
+  async getBehaviorTree(agentId: string): Promise<BTNode[]> {
+    return request(`/api/behavior-tree/${agentId}`);
   },
 
   // Report endpoints

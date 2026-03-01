@@ -17,17 +17,51 @@ from models.schemas import WSMessage, WSMessageType
 
 
 @dataclass
+class SubCursor:
+    """Per-subagent leaf state for concurrent sub-agent isolation."""
+    agent_node_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    last_tool_call_id: Optional[str] = None
+
+
+@dataclass
 class BTCursor:
-    """Tracks the current position in a behavior tree for an agent."""
+    """Tracks the current position in a behavior tree for an agent.
+
+    Structural fields (session, phase, wave, signal) are shared across
+    all concurrent sub-agents.  Leaf fields (agent_node, turn, tool_call)
+    are per-subagent via _sub_cursors to avoid race conditions when
+    multiple sub-agents run in parallel under the same parent agent_id.
+    """
+    # Structural (shared across concurrent subagents)
     session_id: Optional[str] = None
     phase_id: Optional[str] = None
     wave_id: Optional[str] = None
     signal_id: Optional[str] = None
+    # Legacy leaf fields — used when subagent_id is not provided
     agent_node_id: Optional[str] = None
     turn_id: Optional[str] = None
     last_tool_call_id: Optional[str] = None
     # Map subagent CLI ID → agent node ID (for concurrent subagents)
     subagent_map: dict[str, str] = field(default_factory=dict)
+    # Per-subagent leaf cursors for concurrent isolation
+    _sub_cursors: dict[str, SubCursor] = field(default_factory=dict)
+
+    def get_leaf(self, subagent_id: Optional[str] = None) -> SubCursor:
+        """Get leaf state for a subagent, or top-level fallback."""
+        if subagent_id and subagent_id in self._sub_cursors:
+            return self._sub_cursors[subagent_id]
+        return SubCursor(
+            agent_node_id=self.agent_node_id,
+            turn_id=self.turn_id,
+            last_tool_call_id=self.last_tool_call_id,
+        )
+
+    def ensure_sub_cursor(self, subagent_id: str) -> SubCursor:
+        """Get or create a per-subagent leaf cursor."""
+        if subagent_id not in self._sub_cursors:
+            self._sub_cursors[subagent_id] = SubCursor()
+        return self._sub_cursors[subagent_id]
 
 
 def _gen_id() -> str:
@@ -197,11 +231,16 @@ class BehaviorTreeService:
                 "objective": objective[:200],
             },
         ))
+        # Create per-subagent cursor for concurrent isolation
+        sub = cursor.ensure_sub_cursor(subagent_id)
+        sub.agent_node_id = node.id
+        sub.turn_id = None
+        sub.last_tool_call_id = None
+        cursor.subagent_map[subagent_id] = node.id
+        # Also write top-level for callers that don't pass subagent_id
         cursor.agent_node_id = node.id
         cursor.turn_id = None
         cursor.last_tool_call_id = None
-        # Track for concurrent subagent mapping
-        cursor.subagent_map[subagent_id] = node.id
         return node
 
     def complete_agent(
@@ -227,41 +266,55 @@ class BehaviorTreeService:
 
     # ── Turn-level events ─────────────────────────────────────────
 
-    def start_turn(self, agent_id: str, turn_num: int) -> Optional[BTNode]:
+    def start_turn(self, agent_id: str, turn_num: int, subagent_id: Optional[str] = None) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.agent_node_id:
+        if not cursor:
             return None
-        parent_depth = self._get_depth(agent_id, cursor.agent_node_id)
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.agent_node_id:
+            return None
+        parent_depth = self._get_depth(agent_id, leaf.agent_node_id)
         node = self._add_node(agent_id, BTNode(
             id=_gen_id(),
             agent_id=agent_id,
-            parent_id=cursor.agent_node_id,
+            parent_id=leaf.agent_node_id,
             node_type=BTNodeType.TURN,
             label=f"Turn {turn_num}",
             status=BTNodeStatus.ACTIVE,
             depth=parent_depth + 1,
             data={"turn_num": turn_num},
         ))
-        cursor.turn_id = node.id
-        cursor.last_tool_call_id = None
+        if subagent_id:
+            sub = cursor.ensure_sub_cursor(subagent_id)
+            sub.turn_id = node.id
+            sub.last_tool_call_id = None
+        else:
+            cursor.turn_id = node.id
+            cursor.last_tool_call_id = None
         return node
 
-    def complete_turn(self, agent_id: str, cost_usd: Optional[float] = None) -> None:
+    def complete_turn(self, agent_id: str, cost_usd: Optional[float] = None, subagent_id: Optional[str] = None) -> None:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
+            return
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
             return
         data_merge = {"cost_usd": cost_usd} if cost_usd is not None else None
-        self._update_node(agent_id, cursor.turn_id, status=BTNodeStatus.COMPLETED, data_merge=data_merge)
+        self._update_node(agent_id, leaf.turn_id, status=BTNodeStatus.COMPLETED, data_merge=data_merge)
 
-    def add_llm_request(self, agent_id: str, prompt: str, model: str = "") -> Optional[BTNode]:
+    def add_llm_request(self, agent_id: str, prompt: str, model: str = "", subagent_id: Optional[str] = None) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
             return None
-        parent_depth = self._get_depth(agent_id, cursor.turn_id)
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
+            return None
+        parent_depth = self._get_depth(agent_id, leaf.turn_id)
         return self._add_node(agent_id, BTNode(
             id=_gen_id(),
             agent_id=agent_id,
-            parent_id=cursor.turn_id,
+            parent_id=leaf.turn_id,
             node_type=BTNodeType.LLM_REQUEST,
             label=f"> {prompt[:70]}",
             status=BTNodeStatus.COMPLETED,
@@ -270,19 +323,22 @@ class BehaviorTreeService:
         ))
 
     def add_llm_response(
-        self, agent_id: str, text: str, tokens: Optional[int] = None
+        self, agent_id: str, text: str, tokens: Optional[int] = None, subagent_id: Optional[str] = None
     ) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
             return None
-        parent_depth = self._get_depth(agent_id, cursor.turn_id)
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
+            return None
+        parent_depth = self._get_depth(agent_id, leaf.turn_id)
         label = f"< {text[:70]}"
         if tokens:
             label += f" ({tokens} tok)"
         return self._add_node(agent_id, BTNode(
             id=_gen_id(),
             agent_id=agent_id,
-            parent_id=cursor.turn_id,
+            parent_id=leaf.turn_id,
             node_type=BTNodeType.LLM_RESPONSE,
             label=label,
             status=BTNodeStatus.COMPLETED,
@@ -290,15 +346,18 @@ class BehaviorTreeService:
             data={"text": text, "tokens": tokens},
         ))
 
-    def add_llm_thinking(self, agent_id: str, text: str) -> Optional[BTNode]:
+    def add_llm_thinking(self, agent_id: str, text: str, subagent_id: Optional[str] = None) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
             return None
-        parent_depth = self._get_depth(agent_id, cursor.turn_id)
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
+            return None
+        parent_depth = self._get_depth(agent_id, leaf.turn_id)
         return self._add_node(agent_id, BTNode(
             id=_gen_id(),
             agent_id=agent_id,
-            parent_id=cursor.turn_id,
+            parent_id=leaf.turn_id,
             node_type=BTNodeType.LLM_THINKING,
             label=f"... {text[:65]}",
             status=BTNodeStatus.COMPLETED,
@@ -307,12 +366,15 @@ class BehaviorTreeService:
         ))
 
     def add_tool_call(
-        self, agent_id: str, tool_name: str, args: dict[str, Any]
+        self, agent_id: str, tool_name: str, args: dict[str, Any], subagent_id: Optional[str] = None
     ) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
             return None
-        parent_depth = self._get_depth(agent_id, cursor.turn_id)
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
+            return None
+        parent_depth = self._get_depth(agent_id, leaf.turn_id)
         # Build concise args summary
         args_summary = ", ".join(
             f"{k}={str(v)[:30]}" for k, v in list(args.items())[:3]
@@ -321,14 +383,17 @@ class BehaviorTreeService:
         node = self._add_node(agent_id, BTNode(
             id=_gen_id(),
             agent_id=agent_id,
-            parent_id=cursor.turn_id,
+            parent_id=leaf.turn_id,
             node_type=BTNodeType.TOOL_CALL,
             label=label,
             status=BTNodeStatus.ACTIVE,
             depth=parent_depth + 1,
             data={"tool_name": tool_name, "arguments": args},
         ))
-        cursor.last_tool_call_id = node.id
+        if subagent_id:
+            cursor.ensure_sub_cursor(subagent_id).last_tool_call_id = node.id
+        else:
+            cursor.last_tool_call_id = node.id
         return node
 
     def add_tool_result(
@@ -337,18 +402,22 @@ class BehaviorTreeService:
         tool_use_id: str,
         result: str,
         is_error: bool = False,
+        subagent_id: Optional[str] = None,
     ) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
+            return None
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
             return None
         # Attach under the tool_call node if available, else under turn
-        parent_id = cursor.last_tool_call_id or cursor.turn_id
+        parent_id = leaf.last_tool_call_id or leaf.turn_id
         parent_depth = self._get_depth(agent_id, parent_id)
         # Complete the tool_call node
-        if cursor.last_tool_call_id:
+        if leaf.last_tool_call_id:
             self._update_node(
                 agent_id,
-                cursor.last_tool_call_id,
+                leaf.last_tool_call_id,
                 status=BTNodeStatus.FAILED if is_error else BTNodeStatus.COMPLETED,
             )
         label = f"◀ {'ERROR: ' if is_error else ''}{result[:65]}"
@@ -362,21 +431,27 @@ class BehaviorTreeService:
             depth=parent_depth + 1,
             data={"result": result, "is_error": is_error, "tool_use_id": tool_use_id},
         ))
-        cursor.last_tool_call_id = None
+        if subagent_id:
+            cursor.ensure_sub_cursor(subagent_id).last_tool_call_id = None
+        else:
+            cursor.last_tool_call_id = None
         return node
 
-    def add_finding(self, agent_id: str, finding_data: dict[str, Any]) -> Optional[BTNode]:
+    def add_finding(self, agent_id: str, finding_data: dict[str, Any], subagent_id: Optional[str] = None) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
-        if not cursor or not cursor.turn_id:
+        if not cursor:
             return None
-        parent_depth = self._get_depth(agent_id, cursor.turn_id)
+        leaf = cursor.get_leaf(subagent_id)
+        if not leaf.turn_id:
+            return None
+        parent_depth = self._get_depth(agent_id, leaf.turn_id)
         severity = finding_data.get("severity", "")
         title = finding_data.get("title", "Finding")
         label = f"★ [{severity.upper()}] {title}"[:80]
         return self._add_node(agent_id, BTNode(
             id=_gen_id(),
             agent_id=agent_id,
-            parent_id=cursor.turn_id,
+            parent_id=leaf.turn_id,
             node_type=BTNodeType.FINDING,
             label=label,
             status=BTNodeStatus.COMPLETED,
@@ -384,14 +459,15 @@ class BehaviorTreeService:
             data=finding_data,
         ))
 
-    def add_error(self, agent_id: str, error_msg: str) -> Optional[BTNode]:
+    def add_error(self, agent_id: str, error_msg: str, subagent_id: Optional[str] = None) -> Optional[BTNode]:
         cursor = self._cursors.get(agent_id)
         if not cursor:
             return None
+        leaf = cursor.get_leaf(subagent_id)
         # Attach under the most specific current context
         parent_id = (
-            cursor.turn_id
-            or cursor.agent_node_id
+            leaf.turn_id
+            or leaf.agent_node_id
             or cursor.signal_id
             or cursor.wave_id
             or cursor.phase_id

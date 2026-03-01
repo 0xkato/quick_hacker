@@ -460,6 +460,7 @@ class WaveDispatcher:
         subagent_type: str,
         parent_agent_id: str,
         max_stdout: int = 10 * 1024 * 1024,
+        subagent_id: str = "",
     ) -> tuple[str, str, bool, int]:
         """Stream-parse Claude CLI stream-json output, feeding behavior tree in real-time.
 
@@ -487,7 +488,8 @@ class WaveDispatcher:
             nonlocal current_text_accum
             if current_text_accum.strip():
                 behavior_tree_service.add_llm_response(
-                    parent_agent_id, current_text_accum[:500]
+                    parent_agent_id, current_text_accum[:500],
+                    subagent_id=subagent_id,
                 )
                 all_text_parts.append(current_text_accum)
             current_text_accum = ""
@@ -501,7 +503,8 @@ class WaveDispatcher:
                 except json.JSONDecodeError:
                     args = {"raw": current_tool_input_json[:200]}
                 behavior_tree_service.add_tool_call(
-                    parent_agent_id, current_tool_name, args
+                    parent_agent_id, current_tool_name, args,
+                    subagent_id=subagent_id,
                 )
             current_tool_name = ""
             current_tool_input_json = ""
@@ -512,7 +515,15 @@ class WaveDispatcher:
             nonlocal current_tool_name, current_tool_input_json
 
             while True:
-                line = await process.stdout.readline()
+                try:
+                    line = await process.stdout.readline()
+                except (asyncio.LimitOverrunError, ValueError):
+                    # Line exceeded buffer limit — skip to next newline
+                    try:
+                        await process.stdout.readuntil(b'\n')
+                    except Exception:
+                        break
+                    continue
                 if not line:
                     break
                 total_stdout += len(line)
@@ -541,18 +552,21 @@ class WaveDispatcher:
                             if text.strip():
                                 behavior_tree_service.add_llm_response(
                                     parent_agent_id, text[:500],
-                                    tokens=msg.get("usage", {}).get("output_tokens")
+                                    tokens=msg.get("usage", {}).get("output_tokens"),
+                                    subagent_id=subagent_id,
                                 )
                                 all_text_parts.append(text)
                         elif block_type == "thinking":
                             behavior_tree_service.add_llm_thinking(
-                                parent_agent_id, block.get("thinking", "")[:300]
+                                parent_agent_id, block.get("thinking", "")[:300],
+                                subagent_id=subagent_id,
                             )
                         elif block_type == "tool_use":
                             behavior_tree_service.add_tool_call(
                                 parent_agent_id,
                                 block.get("name", "unknown"),
-                                block.get("input", {})
+                                block.get("input", {}),
+                                subagent_id=subagent_id,
                             )
 
                 elif event_type == "user":
@@ -566,10 +580,11 @@ class WaveDispatcher:
                                 parent_agent_id,
                                 block.get("tool_use_id", ""),
                                 result_str,
-                                is_error
+                                is_error,
+                                subagent_id=subagent_id,
                             )
                     turn_count += 1
-                    behavior_tree_service.start_turn(parent_agent_id, turn_count)
+                    behavior_tree_service.start_turn(parent_agent_id, turn_count, subagent_id=subagent_id)
 
                 elif event_type == "result":
                     result_text = event.get("result", "")
@@ -601,7 +616,8 @@ class WaveDispatcher:
                         thinking = delta.get("thinking", "")
                         if thinking.strip():
                             behavior_tree_service.add_llm_thinking(
-                                parent_agent_id, thinking[:300]
+                                parent_agent_id, thinking[:300],
+                                subagent_id=subagent_id,
                             )
 
                 elif event_type == "content_block_stop":
@@ -778,6 +794,7 @@ Begin your analysis now."""
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.repo_path,
                 env={**os.environ, "NO_COLOR": "1"},  # Disable color codes in output
+                limit=10 * 1024 * 1024,  # 10MB readline buffer (Claude CLI can emit large JSON lines)
             )
             self._register_process(process)
 
@@ -792,16 +809,18 @@ Begin your analysis now."""
             behavior_tree_service.start_agent(
                 log_agent_id, agent_id, task.agent_type, model_arg, task.objective
             )
-            behavior_tree_service.start_turn(log_agent_id, 1)
+            behavior_tree_service.start_turn(log_agent_id, 1, subagent_id=agent_id)
             behavior_tree_service.add_llm_request(
-                log_agent_id, user_prompt[:300], model_arg
+                log_agent_id, user_prompt[:300], model_arg,
+                subagent_id=agent_id,
             )
 
             # Wait for completion with timeout — stream-parse for real-time BT updates
             try:
                 output, error_output, was_truncated, returncode = await asyncio.wait_for(
                     self._stream_parse_process_output(
-                        process, agent_id, task.agent_type, log_agent_id
+                        process, agent_id, task.agent_type, log_agent_id,
+                        subagent_id=agent_id,
                     ),
                     timeout=task.time_budget,
                 )
@@ -813,12 +832,12 @@ Begin your analysis now."""
                 if returncode != 0:
                     error_message = f"Claude CLI exited with code {returncode}: {error_output}"
                     print(f"[Dispatcher] {agent_id} failed: {error_message}")
-                    behavior_tree_service.add_error(log_agent_id, error_message[:200])
+                    behavior_tree_service.add_error(log_agent_id, error_message[:200], subagent_id=agent_id)
                 elif not output or not output.strip():
                     # Zero exit but empty output — may indicate stdin bug or silent failure
                     error_message = "Claude CLI produced no output"
                     print(f"[Dispatcher] {agent_id} produced no output")
-                    behavior_tree_service.add_error(log_agent_id, error_message)
+                    behavior_tree_service.add_error(log_agent_id, error_message, subagent_id=agent_id)
                 else:
                     error_message = None
                     print(f"[Dispatcher] {agent_id} completed successfully")
@@ -832,7 +851,7 @@ Begin your analysis now."""
                 error_message = f"Task exceeded time budget of {task.time_budget}s"
                 output = ""
                 print(f"[Dispatcher] {agent_id} timed out")
-                behavior_tree_service.add_error(log_agent_id, error_message)
+                behavior_tree_service.add_error(log_agent_id, error_message, subagent_id=agent_id)
             finally:
                 self._unregister_process(process)
 
@@ -917,7 +936,7 @@ Begin your analysis now."""
             error_msg = str(e)
             print(f"[Dispatcher] {agent_id} exception: {error_msg}")
             try:
-                behavior_tree_service.add_error(log_agent_id, f"Exception: {error_msg[:180]}")
+                behavior_tree_service.add_error(log_agent_id, f"Exception: {error_msg[:180]}", subagent_id=agent_id)
             except Exception:
                 pass
             # Broadcast failure
@@ -1003,6 +1022,7 @@ Begin your analysis now."""
         subagent_type: str,
         parent_agent_id: str,
         max_stdout: int = 10 * 1024 * 1024,
+        subagent_id: str = "",
     ) -> tuple[str, str, bool, int]:
         """Stream-parse Codex CLI --json output, feeding behavior tree in real-time.
 
@@ -1026,7 +1046,15 @@ Begin your analysis now."""
 
         # Read stdout line-by-line (Codex emits one JSON object per line)
         while True:
-            line = await process.stdout.readline()
+            try:
+                line = await process.stdout.readline()
+            except (asyncio.LimitOverrunError, ValueError):
+                # Line exceeded buffer limit — skip to next newline
+                try:
+                    await process.stdout.readuntil(b'\n')
+                except Exception:
+                    break
+                continue
             if not line:
                 break
             total_stdout += len(line)
@@ -1058,7 +1086,8 @@ Begin your analysis now."""
                     args = item.get("arguments", {})
                     behavior_tree_service.add_tool_call(
                         parent_agent_id, tool_name,
-                        args if isinstance(args, dict) else {}
+                        args if isinstance(args, dict) else {},
+                        subagent_id=subagent_id,
                     )
 
             elif etype == "item.completed":
@@ -1069,7 +1098,8 @@ Begin your analysis now."""
                     text = item.get("text", "")
                     if text.strip():
                         behavior_tree_service.add_llm_response(
-                            parent_agent_id, text[:500]
+                            parent_agent_id, text[:500],
+                            subagent_id=subagent_id,
                         )
                         all_text_parts.append(text)
 
@@ -1081,7 +1111,8 @@ Begin your analysis now."""
                         parent_agent_id,
                         str(item.get("id") or ""),
                         result_str,
-                        is_error
+                        is_error,
+                        subagent_id=subagent_id,
                     )
 
             elif etype == "turn.completed":
@@ -1097,13 +1128,15 @@ Begin your analysis now."""
                 err = event.get("error") or {}
                 message = err.get("message") if isinstance(err, dict) else str(err)
                 behavior_tree_service.add_error(
-                    parent_agent_id, str(message)[:200]
+                    parent_agent_id, str(message)[:200],
+                    subagent_id=subagent_id,
                 )
 
             elif etype == "error":
                 message = str(event.get("message") or "")
                 behavior_tree_service.add_error(
-                    parent_agent_id, message[:200]
+                    parent_agent_id, message[:200],
+                    subagent_id=subagent_id,
                 )
 
         # stderr is merged into stdout, no separate drain needed
@@ -1216,6 +1249,7 @@ Begin your analysis now."""
                 stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
                 cwd=self.repo_path,
                 env=env,
+                limit=10 * 1024 * 1024,  # 10MB readline buffer (Codex can emit large JSON lines)
             )
             self._register_process(process)
 
@@ -1224,16 +1258,18 @@ Begin your analysis now."""
             behavior_tree_service.start_agent(
                 log_agent_id, agent_id, task.agent_type, model_arg, task.objective
             )
-            behavior_tree_service.start_turn(log_agent_id, 1)
+            behavior_tree_service.start_turn(log_agent_id, 1, subagent_id=agent_id)
             behavior_tree_service.add_llm_request(
-                log_agent_id, user_prompt[:300], model_arg
+                log_agent_id, user_prompt[:300], model_arg,
+                subagent_id=agent_id,
             )
 
             # Wait for completion with timeout — stream-parse for real-time BT updates
             try:
                 output, error_output, was_truncated, returncode = await asyncio.wait_for(
                     self._stream_parse_codex_output(
-                        process, agent_id, task.agent_type, log_agent_id
+                        process, agent_id, task.agent_type, log_agent_id,
+                        subagent_id=agent_id,
                     ),
                     timeout=task.time_budget,
                 )
@@ -1244,11 +1280,11 @@ Begin your analysis now."""
                 if returncode != 0:
                     error_message = f"Codex CLI exited with code {returncode}: {error_output}"
                     print(f"[Dispatcher] {agent_id} failed: {error_message}")
-                    behavior_tree_service.add_error(log_agent_id, error_message[:200])
+                    behavior_tree_service.add_error(log_agent_id, error_message[:200], subagent_id=agent_id)
                 elif not output or not output.strip():
                     error_message = "Codex CLI produced no output"
                     print(f"[Dispatcher] {agent_id} produced no output")
-                    behavior_tree_service.add_error(log_agent_id, error_message)
+                    behavior_tree_service.add_error(log_agent_id, error_message, subagent_id=agent_id)
                 else:
                     error_message = None
                     print(f"[Dispatcher] {agent_id} completed successfully")
@@ -1261,7 +1297,7 @@ Begin your analysis now."""
                 error_message = f"Task exceeded time budget of {task.time_budget}s"
                 output = ""
                 print(f"[Dispatcher] {agent_id} timed out")
-                behavior_tree_service.add_error(log_agent_id, error_message)
+                behavior_tree_service.add_error(log_agent_id, error_message, subagent_id=agent_id)
             finally:
                 self._unregister_process(process)
 
@@ -1345,7 +1381,8 @@ Begin your analysis now."""
                 from services.behavior_tree_service import behavior_tree_service
                 behavior_tree_service.add_error(
                     self.parent_agent_id or agent_id,
-                    f"Exception: {error_msg[:180]}"
+                    f"Exception: {error_msg[:180]}",
+                    subagent_id=agent_id,
                 )
             except Exception:
                 pass

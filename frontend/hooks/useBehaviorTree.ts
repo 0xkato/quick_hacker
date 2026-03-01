@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BTNode, BTNodeUpdate } from '@/types';
+import { agents as agentsApi } from '@/lib/api';
 
 interface UseBehaviorTreeOptions {
   selectedAgentId: string | null;
@@ -133,15 +134,9 @@ export function useBehaviorTree({ selectedAgentId, isAuthenticated }: UseBehavio
   const loadFullTree = useCallback(async (agentId: string) => {
     setIsLoading(true);
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(`/api/behavior-tree/${agentId}`, { headers });
-      if (res.ok) {
-        const treeNodes: BTNode[] = await res.json();
-        if (treeNodes.length > 0) {
-          addNodes(treeNodes);
-        }
+      const treeNodes = await agentsApi.getBehaviorTree(agentId);
+      if (treeNodes.length > 0) {
+        addNodes(treeNodes);
       }
     } catch (err) {
       console.error('[BehaviorTree] Failed to load tree:', err);

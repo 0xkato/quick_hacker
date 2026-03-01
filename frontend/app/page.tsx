@@ -314,19 +314,22 @@ export default function Home() {
         agentMgmt.setAgentFlow(flow);
       }
     }, [agentMgmt.selectedAgentId, agentMgmt.setAgentFlow]),
-    // Behavior Tree handlers
+    // Behavior Tree handlers — filter by selected agent (same pattern as LLM interactions)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    onBTNodeAdd: useCallback((_agentId: string, node: any) => {
+    onBTNodeAdd: useCallback((agentId: string, node: any) => {
+      if (agentId !== agentMgmt.selectedAgentId) return;
       behaviorTree.addNode(node);
-    }, [behaviorTree.addNode]),
+    }, [agentMgmt.selectedAgentId, behaviorTree.addNode]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    onBTNodeUpdate: useCallback((_agentId: string, update: any) => {
+    onBTNodeUpdate: useCallback((agentId: string, update: any) => {
+      if (agentId !== agentMgmt.selectedAgentId) return;
       behaviorTree.updateNode(update);
-    }, [behaviorTree.updateNode]),
+    }, [agentMgmt.selectedAgentId, behaviorTree.updateNode]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    onBTNodeBatch: useCallback((_agentId: string, nodes: any[]) => {
+    onBTNodeBatch: useCallback((agentId: string, nodes: any[]) => {
+      if (agentId !== agentMgmt.selectedAgentId) return;
       behaviorTree.addNodes(nodes);
-    }, [behaviorTree.addNodes]),
+    }, [agentMgmt.selectedAgentId, behaviorTree.addNodes]),
     onReportReady: useCallback(async (agentId: string, reportId: string) => {
       // Auto-fetch and show report when ready
       try {

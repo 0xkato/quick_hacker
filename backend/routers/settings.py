@@ -142,7 +142,7 @@ async def test_provider(provider: str):
             from providers.anthropic_provider import AnthropicProvider
             config = ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
-                model=provider_settings.default_model or "claude-sonnet-4-20250514",
+                model=provider_settings.default_model or "claude-sonnet-4-5-20250929",
                 api_key=provider_settings.api_key,
                 max_tokens=10,
             )

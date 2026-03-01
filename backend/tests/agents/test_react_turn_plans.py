@@ -19,7 +19,7 @@ class TestReactTurnPlanEmission:
             agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider="anthropic",
-                model="claude-sonnet-4-20250514"
+                model="claude-sonnet-4-5-20250929"
             )
         )
 
@@ -82,7 +82,7 @@ class TestReactTurnPlanEmission:
             agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider="anthropic",
-                model="claude-sonnet-4-20250514"
+                model="claude-sonnet-4-5-20250929"
             )
         )
 
@@ -129,7 +129,7 @@ class TestReactTurnPlanEmission:
             agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider="anthropic",
-                model="claude-sonnet-4-20250514"
+                model="claude-sonnet-4-5-20250929"
             )
         )
 

@@ -119,7 +119,7 @@ class TestUIBroadcasting:
         dispatcher = WaveDispatcher(
             repo_path=str(tmp_path),
             filesystem=mock_filesystem,
-            provider_config={"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+            provider_config={"provider": "anthropic", "model": "claude-sonnet-4-5-20250929"},
             on_agent_start=lambda tid, atype: None,
             on_agent_complete=lambda tid, atype, status: None,
             on_message=on_message_callback,

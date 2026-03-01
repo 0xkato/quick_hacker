@@ -43,7 +43,7 @@ def protocol_with_validation():
         category_rules={},
         enable_llm_validation=True,
         validation_criticism_level="high",
-        validation_model="claude-sonnet-4-20250514",
+        validation_model="claude-sonnet-4-5-20250929",
         validation_timeout_seconds=120,
     )
 

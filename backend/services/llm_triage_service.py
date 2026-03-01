@@ -240,7 +240,7 @@ def _parse_triage_response(response_text: str, finding_ids: list[str]) -> list[T
 async def run_llm_triage(
     findings: list[dict[str, Any]],
     api_key: str | None = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-5-20250929",
     use_claude_code_auth: bool = False,
     repo_path: str | None = None,
 ) -> TriageResult:

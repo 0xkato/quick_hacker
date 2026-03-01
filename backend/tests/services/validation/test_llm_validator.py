@@ -101,7 +101,7 @@ def test_llm_validator_initialization():
     """Verify initialization with API key, repo_root, and custom model."""
     api_key = "test-api-key"
     repo_root = "/test/repo"
-    model = "claude-opus-4-5-20251101"
+    model = "claude-opus-4-6"
 
     validator = LLMFindingValidator(
         anthropic_api_key=api_key,

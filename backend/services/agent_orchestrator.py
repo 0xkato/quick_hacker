@@ -1307,7 +1307,7 @@ class AgentOrchestrator:
         # which can conflict with our MCP tools. Use API key auth by default.
         use_claude_code_auth = getattr(agent.request, 'use_claude_code_auth', False)
         provider_config = {
-            "model": config.model if config else "claude-sonnet-4-20250514",
+            "model": config.model if config else "claude-sonnet-4-5-20250929",
             "api_key": sdk_api_key,
             "max_tokens": config.max_tokens if config else 8192,
             "use_claude_code_auth": use_claude_code_auth,

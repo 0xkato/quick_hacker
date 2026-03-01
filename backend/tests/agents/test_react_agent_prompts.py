@@ -31,7 +31,7 @@ def test_react_agent_detects_category_from_focus_areas():
         agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             api_key="test-key"
         ),
         focus_areas=["SQL injection", "database queries"]
@@ -53,7 +53,7 @@ def test_react_agent_builds_prompt_with_checklist():
         agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             api_key="test-key"
         ),
         focus_areas=["XSS vulnerabilities"]
@@ -84,7 +84,7 @@ def test_react_agent_falls_back_without_focus_areas():
         agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             api_key="test-key"
         ),
         focus_areas=None
@@ -115,7 +115,7 @@ def test_react_agent_detects_command_injection_not_sql():
         agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             api_key="test-key"
         ),
         focus_areas=["command injection"]
@@ -137,7 +137,7 @@ def test_react_agent_detects_code_injection_not_sql():
         agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             api_key="test-key"
         ),
         focus_areas=["code injection"]

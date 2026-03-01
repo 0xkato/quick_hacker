@@ -372,7 +372,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 [name]: { ...prev[name], default_model: e.target.value },
                               }))
                             }
-                            placeholder="Enter model name (e.g., gpt-4o, claude-sonnet-4-20250514)"
+                            placeholder="Enter model name (e.g., gpt-4o, claude-sonnet-4-5-20250929)"
                             className="input w-full"
                             list={`models-${name}`}
                           />
@@ -528,7 +528,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                           type="text"
                           value={agentForm.default_model || ''}
                           onChange={(e) => setAgentForm((prev) => ({ ...prev, default_model: e.target.value }))}
-                          placeholder="Enter model name (e.g., claude-sonnet-4-20250514)"
+                          placeholder="Enter model name (e.g., claude-sonnet-4-5-20250929)"
                           className="input w-full"
                           list="agent-default-models"
                         />
@@ -551,8 +551,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                           )}
                           {agentForm.default_provider === 'anthropic' && (
                             <>
-                              <option value="claude-opus-4-5-20251101" />
-                              <option value="claude-sonnet-4-20250514" />
+                              <option value="claude-opus-4-6" />
+                              <option value="claude-sonnet-4-6" />
+                              <option value="claude-sonnet-4-5-20250929" />
                               <option value="claude-3-5-haiku-20241022" />
                             </>
                           )}

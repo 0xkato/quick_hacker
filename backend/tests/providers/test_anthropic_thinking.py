@@ -10,7 +10,7 @@ from models.schemas import ProviderConfig, ProviderType
 def anthropic_config():
     return ProviderConfig(
         provider=ProviderType.ANTHROPIC,
-        model="claude-opus-4-5-20251101",
+        model="claude-opus-4-6",
         api_key="test-key",
     )
 

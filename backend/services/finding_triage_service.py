@@ -122,7 +122,7 @@ class FindingTriageService:
         if policy.enable_llm_validation:
             # Get or create validator
             config_key = (
-                policy.validation_model or "claude-sonnet-4-20250514",
+                policy.validation_model or "claude-sonnet-4-5-20250929",
                 policy.validation_criticism_level
             )
 
@@ -584,7 +584,7 @@ class FindingTriageService:
                 if protocol_policy and protocol_policy.enable_llm_validation:
                     # Get or create validator
                     config_key = (
-                        protocol_policy.validation_model or "claude-sonnet-4-20250514",
+                        protocol_policy.validation_model or "claude-sonnet-4-5-20250929",
                         protocol_policy.validation_criticism_level
                     )
 

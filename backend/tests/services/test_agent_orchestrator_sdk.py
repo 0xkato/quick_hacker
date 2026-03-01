@@ -67,7 +67,7 @@ class TestAgentOrchestratorProviderRouting:
         agent.request = Mock()
         agent.request.provider_config = Mock()
         agent.request.provider_config.provider = "anthropic"
-        agent.request.provider_config.model = "claude-sonnet-4-20250514"
+        agent.request.provider_config.model = "claude-sonnet-4-5-20250929"
         agent.request.provider_config.api_key = "test-key"
         agent.request.scan_tier = "quick"
         agent.request.use_claude_sdk = True  # SDK flag enabled
@@ -170,7 +170,7 @@ class TestAgentOrchestratorSDKIntegration:
         mock_agent.request = Mock()
         mock_agent.request.provider_config = Mock()
         mock_agent.request.provider_config.provider = "claude_sdk"
-        mock_agent.request.provider_config.model = "claude-sonnet-4-20250514"
+        mock_agent.request.provider_config.model = "claude-sonnet-4-5-20250929"
         mock_agent.request.provider_config.api_key = "test-key"
         mock_agent.request.provider_config.max_tokens = 8192
         mock_agent.request.scan_tier = "quick"

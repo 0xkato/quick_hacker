@@ -33,7 +33,7 @@ class CASSConfig(BaseModel):
     tool_timeout: int = Field(default=30, ge=5)
 
     # LLM settings
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-5-20250929"
     max_tokens_per_reasoning: int = Field(default=4096, ge=256)
 
     # Framework detection

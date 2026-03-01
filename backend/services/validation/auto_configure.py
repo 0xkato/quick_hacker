@@ -165,7 +165,7 @@ Return ONLY valid JSON, no explanation. Example format:
 ```"""
 
 
-def _call_claude_code(prompt: str, model: str = "claude-sonnet-4-20250514") -> str:
+def _call_claude_code(prompt: str, model: str = "claude-sonnet-4-5-20250929") -> str:
     """Call Claude Code CLI for a one-shot prompt.
 
     Uses the user's Claude Code authentication (no API key needed).
@@ -218,7 +218,7 @@ def _call_claude_code(prompt: str, model: str = "claude-sonnet-4-20250514") -> s
         raise RuntimeError("Claude Code CLI not found")
 
 
-def _call_anthropic_api(prompt: str, api_key: str, model: str = "claude-sonnet-4-20250514") -> str:
+def _call_anthropic_api(prompt: str, api_key: str, model: str = "claude-sonnet-4-5-20250929") -> str:
     """Call Anthropic API directly with an API key.
 
     Args:
@@ -294,7 +294,7 @@ async def auto_configure_profile(
     repo_path: str,
     api_key: Optional[str] = None,
     provider: str = "anthropic",
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-5-20250929",
 ) -> ValidationProfile:
     """Auto-configure a validation profile by analyzing codebase with LLM.
 

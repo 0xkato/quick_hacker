@@ -13,7 +13,7 @@ class TestResolveDualModelConfig:
             agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
-                model="claude-opus-4-5-20251101"
+                model="claude-opus-4-6"
             )
         )
 
@@ -30,7 +30,7 @@ class TestResolveDualModelConfig:
             agent_type=AgentType.CUSTOM,
             analyzer_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
-                model="claude-opus-4-5-20251101",
+                model="claude-opus-4-6",
                 api_key="test-key"
             )
         )
@@ -42,7 +42,7 @@ class TestResolveDualModelConfig:
         assert scanner.model == "claude-3-5-haiku-20241022"
         assert scanner.provider == ProviderType.ANTHROPIC
         assert scanner.api_key == "test-key"
-        assert analyzer.model == "claude-opus-4-5-20251101"
+        assert analyzer.model == "claude-opus-4-6"
 
     def test_both_configs_uses_as_specified(self):
         """Both scanner + analyzer → use as specified."""
@@ -55,7 +55,7 @@ class TestResolveDualModelConfig:
             ),
             analyzer_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
-                model="claude-opus-4-5-20251101"
+                model="claude-opus-4-6"
             )
         )
 
@@ -65,7 +65,7 @@ class TestResolveDualModelConfig:
         assert scanner.provider == ProviderType.OPENAI
         assert scanner.model == "gpt-4o-mini"
         assert analyzer.provider == ProviderType.ANTHROPIC
-        assert analyzer.model == "claude-opus-4-5-20251101"
+        assert analyzer.model == "claude-opus-4-6"
 
     def test_scanner_only_raises_error(self):
         """scanner_config only → error."""
@@ -106,7 +106,7 @@ class TestGetHandoffMode:
             agent_type=AgentType.CUSTOM,
             provider_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
-                model="claude-opus-4-5-20251101"
+                model="claude-opus-4-6"
             )
         )
 
@@ -120,7 +120,7 @@ class TestGetHandoffMode:
             agent_type=AgentType.CUSTOM,
             analyzer_config=ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
-                model="claude-opus-4-5-20251101"
+                model="claude-opus-4-6"
             ),
             handoff_after=HandoffMode.EXPLORATION
         )

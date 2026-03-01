@@ -77,8 +77,9 @@ const PROVIDERS: { value: ProviderType; label: string }[] = [
 // Suggested models (user can type any model name)
 const SUGGESTED_MODELS: Record<ProviderType, string[]> = {
   anthropic: [
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
     'claude-sonnet-4-5-20250929',
-    'claude-opus-4-5-20251101',
     'claude-haiku-4-5-20251001',
   ],
   openai: [
@@ -155,7 +156,7 @@ function CreateAgentModal({ repoId, onClose, onCreated }: CreateAgentModalProps)
       } catch (err) {
         console.error('Failed to load settings:', err);
         // Fall back to hardcoded defaults
-        setModel('claude-sonnet-4-20250514');
+        setModel('claude-sonnet-4-5-20250929');
         setSettingsLoaded(true);
       }
     }

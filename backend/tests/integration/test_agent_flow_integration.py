@@ -41,7 +41,7 @@ def agent_request():
         agent_type=AgentType.DEEP_AUDIT,
         provider_config=ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-sonnet-4-20250514"
+            model="claude-sonnet-4-5-20250929"
         )
     )
 

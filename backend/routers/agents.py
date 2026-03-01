@@ -438,7 +438,7 @@ class LLMTriageRequest(BaseModel):
     max_findings: Optional[int] = None  # No limit by default - user controls via UI slider
     # Provider configuration (same as scan)
     provider: Optional[str] = "anthropic"
-    model: Optional[str] = "claude-sonnet-4-20250514"
+    model: Optional[str] = "claude-sonnet-4-5-20250929"
     api_key: Optional[str] = None
     use_claude_sdk: bool = True
     use_claude_code_auth: bool = False
@@ -526,7 +526,7 @@ async def triage_all_findings(
                 repo_id=repo_id,
                 repo_path=repo_path,
                 api_key=api_key,
-                model=request.model or "claude-sonnet-4-20250514",
+                model=request.model or "claude-sonnet-4-5-20250929",
                 use_claude_code_auth=request.use_claude_code_auth,
                 on_message=lambda msg: orchestrator._broadcast_message(msg),
             )
@@ -1266,7 +1266,7 @@ async def llm_triage_findings(
                 repo_id=agent.repo_id if agent else snapshot.repo_id,
                 repo_path=repo_path,
                 api_key=api_key,
-                model=request.model or "claude-sonnet-4-20250514",
+                model=request.model or "claude-sonnet-4-5-20250929",
                 use_claude_code_auth=request.use_claude_code_auth,
                 on_message=broadcast_msg,
             )

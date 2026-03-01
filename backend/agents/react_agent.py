@@ -2111,7 +2111,7 @@ class ReActSecurityAgent:
             provider_config = self.request.provider_config
         else:
             # Fallback
-            provider_config = ProviderConfig(provider="anthropic", model="claude-sonnet-4-20250514")
+            provider_config = ProviderConfig(provider="anthropic", model="claude-sonnet-4-5-20250929")
 
         return Agent(
             id=self.id,
@@ -2156,7 +2156,7 @@ class ReActSecurityAgent:
                 "model": self.request.provider_config.model,
             }
         else:
-            provider_config_dict = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
+            provider_config_dict = {"provider": "anthropic", "model": "claude-sonnet-4-5-20250929"}
 
         session_id = getattr(self, "_codex_session_id", None)
         if isinstance(session_id, str) and session_id:

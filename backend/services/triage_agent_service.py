@@ -124,7 +124,7 @@ class TriageAgent:
             name=self.name,
             agent_type=self.agent_type,
             status=self.status,
-            provider_config=ProviderConfig(provider=ProviderType.ANTHROPIC, model="claude-sonnet-4-20250514"),
+            provider_config=ProviderConfig(provider=ProviderType.ANTHROPIC, model="claude-sonnet-4-5-20250929"),
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
@@ -263,7 +263,7 @@ async def run_triage_agent(
     repo_id: str,
     repo_path: str,
     api_key: str | None = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-5-20250929",
     use_claude_code_auth: bool = False,
     on_message: Callable[[WSMessage], None] | None = None,
 ) -> tuple[TriageAgent, TriageAgentResult]:

@@ -50,7 +50,7 @@ class ModelConfig(BaseModel):
 class AgentDefaults(BaseModel):
     """Default settings for agents."""
     default_provider: str = "anthropic"
-    default_model: str = "claude-sonnet-4-20250514"
+    default_model: str = "claude-sonnet-4-5-20250929"
     strict_mode_default: bool = True
     max_concurrent_agents: int = 5
     auto_verify_findings: bool = True
@@ -89,8 +89,8 @@ class AppSettings(BaseModel):
             available_models=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-5.2", "o1", "o1-mini"]
         ),
         "anthropic": ProviderSettings(
-            default_model="claude-sonnet-4-20250514",
-            available_models=["claude-opus-4-5-20251101", "claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"]
+            default_model="claude-sonnet-4-5-20250929",
+            available_models=["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001"]
         ),
         "codex_cli": ProviderSettings(
             default_model="gpt-5.2-codex",
@@ -186,10 +186,10 @@ class SettingsService:
 
         # Add default model configs
         settings.model_configs = {
-            "claude-opus-4-5": ModelConfig(
+            "claude-opus-4-6": ModelConfig(
                 provider="anthropic",
-                model_id="claude-opus-4-5-20251101",
-                display_name="Claude Opus 4.5",
+                model_id="claude-opus-4-6",
+                display_name="Claude Opus 4.6",
                 tier="premium",
                 max_tokens=8192,
                 cost_per_1k_input=0.015,
@@ -197,8 +197,8 @@ class SettingsService:
             ),
             "claude-sonnet": ModelConfig(
                 provider="anthropic",
-                model_id="claude-sonnet-4-20250514",
-                display_name="Claude Sonnet 4",
+                model_id="claude-sonnet-4-5-20250929",
+                display_name="Claude Sonnet 4.5",
                 tier="standard",
                 max_tokens=8192,
                 cost_per_1k_input=0.003,

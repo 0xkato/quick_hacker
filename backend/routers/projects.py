@@ -298,7 +298,7 @@ async def auto_configure_validation_profile(
 
     # Determine which provider to use (prefer anthropic, fall back to openai)
     provider = "anthropic"
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-5-20250929"
 
     # Check if user has anthropic configured
     anthropic_settings = app_settings.providers.get("anthropic")

@@ -19,8 +19,9 @@ class AnthropicProvider(BaseProvider):
     provider_type = "anthropic"
 
     MODELS = [
-        "claude-opus-4-5-20251101",
-        "claude-sonnet-4-20250514",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5-20250929",
         "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022",
         "claude-3-opus-20240229",
@@ -30,8 +31,9 @@ class AnthropicProvider(BaseProvider):
 
     # Models that support extended thinking
     THINKING_MODELS = {
-        "claude-opus-4-5-20251101",
-        "claude-sonnet-4-20250514",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5-20250929",
     }
 
     def __init__(self, config: ProviderConfig):

@@ -138,14 +138,14 @@ def test_protocol_policy_with_custom_llm_validation():
         display_name="Internal Audit",
         enable_llm_validation=False,
         validation_criticism_level="medium",
-        validation_model="claude-opus-4-5",
+        validation_model="claude-opus-4-6",
         validation_timeout_seconds=60,
         validation_fallback_on_error="skip"
     )
 
     assert policy.enable_llm_validation is False
     assert policy.validation_criticism_level == "medium"
-    assert policy.validation_model == "claude-opus-4-5"
+    assert policy.validation_model == "claude-opus-4-6"
     assert policy.validation_timeout_seconds == 60
     assert policy.validation_fallback_on_error == "skip"
 

@@ -28,6 +28,8 @@ const PROVIDERS: { value: ProviderType; label: string }[] = [
 
 const SUGGESTED_MODELS: Record<ProviderType, string[]> = {
   anthropic: [
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
     'claude-sonnet-4-5-20250929',
     'claude-haiku-4-5-20251001',
   ],

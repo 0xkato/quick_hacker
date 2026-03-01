@@ -17,7 +17,7 @@ class TestClaudeSDKProviderInit:
         tool_core = ToolCore(repo_path=str(repo), project_id="test-project")
 
         config = {
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-sonnet-4-5-20250929",
             "api_key": "test-key",
             "max_tokens": 8192,
         }
@@ -47,7 +47,7 @@ class TestClaudeSDKProviderInit:
             repo_path=str(repo),
             project_id="test-project",
             tool_core=tool_core,
-            config={"model": "claude-sonnet-4-20250514"},
+            config={"model": "claude-sonnet-4-5-20250929"},
         )
 
         # Client should be None until start_session
@@ -82,7 +82,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": "test-key",
             },
         )
@@ -118,7 +118,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "use_claude_code_auth": False,  # API key mode
                 "api_key": oauth_token,
             },
@@ -127,7 +127,7 @@ class TestClaudeSDKProviderLifecycle:
         with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
              patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
             mock_options = MagicMock()
-            mock_options.model = "claude-sonnet-4-20250514"
+            mock_options.model = "claude-sonnet-4-5-20250929"
             MockOptions.return_value = mock_options
 
             mock_client = AsyncMock()
@@ -156,7 +156,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "use_claude_code_auth": True,  # Explicit Claude Code auth
                 "api_key": "sk-ant-api01-ignored",  # API key is ignored in this mode
             },
@@ -165,7 +165,7 @@ class TestClaudeSDKProviderLifecycle:
         with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
              patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
             mock_options = MagicMock()
-            mock_options.model = "claude-sonnet-4-20250514"
+            mock_options.model = "claude-sonnet-4-5-20250929"
             MockOptions.return_value = mock_options
 
             mock_client = AsyncMock()
@@ -198,7 +198,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "use_claude_code_auth": False,  # Explicit API key mode
                 "api_key": api_key,
             },
@@ -207,7 +207,7 @@ class TestClaudeSDKProviderLifecycle:
         with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
              patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
             mock_options = MagicMock()
-            mock_options.model = "claude-sonnet-4-20250514"
+            mock_options.model = "claude-sonnet-4-5-20250929"
             MockOptions.return_value = mock_options
 
             mock_client = AsyncMock()
@@ -239,7 +239,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": api_key,
             },
         )
@@ -247,7 +247,7 @@ class TestClaudeSDKProviderLifecycle:
         with patch("providers.claude_sdk_provider.ClaudeAgentOptions") as MockOptions, \
              patch("providers.claude_sdk_provider.ClaudeSDKClient") as MockClient:
             mock_options = MagicMock()
-            mock_options.model = "claude-sonnet-4-20250514"
+            mock_options.model = "claude-sonnet-4-5-20250929"
             MockOptions.return_value = mock_options
 
             mock_client = AsyncMock()
@@ -276,7 +276,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": "test-key",
             },
         )
@@ -309,7 +309,7 @@ class TestClaudeSDKProviderLifecycle:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": "test-key",
             },
         )
@@ -337,7 +337,7 @@ class TestClaudeSDKProviderLifecycle:
             repo_path=str(repo),
             project_id="test-project",
             tool_core=mock_tool_core,
-            config={"model": "claude-sonnet-4-20250514"},
+            config={"model": "claude-sonnet-4-5-20250929"},
         )
 
         # Should not raise when client is None
@@ -371,7 +371,7 @@ class TestClaudeSDKProviderInterrupt:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": "test-key",
             },
         )
@@ -398,7 +398,7 @@ class TestClaudeSDKProviderInterrupt:
             repo_path=str(repo),
             project_id="test-project",
             tool_core=mock_tool_core,
-            config={"model": "claude-sonnet-4-20250514"},
+            config={"model": "claude-sonnet-4-5-20250929"},
         )
 
         # Should not raise when client is None
@@ -586,7 +586,7 @@ class TestSDKAvailableFlag:
                 repo_path=str(repo),
                 project_id="test-project",
                 tool_core=tool_core,
-                config={"model": "claude-sonnet-4-20250514"},
+                config={"model": "claude-sonnet-4-5-20250929"},
             )
 
             with pytest.raises(RuntimeError) as exc_info:
@@ -618,7 +618,7 @@ class TestClaudeSDKProviderRunTurn:
             repo_path=str(repo),
             project_id="test-project",
             tool_core=mock_tool_core,
-            config={"model": "claude-sonnet-4-20250514"},
+            config={"model": "claude-sonnet-4-5-20250929"},
         )
 
         with pytest.raises(RuntimeError) as exc_info:
@@ -641,7 +641,7 @@ class TestClaudeSDKProviderRunTurn:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": "test-key",
             },
         )
@@ -712,7 +712,7 @@ class TestClaudeSDKProviderCloseIdempotent:
             project_id="test-project",
             tool_core=mock_tool_core,
             config={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": "test-key",
             },
         )

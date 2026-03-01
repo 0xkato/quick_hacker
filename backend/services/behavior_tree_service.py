@@ -5,6 +5,7 @@ Broadcasts INCREMENTAL updates (single node add/update) via WebSocket,
 NOT full graph dumps like FlowService.
 """
 
+import asyncio
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -499,9 +500,11 @@ class BehaviorTreeService:
                 agent_id=agent_id,
                 children_count=parent.children_count,
             ))
+            self._schedule_persist_update(agent_id, parent.id, children_count=parent.children_count)
 
         # Broadcast the new node
         self._broadcast_add(node)
+        self._schedule_persist_node(node)
         return node
 
     def _update_node(
@@ -532,6 +535,7 @@ class BehaviorTreeService:
             label=label,
             data_merge=data_merge,
         ))
+        self._schedule_persist_update(agent_id, node_id, status=status, label=label, data_merge=data_merge)
 
     def _broadcast_add(self, node: BTNode) -> None:
         if not self._broadcast_callback:
@@ -556,6 +560,130 @@ class BehaviorTreeService:
             ))
         except Exception as e:
             print(f"[BehaviorTree] Broadcast update error: {e}")
+
+    # ── DB Persistence (write-through) ────────────────────────────
+
+    def _schedule_persist_node(self, node: BTNode) -> None:
+        """Schedule async DB write for a node. Fire-and-forget."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_node(node))
+        except RuntimeError:
+            pass  # No event loop — skip DB write
+
+    async def _persist_node(self, node: BTNode) -> None:
+        """Write a single BT node to the database."""
+        try:
+            from database.connection import get_session
+            from database.models import DBBTNode
+
+            async with get_session() as session:
+                db_row = DBBTNode(
+                    id=node.id,
+                    agent_id=node.agent_id,
+                    parent_id=node.parent_id,
+                    node_type=node.node_type.value if hasattr(node.node_type, 'value') else str(node.node_type),
+                    label=node.label,
+                    status=node.status.value if hasattr(node.status, 'value') else str(node.status),
+                    timestamp=node.timestamp,
+                    data=node.data,
+                    children_count=node.children_count,
+                    depth=node.depth,
+                )
+                await session.merge(db_row)
+        except Exception as e:
+            print(f"[BehaviorTree] DB persist node error: {e}")
+
+    def _schedule_persist_update(
+        self,
+        agent_id: str,
+        node_id: str,
+        status: Optional[BTNodeStatus] = None,
+        label: Optional[str] = None,
+        data_merge: Optional[dict[str, Any]] = None,
+        children_count: Optional[int] = None,
+    ) -> None:
+        """Schedule async DB update for a node. Fire-and-forget."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_update(agent_id, node_id, status, label, data_merge, children_count))
+        except RuntimeError:
+            pass
+
+    async def _persist_update(
+        self,
+        agent_id: str,
+        node_id: str,
+        status: Optional[BTNodeStatus] = None,
+        label: Optional[str] = None,
+        data_merge: Optional[dict[str, Any]] = None,
+        children_count: Optional[int] = None,
+    ) -> None:
+        """Update a BT node in the database."""
+        try:
+            from database.connection import get_session
+            from database.models import DBBTNode
+            from sqlalchemy import select
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(DBBTNode).where(DBBTNode.id == node_id)
+                )
+                db_row = result.scalar_one_or_none()
+                if not db_row:
+                    return
+                if status is not None:
+                    db_row.status = status.value if hasattr(status, 'value') else str(status)
+                if label is not None:
+                    db_row.label = label
+                if data_merge and db_row.data:
+                    merged = dict(db_row.data)
+                    merged.update(data_merge)
+                    db_row.data = merged
+                elif data_merge:
+                    db_row.data = data_merge
+                if children_count is not None:
+                    db_row.children_count = children_count
+        except Exception as e:
+            print(f"[BehaviorTree] DB persist update error: {e}")
+
+    # ── DB Retrieval ──────────────────────────────────────────────
+
+    async def load_tree_from_db(self, agent_id: str) -> list[dict[str, Any]]:
+        """Load behavior tree from database when not in memory."""
+        try:
+            from database.connection import get_session
+            from database.models import DBBTNode
+            from sqlalchemy import select
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(DBBTNode)
+                    .where(DBBTNode.agent_id == agent_id)
+                    .order_by(DBBTNode.timestamp)
+                )
+                rows = result.scalars().all()
+                if not rows:
+                    return []
+
+                nodes = []
+                for row in rows:
+                    nodes.append({
+                        "id": row.id,
+                        "agent_id": row.agent_id,
+                        "parent_id": row.parent_id,
+                        "node_type": row.node_type,
+                        "label": row.label,
+                        "status": row.status,
+                        "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                        "data": row.data or {},
+                        "children_count": row.children_count,
+                        "depth": row.depth,
+                    })
+                return nodes
+        except Exception as e:
+            print(f"[BehaviorTree] DB load error: {e}")
+            return []
 
 
 # Singleton instance

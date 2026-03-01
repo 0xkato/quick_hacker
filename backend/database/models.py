@@ -354,3 +354,26 @@ class DBToolDetail(Base):
 
     def __repr__(self) -> str:
         return f"<DBToolDetail(id={self.id}, tool={self.tool_name})>"
+
+
+class DBBTNode(Base):
+    """Persisted behavior tree node."""
+    __tablename__ = "bt_nodes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    parent_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    node_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    children_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    depth: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        Index("idx_bt_nodes_agent_ts", "agent_id", "timestamp"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DBBTNode(id={self.id}, agent_id={self.agent_id}, type={self.node_type})>"

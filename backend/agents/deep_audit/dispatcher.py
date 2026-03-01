@@ -50,80 +50,6 @@ def _codex_cli_available() -> bool:
 # Plugin directory for specialist skills (native Claude Code skills mechanism)
 SPECIALIST_PLUGIN_DIR = Path(__file__).resolve().parent / "specialist_plugin"
 
-# Per-agent model selection: lightweight agents use Sonnet, deep analysis agents use Opus.
-# Agents not in this map inherit the default model from provider_config.
-AGENT_MODEL_MAP: dict[str, str] = {
-    # Lightweight routing/triage agents → Sonnet (fast, cheap)
-    "Decider": "sonnet",
-    "FamilyCoordinator": "sonnet",
-    "SinkHunter": "sonnet",
-    "EntrypointHunter": "sonnet",
-    "DataflowTracer": "sonnet",
-    "InvariantViolationHunter": "sonnet",
-    "TrustBoundaryGapHunter": "sonnet",
-    # Deep analysis agents → Opus (quality-critical)
-    "Specialist": "opus",
-    "Triager": "opus",
-    "DevilsAdvocate": "opus",
-    "Arbiter": "opus",
-    # Foundation agents → Sonnet (breadth over depth)
-    "RepoProfiler": "sonnet",
-    "ScopeMapper": "sonnet",
-    "ThreatModeler": "sonnet",
-    # Understanding agents → Sonnet
-    "ModuleAnalyzer": "sonnet",
-    "TrustBoundaryMapper": "sonnet",
-    "DataFlowMapper": "sonnet",
-    "InvariantExtractor": "sonnet",
-    # Sink hunter variants → Sonnet
-    "MemorySinkHunter": "sonnet",
-    "InjectionSinkHunter": "sonnet",
-    "WebSinkHunter": "sonnet",
-    "CryptoSinkHunter": "sonnet",
-    "AuthLogicHunter": "opus",
-    "AuthBoundaryMapper": "sonnet",
-    # Verification agents → Opus
-    "Auditor": "opus",
-    "Reproducer": "opus",
-}
-
-# Codex CLI model mapping: mirrors AGENT_MODEL_MAP but uses OpenAI model IDs.
-CODEX_AGENT_MODEL_MAP: dict[str, str] = {
-    # Lightweight routing/triage → gpt-4o (fast)
-    "Decider": "gpt-4o",
-    "FamilyCoordinator": "gpt-4o",
-    "SinkHunter": "gpt-4o",
-    "EntrypointHunter": "gpt-4o",
-    "DataflowTracer": "gpt-4o",
-    "InvariantViolationHunter": "gpt-4o",
-    "TrustBoundaryGapHunter": "gpt-4o",
-    # Deep analysis → gpt-5.2-codex (quality-critical)
-    "Specialist": "gpt-5.2-codex",
-    "Triager": "gpt-5.2-codex",
-    "DevilsAdvocate": "gpt-5.2-codex",
-    "Arbiter": "gpt-5.2-codex",
-    # Foundation → gpt-4o
-    "RepoProfiler": "gpt-4o",
-    "ScopeMapper": "gpt-4o",
-    "ThreatModeler": "gpt-4o",
-    # Understanding → gpt-4o
-    "ModuleAnalyzer": "gpt-4o",
-    "TrustBoundaryMapper": "gpt-4o",
-    "DataFlowMapper": "gpt-4o",
-    "InvariantExtractor": "gpt-4o",
-    # Sink hunter variants → gpt-4o
-    "MemorySinkHunter": "gpt-4o",
-    "InjectionSinkHunter": "gpt-4o",
-    "WebSinkHunter": "gpt-4o",
-    "CryptoSinkHunter": "gpt-4o",
-    "AuthLogicHunter": "gpt-5.2-codex",
-    "AuthBoundaryMapper": "gpt-4o",
-    # Verification → gpt-5.2-codex
-    "Auditor": "gpt-5.2-codex",
-    "Reproducer": "gpt-5.2-codex",
-}
-
-
 class DispatchTask(BaseModel):
     """A single sub-agent task to dispatch."""
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -180,6 +106,8 @@ AGENT_TOOL_SUBSETS = {
     "InjectionSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
     "WebSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
     "CryptoSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    "DeserializationSinkHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
+    "RaceConditionHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure"],
     "DataflowTracer": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
     "ThreatModeler": ["read_file", "get_repo_tree", "get_file_structure"],
     # Phase 2: Deep Understanding agents (v2)
@@ -191,13 +119,13 @@ AGENT_TOOL_SUBSETS = {
     # Phase 3: Targeted Hunters (v2)
     "InvariantViolationHunter": ["read_file", "search_code", "grep_semantic", "get_file_structure", "find_usages"],
     "TrustBoundaryGapHunter": ["read_file", "search_code", "grep_semantic", "get_entry_points", "trace_data_flow"],
-    "Triager": ["read_file", "get_file_structure", "trace_data_flow"],
+    "Triager": ["read_file", "search_code", "get_file_structure", "trace_data_flow"],
     "Auditor": ["read_file", "get_file_structure", "trace_data_flow", "find_usages"],
     "Reproducer": ["read_file", "trace_data_flow"],
 
     # Routing Phase agents
     "Decider": ["read_file", "search_code"],
-    "FamilyCoordinator": ["read_file", "search_code"],
+    "FamilyCoordinator": ["read_file", "search_code", "find_usages"],
 
     # Specialist agents (read-only analysis + native skill loading)
     "Specialist": ["read_file", "search_code", "find_usages", "trace_data_flow", "use_skill"],
@@ -790,7 +718,7 @@ IMPORTANT: Output your result directly as text/JSON to stdout. Do NOT try to wri
 Begin your analysis now."""
 
             # Always use the model specified by the user
-            model_arg = self.provider_config.get("model", "claude-opus-4-5-20251101")
+            model_arg = self.provider_config.get("model", "claude-opus-4-6")
 
             # Build claude CLI command
             # IMPORTANT: Use --append-system-prompt instead of --system-prompt
@@ -1468,7 +1396,7 @@ Begin your analysis now."""
                 name=f"{task.agent_type}_{task.task_id}",
                 provider_config=ProviderConfig(
                     provider=self.provider_config.get("provider", ProviderType.ANTHROPIC),
-                    model=self.provider_config.get("model", "claude-opus-4-5-20251101"),
+                    model=self.provider_config.get("model", "claude-opus-4-6"),
                     api_key=self.provider_config.get("api_key"),
                     base_url=self.provider_config.get("base_url"),
                 ),

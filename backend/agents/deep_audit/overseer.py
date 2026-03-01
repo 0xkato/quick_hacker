@@ -51,7 +51,7 @@ from models.schemas import (
 from providers import Message
 
 from agents.base_agent import BaseAgent
-from agents.deep_audit.state import CampaignState, Hypothesis, ScopeStatus, HypothesisStatus
+from agents.deep_audit.state import CampaignState, Hypothesis, ScopeStatus, HypothesisStatus, WaveTask
 from agents.deep_audit.filesystem import MemoriesFilesystem
 from agents.deep_audit.dispatcher import WaveDispatcher, WavePlan, DispatchTask
 from agents.deep_audit.signal_flow_tracker import SignalFlowTracker
@@ -212,7 +212,7 @@ class Overseer(BaseAgent):
             }
         else:
             # Claude CLI mode (default) — subscription auth, no API keys
-            default_model = "claude-opus-4-5-20251101"
+            default_model = "claude-opus-4-6"
             model_to_use = user_model or default_model
             provider_config = {
                 "provider": request.provider_config.provider if request.provider_config else ProviderType.ANTHROPIC,
@@ -780,19 +780,33 @@ Begin now. Use ALL available time productively."""
             FOCUS_TO_AGENT_TYPE = {
                 "injection": "InjectionSinkHunter",
                 "network": "WebSinkHunter",
-                "deserialization": "SinkHunter",
+                "deserialization": "DeserializationSinkHunter",
                 "memory": "MemorySinkHunter",
                 "auth": "AuthLogicHunter",
                 "crypto": "CryptoSinkHunter",
-                "race": "SinkHunter",
+                "race": "RaceConditionHunter",
                 "input": "WebSinkHunter",
                 "idor": "AuthLogicHunter",
-                "api_misuse": "SinkHunter",
+                "api_misuse": "AuthLogicHunter",
                 "logic": "AuthLogicHunter",
                 "randomness": "CryptoSinkHunter",
-                "disclosure": "SinkHunter",
+                "disclosure": "WebSinkHunter",
                 "supply_chain": "SinkHunter",
             }
+
+            # Filter focuses to only those relevant to this repo's languages/frameworks
+            if foundation_ctx:
+                relevant = foundation_ctx.get_relevant_focus_names()
+                if relevant:
+                    HUNT_FOCUSES = [
+                        (desc, name) for desc, name in HUNT_FOCUSES
+                        if name in relevant
+                    ]
+                    print(f"[Overseer] Filtered to {len(HUNT_FOCUSES)} relevant focuses: {[f[1] for f in HUNT_FOCUSES]}")
+                else:
+                    print(f"[Overseer] No language filter applied — using all {len(HUNT_FOCUSES)} focuses")
+            else:
+                print(f"[Overseer] No foundation context — using all {len(HUNT_FOCUSES)} focuses")
 
             while (self.campaign_state.time_remaining() > MIN_TIME_FOR_WAVE
                    and self.waves_completed < EFFECTIVE_MAX_WAVES
@@ -834,10 +848,12 @@ Begin now. Use ALL available time productively."""
                 # Always hunt for MORE vulnerabilities with a specific focus
                 # Use specialized hunter type when available for better domain coverage
                 wave_agent_type = FOCUS_TO_AGENT_TYPE.get(focus_name, "SinkHunter")
+                wave_constraints = self._build_wave_constraints(wave_num, focus_name, hunt_focus)
                 tasks.append(DispatchTask(
                     agent_type=wave_agent_type,
                     objective=f"Hunt specifically for {hunt_focus} vulnerabilities. Look for dangerous function calls, unsafe patterns, and exploitable code paths.",
                     scope=self.repo_path_str,
+                    constraints=wave_constraints,
                     deliverable=f"/memories/waves/wave_{wave_num}/sinks_{focus_name}.json",
                     time_budget=subagent_budget,
                 ))
@@ -919,6 +935,31 @@ Output JSON with your analysis for each signal.""",
                     new_signals = len(self.campaign_state.confirmed_findings) - signals_count
                     print(f"[Overseer] Wave {wave_num} complete: {wave_result.all_succeeded}, +{new_signals} new signals")
                     await self.emit_log(f"Wave {wave_num} complete. Found {new_signals} new signals. Total: {len(self.campaign_state.confirmed_findings)}")
+
+                    # Record wave in campaign history for progressive deepening
+                    wave_tasks = [
+                        WaveTask(
+                            task_id=t.task_id,
+                            agent_type=t.agent_type,
+                            objective=t.objective[:200],
+                            scope=t.scope,
+                            deliverable=t.deliverable,
+                            time_budget=t.time_budget,
+                            status="completed" if any(
+                                r.task_id == t.task_id and r.status == "completed"
+                                for r in wave_result.results
+                            ) else "failed",
+                        )
+                        for t in wave_plan.tasks
+                    ]
+                    self.campaign_state.record_wave(
+                        wave_id=wave_num,
+                        focus_name=focus_name,
+                        started_at=datetime.utcnow(),
+                        completed_at=datetime.utcnow(),
+                        signals_found=new_signals,
+                        tasks=wave_tasks,
+                    )
 
                     # === INCREMENTAL ROUTING ===
                     # Route new signals to specialists immediately instead of waiting until end
@@ -1074,6 +1115,72 @@ Output JSON with your analysis for each signal.""",
             print(f"[Overseer] Could not load campaign state: {e}")
         return False
 
+    def _build_wave_constraints(self, wave_num: int, focus_name: str, hunt_focus: str) -> str:
+        """Build progressive-deepening context for a wave's hunter agent.
+
+        Tells the hunter what was already found and covered so it can go deeper
+        into unexplored territory instead of repeating surface-level scans.
+        """
+        parts: list[str] = []
+
+        # --- Section 1: Wave strategy based on cycle count ---
+        prior_waves_same_focus = sum(
+            1 for w in self.campaign_state.wave_history
+            if w.focus_name == focus_name
+        )
+
+        if prior_waves_same_focus == 0:
+            parts.append(f"STRATEGY: This is the FIRST pass for {focus_name}. Do a broad scan — find the obvious sinks and dangerous patterns across the entire codebase.")
+        elif prior_waves_same_focus == 1:
+            parts.append(f"STRATEGY: This is the SECOND pass for {focus_name}. Previous pass found surface-level issues. Now go DEEPER — trace callers, read full functions, check for indirect/second-order patterns that a quick scan would miss.")
+        elif prior_waves_same_focus == 2:
+            parts.append(f"STRATEGY: This is the THIRD pass for {focus_name}. Look for subtle, non-obvious patterns: data flowing through helpers/abstractions, edge cases in error handlers, race conditions, configuration-dependent paths.")
+        else:
+            parts.append(f"STRATEGY: Pass {prior_waves_same_focus + 1} for {focus_name}. Focus on architectural issues: trust boundary violations, missing validation at module interfaces, implicit assumptions between components.")
+
+        # --- Section 2: Signals already found (don't re-report) ---
+        findings = self.campaign_state.confirmed_findings
+        if findings:
+            by_file: dict[str, list[str]] = {}
+            for f in findings:
+                fp = f.get("file_path") or f.get("location", "unknown")
+                title = f.get("title") or f.get("why_suspicious", "")
+                by_file.setdefault(fp, []).append(title)
+
+            parts.append(f"\nALREADY FOUND ({len(findings)} signals — do NOT re-report these):")
+            for fp, titles in sorted(by_file.items())[:15]:
+                short_titles = [t[:60] for t in titles[:3]]
+                parts.append(f"  - {fp}: {'; '.join(short_titles)}")
+            if len(by_file) > 15:
+                parts.append(f"  ... and {len(by_file) - 15} more files")
+
+        # --- Section 3: Areas already covered by previous waves ---
+        if self.campaign_state.wave_history:
+            covered_focuses: dict[str, list[str]] = {}
+            for w in self.campaign_state.wave_history:
+                if w.focus_name:
+                    covered_focuses.setdefault(w.focus_name, []).append(
+                        f"wave {w.wave_id} ({w.signals_found} signals)"
+                    )
+
+            if covered_focuses:
+                parts.append("\nPREVIOUS COVERAGE:")
+                for fname, waves in sorted(covered_focuses.items()):
+                    parts.append(f"  - {fname}: {', '.join(waves)}")
+
+                covered_dirs: set[str] = set()
+                for f in findings:
+                    fp = f.get("file_path") or f.get("location")
+                    if fp:
+                        path_parts = fp.split("/")
+                        if len(path_parts) > 1:
+                            covered_dirs.add("/".join(path_parts[:2]))
+
+                if covered_dirs:
+                    parts.append(f"\nPRIORITIZE exploring directories NOT yet covered. Already-analyzed dirs: {', '.join(sorted(covered_dirs)[:10])}")
+
+        return "\n".join(parts) if parts else ""
+
     def _format_signals_for_context(self, max_signals: int = 10) -> str:
         """Format collected signals into a prompt-friendly string for verification agents."""
         if not self.campaign_state.confirmed_findings:
@@ -1218,6 +1325,8 @@ Output JSON with your analysis for each signal.""",
                                     "guards_present": signal.get("guards_present", []),
                                     "next_steps": signal.get("next_steps", []),
                                     "hunter_notes": signal.get("hunter_notes", ""),
+                                    "trace_steps": signal.get("trace_steps", []),
+                                    "guards": signal.get("guards", []),
                                 }
                                 if self._add_finding_deduped(finding):
                                     # Also construct typed SuspiciousSignal (dual-track)
@@ -1321,7 +1430,26 @@ Output JSON with your analysis for each signal.""",
                 entry_point_trace=finding.get("entry_point_trace", []),
                 sink_function=finding.get("sink_function"),
                 hunter_notes=finding.get("hunter_notes"),
+                trace_steps=finding.get("trace_steps", []),
+                guards=finding.get("guards", []),
+                trace_verified=False,
             )
+            # Convert unstructured guards_present to structured guards if needed
+            if not typed_signal.guards:
+                gp = finding.get("guards_present", "")
+                if isinstance(gp, list):
+                    gp = " ".join(str(g) for g in gp)
+                if gp and gp.strip() and gp.strip().lower() != "none found":
+                    typed_signal.guards = [{
+                        "file_path": finding.get("file_path", ""),
+                        "line_number": finding.get("line_start", 0),
+                        "guard_type": "unknown",
+                        "code_snippet": "",
+                        "description": str(gp),
+                        "effectiveness": "unknown",
+                        "bypass_reason": "",
+                    }]
+            typed_signal.compute_trace_quality()
             finding["_typed_signal"] = typed_signal
             self.campaign_state.add_signal(typed_signal)
         except (ValueError, KeyError) as e:
@@ -1408,6 +1536,8 @@ Output JSON with your analysis for each signal.""",
                                         "guards_present": signal.get("guards_present", []),
                                         "next_steps": signal.get("next_steps", []),
                                         "hunter_notes": signal.get("hunter_notes", ""),
+                                        "trace_steps": signal.get("trace_steps", []),
+                                        "guards": signal.get("guards", []),
                                     }
                                     if self._add_finding_deduped(finding):
                                         self._attach_typed_signal(finding)
@@ -1489,21 +1619,28 @@ Output JSON with your analysis for each signal.""",
             original_confidence = 0.7
         confidence_adjustment = 0.0
 
-        # Check guards_present for strong mitigation indicators
-        guards = signal.get("guards_present", "")
-        if isinstance(guards, list):
-            guards = " ".join(str(g) for g in guards)
-        guards_lower = str(guards).lower()
+        # Check structured guards first (from DataflowTracer), fall back to unstructured guards_present
+        structured_guards = signal.get("guards", [])
+        if structured_guards:
+            effective_guards = [g for g in structured_guards if isinstance(g, dict) and g.get("effectiveness") == "effective"]
+            if effective_guards:
+                confidence_adjustment -= 0.15 * min(len(effective_guards), 2)
+        else:
+            # Fallback: unstructured guards_present keyword matching
+            guards = signal.get("guards_present", "")
+            if isinstance(guards, list):
+                guards = " ".join(str(g) for g in guards)
+            guards_lower = str(guards).lower()
 
-        strong_mitigations = [
-            "parameterized", "prepared statement", "bounds check",
-            "sanitized", "validated", "allowlist", "whitelist",
-            "encoded", "escaped", "csrf token", "rate limit",
-        ]
-        for mitigation in strong_mitigations:
-            if mitigation in guards_lower:
-                confidence_adjustment -= 0.15
-                break
+            strong_mitigations = [
+                "parameterized", "prepared statement", "bounds check",
+                "sanitized", "validated", "allowlist", "whitelist",
+                "encoded", "escaped", "csrf token", "rate limit",
+            ]
+            for mitigation in strong_mitigations:
+                if mitigation in guards_lower:
+                    confidence_adjustment -= 0.15
+                    break
 
         # Check if signal category matches repo languages
         if self.foundation_ctx and self.foundation_ctx.repo_profile:
@@ -1590,6 +1727,12 @@ Output JSON with your analysis for each signal.""",
             return None
         self.signal_tracker.record_stage(signal_id, "decider", "investigate")
 
+        # Stage 1.5: DataflowTracer - Build verified source-to-sink trace
+        signal = await self._run_dataflow_tracer(signal)
+        typed_sig = signal.get("_typed_signal")
+        trace_quality = typed_sig.trace_quality if typed_sig else 0.0
+        self.signal_tracker.record_stage(signal_id, "dataflow_tracer", f"quality={trace_quality:.2f}")
+
         # Stage 2: FamilyCoordinator - Which specialist? What context?
         coordinator_result = await self._run_family_coordinator(signal, decider_result)
         if not coordinator_result:
@@ -1612,23 +1755,44 @@ Output JSON with your analysis for each signal.""",
         else:
             self.signal_tracker.record_stage(signal_id, "specialist", specialist_verdict)
 
-        # Stage 3.5: Devil's Advocate - Challenge quick dismissals of high-severity signals
+        # Stage 3.5: Devil's Advocate - Challenge weak specialist results
         da_result = None
         if specialist_result and self._should_challenge_specialist(
             signal_severity, specialist_result, specialist_duration
         ):
-            print(f"[Overseer] Signal {signal_id}: Challenging specialist dismissal with Devil's Advocate")
-            challenge_result = await self._run_devils_advocate(signal, specialist_result)
-            if challenge_result and challenge_result.get("recommendation") == "reconsider":
-                da_result = challenge_result
-                specialist_result["challenged"] = True
-                specialist_result["challenge_findings"] = challenge_result.get("challenge_findings", [])
-                if challenge_result.get("new_evidence"):
-                    specialist_result["verdict"] = "needs_more_info"
-                    specialist_result["devils_advocate_override"] = True
-                self.signal_tracker.record_stage(signal_id, "devils_advocate", "reconsider")
+            specialist_verdict_str = (specialist_result or {}).get("verdict", "").lower()
+            is_confirmation = specialist_verdict_str in ("vulnerable", "confirmed", "exploitable")
+
+            if is_confirmation:
+                print(f"[Overseer] Signal {signal_id}: Challenging weak confirmation with Devil's Advocate (confidence={specialist_result.get('confidence', '?')})")
+                challenge_result = await self._run_confirmation_challenge(signal, specialist_result)
+                if challenge_result:
+                    challenge_verdict = challenge_result.get("verdict", "").lower()
+                    if challenge_verdict in ("not_vulnerable", "false_positive", "insufficient_evidence"):
+                        da_result = challenge_result
+                        specialist_result["challenged"] = True
+                        specialist_result["challenge_type"] = "weak_confirmation"
+                        specialist_result["challenge_findings"] = challenge_result.get("weaknesses", [])
+                        specialist_result["verdict"] = "needs_more_info"
+                        specialist_result["devils_advocate_override"] = True
+                        self.signal_tracker.record_stage(signal_id, "devils_advocate", "downgrade_confirmation")
+                    else:
+                        self.signal_tracker.record_stage(signal_id, "devils_advocate", "uphold_confirmation")
+                else:
+                    self.signal_tracker.record_stage(signal_id, "devils_advocate", "error")
             else:
-                self.signal_tracker.record_stage(signal_id, "devils_advocate", "uphold")
+                print(f"[Overseer] Signal {signal_id}: Challenging specialist dismissal with Devil's Advocate")
+                challenge_result = await self._run_devils_advocate(signal, specialist_result)
+                if challenge_result and challenge_result.get("recommendation") == "reconsider":
+                    da_result = challenge_result
+                    specialist_result["challenged"] = True
+                    specialist_result["challenge_findings"] = challenge_result.get("challenge_findings", [])
+                    if challenge_result.get("new_evidence"):
+                        specialist_result["verdict"] = "needs_more_info"
+                        specialist_result["devils_advocate_override"] = True
+                    self.signal_tracker.record_stage(signal_id, "devils_advocate", "reconsider")
+                else:
+                    self.signal_tracker.record_stage(signal_id, "devils_advocate", "uphold")
 
         # Stage 4: Triager - Final classification (even if specialist failed/errored)
         finding = await self._run_triager(signal, specialist_result, da_result=da_result)
@@ -1656,17 +1820,26 @@ Output JSON with your analysis for each signal.""",
     ) -> bool:
         """Determine if specialist result should be challenged by Devil's Advocate.
 
-        Triggers:
+        Triggers for DISMISSALS:
         - High-severity signal dismissed quickly (< QUICK_DISMISSAL_THRESHOLD_SECONDS)
         - Low confidence dismissal of critical signal
-        - Generic reasoning for dismissal
+
+        Triggers for CONFIRMATIONS:
+        - Low confidence confirmation (< 70)
+        - Suspiciously fast confirmation (< quick_dismissal_threshold)
+        - Thin evidence (short reasoning + no exploitation scenario)
         """
         # Guard: specialist_result must exist
         if not specialist_result:
             return False
 
-        # Only challenge dismissals, not confirmations
         verdict = specialist_result.get("verdict", "").lower()
+
+        # PATH A: Challenge weak CONFIRMATIONS (prevent false positives)
+        if verdict in ("vulnerable", "confirmed", "exploitable"):
+            return self._should_challenge_confirmation(signal_severity, specialist_result, duration_seconds)
+
+        # PATH B: Challenge suspicious DISMISSALS (prevent false negatives)
         if verdict not in ("not_vulnerable", "invalid", "dismiss", "dismissed"):
             return False
 
@@ -1689,6 +1862,39 @@ Output JSON with your analysis for each signal.""",
             confidence = specialist_result.get("confidence", 50)
             if isinstance(confidence, (int, float)) and confidence < 50:
                 return True
+
+        return False
+
+    def _should_challenge_confirmation(
+        self,
+        signal_severity: str,
+        specialist_result: dict,
+        duration_seconds: float,
+    ) -> bool:
+        """Challenge weak confirmations to prevent false positives.
+
+        Triggers when a specialist confirms "vulnerable" but:
+        - Low confidence (< 70)
+        - Suspiciously fast analysis (< quick_dismissal_threshold)
+        - Missing or vague exploitation proof
+        """
+        confidence = specialist_result.get("confidence", 50)
+        if isinstance(confidence, (int, float)) and confidence < 70:
+            return True
+
+        # Very fast confirmation is suspicious — real vulns need thorough verification
+        if duration_seconds < self.quick_dismissal_threshold:
+            return True
+
+        # Check for missing exploitation evidence
+        reasoning = specialist_result.get("reasoning", "")
+        exploitation = specialist_result.get(
+            "exploitation_scenario",
+            specialist_result.get("attack_scenario", ""),
+        )
+        # Thin evidence: short reasoning AND no exploitation scenario
+        if len(reasoning) < 100 and len(exploitation) < 50:
+            return True
 
         return False
 
@@ -1725,6 +1931,45 @@ Output JSON with your analysis for each signal.""",
 
         except Exception as e:
             print(f"[Overseer] Devil's Advocate failed: {e}")
+            return None
+
+    async def _run_confirmation_challenge(self, signal: dict, specialist_result: dict) -> Optional[dict]:
+        """Run Devil's Advocate to challenge a weak confirmation.
+
+        Tries to prove the confirmation is a false positive by:
+        - Verifying the exploitation path is actually reachable
+        - Checking if guards/mitigations were missed
+        - Verifying attacker-controlled input reaches the sink
+        - Ensuring the security impact is real, not theoretical
+        """
+        from agents.deep_audit.subagents import get_confirmation_challenge_prompt
+
+        signal_id = signal.get("signal_id", "unknown")
+        signal_context = self._signal_to_json(signal)
+        confirmation_verdict = json.dumps(specialist_result, indent=2)
+        signal_category = signal.get("category", signal.get("vulnerability_type", ""))
+
+        prompt = get_confirmation_challenge_prompt(
+            signal_context, confirmation_verdict, signal_id, signal_category,
+        )
+
+        try:
+            foundation_ctx = self.foundation_ctx
+            result = await self.dispatcher.dispatch_single(
+                agent_type="DevilsAdvocate",
+                objective=prompt,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/challenge/{signal_id}_confirmation_challenge.json",
+                time_budget=120,
+                foundation_context=foundation_ctx,
+            )
+
+            if result and result.output:
+                return self._extract_json_from_output(result.output)
+            return None
+
+        except Exception as e:
+            print(f"[Overseer] Confirmation challenge failed: {e}")
             return None
 
     async def _run_decider(self, signal: dict) -> Optional[dict]:
@@ -1780,6 +2025,65 @@ Output your decision as JSON with keys: decision, rationale"""
             print(f"[Overseer] Decider failed for signal: {e}")
             # On error, default to investigate (don't drop signals)
             return {"decision": "investigate", "error": str(e)}
+
+    async def _run_dataflow_tracer(self, signal: dict) -> dict:
+        """Run DataflowTracer to build verified source-to-sink trace.
+
+        Dispatches a DataflowTracer agent that reads actual source files to
+        verify and complete the data flow path from source to sink.
+
+        Returns the signal dict updated with trace_steps, guards, trace_verified.
+        """
+        signal_id = signal.get("signal_id", "unknown")
+
+        # Build prompt with signal context
+        signal_json = self._signal_to_json(signal)
+        prompt = f"""Trace the data flow for this signal from source to sink.
+
+## Signal
+{signal_json}
+
+Start at the SINK (the dangerous function) and work BACKWARD to find where attacker-controlled input enters.
+Produce a COMPLETE trace with every step verified by reading actual source files.
+Every file_path and line_number MUST come from your Read tool output.
+Every code_snippet MUST be copied from the actual file."""
+
+        try:
+            result = await self.dispatcher.dispatch_single(
+                agent_type="DataflowTracer",
+                objective=prompt,
+                scope=self.repo_path_str,
+                deliverable=f"/memories/traces/{signal_id}_trace.json",
+                time_budget=300,
+                foundation_context=self.foundation_ctx,
+            )
+
+            if result and result.output:
+                trace_data = self._extract_json_from_output(result.output)
+                if trace_data:
+                    signal["trace_steps"] = trace_data.get("trace_steps", [])
+                    signal["guards"] = trace_data.get("guards", [])
+                    signal["trace_verified"] = True
+                    signal["trace_complete"] = trace_data.get("trace_complete", False)
+
+                    # Update typed signal if present
+                    typed_signal = signal.get("_typed_signal")
+                    if typed_signal:
+                        typed_signal.trace_steps = signal["trace_steps"]
+                        typed_signal.guards = signal["guards"]
+                        typed_signal.trace_verified = True
+                        quality = typed_signal.compute_trace_quality()
+                        print(f"[Overseer] DataflowTracer: {signal_id} trace_quality={quality:.2f}, steps={len(signal['trace_steps'])}, guards={len(signal['guards'])}")
+                    else:
+                        print(f"[Overseer] DataflowTracer: {signal_id} trace completed (no typed signal)")
+                else:
+                    print(f"[Overseer] DataflowTracer: {signal_id} could not parse output")
+            else:
+                print(f"[Overseer] DataflowTracer: {signal_id} returned no output")
+        except Exception as e:
+            print(f"[Overseer] DataflowTracer: {signal_id} error: {e}")
+
+        return signal
 
     async def _run_family_coordinator(self, signal: dict, decider_result: dict) -> Optional[dict]:
         """Stage 2: FamilyCoordinator picks specialists and provides context.
@@ -1903,12 +2207,23 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
         """
         signal_severity = signal.get("severity", "MEDIUM").upper()
         signal_id = signal.get('signal_id', 'unknown')
+        signal_category = signal.get("category", signal.get("vulnerability_type", "")).lower()
 
-        # For critical signals, use cross-validation
-        if signal_severity == "CRITICAL":
+        # Categories that always warrant cross-validation regardless of hunter-assigned severity.
+        # These are high-impact vulnerability classes where a single specialist opinion is insufficient.
+        CROSS_VALIDATE_CATEGORIES = {
+            "buffer_overflow", "use_after_free", "double_free", "uninitialized_memory",
+            "integer_overflow", "format_string", "type_confusion", "unsafe_ffi",
+            "command_injection", "sql_injection", "unsafe_deserialization",
+        }
+
+        # Cross-validate for: CRITICAL severity OR high-impact vulnerability categories
+        if signal_severity == "CRITICAL" or signal_category in CROSS_VALIDATE_CATEGORIES:
+            if signal_category in CROSS_VALIDATE_CATEGORIES and signal_severity != "CRITICAL":
+                print(f"[Overseer] Signal {signal_id}: Cross-validating {signal_category} (high-impact category, severity={signal_severity})")
             return await self._run_specialist_cross_validation(signal, coordinator_result)
 
-        # Standard single-specialist flow for non-critical
+        # Standard single-specialist flow
         return await self._run_single_specialist(signal, coordinator_result)
 
     async def _run_single_specialist(self, signal: dict, coordinator_result: dict, *, _skip_calibration: bool = False) -> Optional[dict]:
@@ -1953,6 +2268,8 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
         typed_signal = signal.get("_typed_signal")
         if typed_signal:
             signal_context = typed_signal.to_specialist_context()
+            if not typed_signal.trace_verified:
+                signal_context += "\n\n⚠️ NO VERIFIED TRACE AVAILABLE. You must trace the full source-to-sink path yourself using Read and find_usages tools."
             signal_context += f"\n\n## Additional Context from Coordinator\n{context}"
         else:
             signal_context = f"""## Signal
@@ -1982,7 +2299,7 @@ Output as JSON with: primary_specialist, secondary_specialist (optional), contex
                 objective=prompt,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/verification/{specialist_id}_{signal_id}.json",
-                time_budget=180,
+                time_budget=1800,
                 foundation_context=foundation_ctx,
             )
 
@@ -2129,7 +2446,7 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
                 objective=prompt,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/arbiter/{signal_id}_arbiter.json",
-                time_budget=240,  # 4 minutes for Arbiter
+                time_budget=600,  # 10 minutes — Arbiter does independent path analysis on top of reviewing both specialists
                 foundation_context=foundation_ctx,
             )
 
@@ -2137,8 +2454,25 @@ Reasoning: {verdict_b.get('reasoning', 'None')}"""
                 arbiter_result = self._extract_json_from_output(result.output)
                 if arbiter_result:
                     arbiter_result["arbitrated"] = True
+                    arbiter_result["disputed"] = True
                     arbiter_result["specialist_a"] = verdict_a.get("specialist_id")
                     arbiter_result["specialist_b"] = verdict_b.get("specialist_id")
+                    # Map arbiter recommendation to verdict for downstream compatibility,
+                    # but mark as disputed so Triager knows specialists disagreed.
+                    recommendation = arbiter_result.get("arbiter_recommendation", "").lower()
+                    if "vulnerable" in recommendation:
+                        arbiter_result["verdict"] = "needs_more_info"
+                    elif "not_vulnerable" in recommendation:
+                        arbiter_result["verdict"] = "needs_more_info"
+                    else:
+                        arbiter_result["verdict"] = "needs_more_info"
+                    # Preserve both specialist analyses for the Triager
+                    arbiter_result["specialist_a_verdict"] = verdict_a.get("verdict", "unknown")
+                    arbiter_result["specialist_a_confidence"] = verdict_a.get("confidence", "N/A")
+                    arbiter_result["specialist_a_reasoning"] = verdict_a.get("reasoning", "")
+                    arbiter_result["specialist_b_verdict"] = verdict_b.get("verdict", "unknown")
+                    arbiter_result["specialist_b_confidence"] = verdict_b.get("confidence", "N/A")
+                    arbiter_result["specialist_b_reasoning"] = verdict_b.get("reasoning", "")
                 return arbiter_result
             return None
 
@@ -2207,10 +2541,37 @@ Skill Used: {skill if skill else 'None'}"""
                     specialist_summary += f"\nChallenge Findings: {json.dumps(challenge_findings, indent=2) if challenge_findings else 'None'}"
                     if specialist_result.get("devils_advocate_override"):
                         specialist_summary += "\nDA Override: Specialist verdict overridden to needs_more_info"
+
+                # Include full dispute context if specialists disagreed
+                if specialist_result.get("disputed"):
+                    specialist_summary += "\n\n## SPECIALIST DISAGREEMENT — YOU MAKE THE FINAL CALL"
+                    specialist_summary += f"\nSpecialist A ({specialist_result.get('specialist_a', '?')}): {specialist_result.get('specialist_a_verdict', '?')} (confidence: {specialist_result.get('specialist_a_confidence', '?')})"
+                    specialist_summary += f"\n  Reasoning: {specialist_result.get('specialist_a_reasoning', 'None')}"
+                    specialist_summary += f"\nSpecialist B ({specialist_result.get('specialist_b', '?')}): {specialist_result.get('specialist_b_verdict', '?')} (confidence: {specialist_result.get('specialist_b_confidence', '?')})"
+                    specialist_summary += f"\n  Reasoning: {specialist_result.get('specialist_b_reasoning', 'None')}"
+                    arbiter_rec = specialist_result.get("arbiter_recommendation", "N/A")
+                    arbiter_reasoning = specialist_result.get("reasoning", "N/A")
+                    arbiter_independent = specialist_result.get("independent_findings", "N/A")
+                    arbiter_questions = specialist_result.get("open_questions", [])
+                    specialist_summary += f"\nArbiter Recommendation: {arbiter_rec}"
+                    specialist_summary += f"\nArbiter Independent Findings: {arbiter_independent}"
+                    specialist_summary += f"\nArbiter Reasoning: {arbiter_reasoning}"
+                    if arbiter_questions:
+                        specialist_summary += f"\nOpen Questions: {json.dumps(arbiter_questions, indent=2)}"
+                    specialist_summary += "\n\nYou have all three perspectives. Read the code yourself and make the final determination."
         else:
             specialist_summary = "No specialist verdict available (specialist failed or timed out)"
 
         signal_context = self._signal_to_json(signal)
+
+        # Trace quality gate for Triager
+        typed_signal = signal.get("_typed_signal")
+        trace_quality = typed_signal.trace_quality if typed_signal else 0.0
+        triager_addition = f"\n\n## Trace Quality: {trace_quality:.1f}/1.0"
+        if trace_quality < 0.5:
+            triager_addition += "\n⚠️ INCOMPLETE TRACE — You MUST read the code yourself and verify the full source-to-sink path before confirming this finding."
+        elif trace_quality >= 0.8 and typed_signal and typed_signal.trace_verified:
+            triager_addition += "\n✓ High-quality verified trace available. Use it to validate the specialist's analysis."
 
         # Format Devil's Advocate challenge if available
         da_section = ""
@@ -2231,7 +2592,8 @@ Skill Used: {skill if skill else 'None'}"""
 
 ## Specialist Analysis
 {specialist_summary}
-{da_section}
+{da_section}{triager_addition}
+
 ## Threat Model
 ```json
 {threat_model}
@@ -2250,6 +2612,9 @@ Any non-JSON text causes a pipeline failure and this signal is LOST.
 Required schema (output this directly, not in a code block):
 {{"signal_id": "<from input>", "classification": "SECURITY_VULNERABILITY|HARDENING|BY_DESIGN|DISMISSED", "severity": "CRITICAL|HIGH|MEDIUM|LOW", "confidence": 85, "title": "concise title", "description": "2-4 sentences", "reasoning": "why", "impact": "damage", "attack_path": "exploitation steps", "recommendation": "fix"}}"""
 
+        # Disputed signals need more time — Triager must review 3 perspectives and do independent analysis
+        triager_budget = 600 if (specialist_result and specialist_result.get("disputed")) else 120
+
         try:
             foundation_ctx = self.foundation_ctx
             result = await self.dispatcher.dispatch_single(
@@ -2257,7 +2622,7 @@ Required schema (output this directly, not in a code block):
                 objective=objective,
                 scope=self.repo_path_str,
                 deliverable=f"/memories/triage/{signal.get('signal_id', 'unknown')}_triage.json",
-                time_budget=120,  # 2 minutes
+                time_budget=triager_budget,
                 foundation_context=foundation_ctx,
             )
 
@@ -3019,7 +3384,7 @@ Required schema (output this directly, not in a code block):
         """Convert to Agent schema."""
         default_provider_config = ProviderConfig(
             provider=ProviderType.ANTHROPIC,
-            model="claude-opus-4-5-20251101",
+            model="claude-opus-4-6",
         )
 
         return Agent(

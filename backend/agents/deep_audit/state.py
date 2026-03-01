@@ -155,9 +155,11 @@ class WaveTask(BaseModel):
 class WaveRecord(BaseModel):
     """Record of a completed wave."""
     wave_id: int
+    focus_name: str = ""  # Which hunt focus this wave targeted
     tasks: list[WaveTask] = Field(default_factory=list)
     started_at: datetime
     completed_at: Optional[datetime] = None
+    signals_found: int = 0  # Signals discovered in this wave
     synthesis_path: Optional[str] = None  # /memories/overseer/wave_N_synthesis.md
     dispatch_path: Optional[str] = None  # /memories/overseer/wave_N_dispatch.json
     hypotheses_added: int = 0
@@ -366,6 +368,18 @@ class CampaignState(BaseModel):
     def get_signals_by_status(self, status: SignalStatus) -> list[SignalState]:
         """Get all signals with a given status."""
         return [s for s in self.signals.values() if s.status == status]
+
+    def record_wave(self, wave_id: int, focus_name: str, started_at: datetime,
+                    completed_at: datetime, signals_found: int, tasks: list[WaveTask] | None = None):
+        """Record a completed wave in the campaign history."""
+        self.wave_history.append(WaveRecord(
+            wave_id=wave_id,
+            focus_name=focus_name,
+            tasks=tasks or [],
+            started_at=started_at,
+            completed_at=completed_at,
+            signals_found=signals_found,
+        ))
 
 
 # Backward compatibility alias

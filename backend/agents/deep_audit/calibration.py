@@ -318,7 +318,7 @@ class ConfidenceCalibrator:
     HIGH_DISMISSAL_RATE_THRESHOLD = 0.8  # 80% dismissal rate
     LOW_ACCURACY_THRESHOLD = 0.6  # 60% accuracy
     QUICK_DISMISSAL_THRESHOLD = 0.5  # 50% of dismissals are quick
-    MIN_VERDICTS_FOR_STATS = 10  # Minimum verdicts before stats are meaningful
+    MIN_VERDICTS_FOR_STATS = 5  # Minimum verdicts before stats are meaningful
 
     # Trust weights
     DEFAULT_TRUST_WEIGHT = 1.0

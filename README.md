@@ -6,7 +6,7 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 
 ## Key Features
 
-### 🤖 Multiple Agent Types
+### Multiple Agent Types
 
 **Three specialized agents for different audit needs:**
 
@@ -17,14 +17,17 @@ AI-powered security auditing browser IDE with evidence-based triage system.
 | **DeepAudit** | Wave-based parallel sub-agent orchestration | 5 min - 24 hours | Multi-agent thorough |
 
 **DeepAudit Architecture:**
-- **Overseer**: LLM orchestrator that dispatches specialized sub-agents
-- **Sub-agents**: RepoProfiler, SinkHunter, DataflowTracer, AuthBoundaryMapper, etc.
+- **Overseer**: LLM orchestrator that dispatches specialized sub-agents via Claude CLI
+- **11 Hunter Types**: SinkHunter, MemorySinkHunter, InjectionSinkHunter, WebSinkHunter, CryptoSinkHunter, AuthLogicHunter, DeserializationSinkHunter, RaceConditionHunter, InvariantViolationHunter, TrustBoundaryGapHunter, EntrypointHunter
+- **64 Specialists** across 14 vulnerability families for deep verification
+- **7-Stage Signal Pipeline**: Pre-screen -> Decider -> DataflowTracer -> FamilyCoordinator -> Specialist -> Devil's Advocate -> Triager
+- **Source-to-Sink Trace Enforcement**: Structured `TraceStep`/`GuardInfo` schema with system-computed quality scoring (not LLM-computed)
 - **Wave-based dispatch**: Parallel execution with context passing between waves
 - **Claude CLI**: Uses Claude Code subscription auth (no API keys needed)
 
 See [agents/deep_audit/README.md](backend/agents/deep_audit/README.md) for detailed architecture.
 
-### 🎯 Strict Triage System
+### Strict Triage System
 
 **Zero false positive philosophy** with evidence-based classification:
 
@@ -40,7 +43,7 @@ See [agents/deep_audit/README.md](backend/agents/deep_audit/README.md) for detai
 
 **Conservative Feature Intent Detection:** Requires 2+ strong signals (path + symbol/documentation) to classify exec/eval as BY_DESIGN, dramatically reducing false positives from code execution findings.
 
-### 🛠️ Rich Tool Ecosystem
+### Rich Tool Ecosystem
 
 **19 specialized tools** for comprehensive code analysis:
 
@@ -51,7 +54,7 @@ See [agents/deep_audit/README.md](backend/agents/deep_audit/README.md) for detai
 - **File Operations:** List files, directory browsing, hierarchical tree generation
 - **Reporting:** Investigation notes, security report generation, audit completion
 
-### 📊 Interactive IDE
+### Interactive IDE
 
 - **Monaco Editor:** VS Code-like editing with syntax highlighting
 - **File Explorer:** Hierarchical tree view with search
@@ -92,7 +95,7 @@ protocol = ProtocolPolicy(
     display_name="GitHub VRP",
     enable_llm_validation=True,
     validation_criticism_level="high",  # low, medium, or high
-    validation_model="claude-sonnet-4-20250514",  # or claude-opus-4-20250514
+    validation_model="claude-sonnet-4-5-20250929",  # or claude-opus-4-6
     validation_timeout_seconds=120,
     # ... other policy settings
 )
@@ -174,7 +177,7 @@ ANTHROPIC_API_KEY=your_key_here
 
 # LLM Settings (used for quests and filtering)
 ENABLE_QUESTS_BY_DEFAULT=true
-QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
+QUEST_LLM_MODEL=claude-sonnet-4-5-20250929
 ```
 
 ## Architecture Overview
@@ -216,9 +219,10 @@ QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
 │  │   └── Utils                                                      │   │
 │  │                                                                  │   │
 │  │   agents/deep_audit/ (Wave-Based Orchestrator)                  │   │
-│  │   ├── Overseer (LLM orchestrator)                               │   │
+│  │   ├── Overseer (LLM orchestrator + signal routing pipeline)    │   │
 │  │   ├── WaveDispatcher (parallel Claude CLI spawning)             │   │
-│  │   ├── Sub-agents: RepoProfiler, SinkHunter, DataflowTracer     │   │
+│  │   ├── 11 Hunters, 64 Specialists, DataflowTracer, Triager     │   │
+│  │   ├── Calibration system (specialist accuracy tracking)        │   │
 │  │   └── /memories/ filesystem for inter-agent context             │   │
 │  │                                                                  │   │
 │  │   agents/tool_core/ (Tool Utilities - 8 modules)                │   │
@@ -266,7 +270,7 @@ QUEST_LLM_MODEL=claude-3-5-sonnet-20241022
                         │
 ┌───────────────────────┴──────────────────────────────────────────────────┐
 │                        LLM Providers                                     │
-│  • Anthropic (Claude Opus/Sonnet/Haiku)                                 │
+│  • Anthropic (Claude Opus 4.6 / Sonnet 4.6 / Sonnet 4.5 / Haiku 4.5)  │
 │  • OpenAI (GPT-4/GPT-3.5)                                                │
 │  • Ollama (Local models)                                                 │
 │  • Claude SDK (MCP-based)                                                │
@@ -419,9 +423,9 @@ curl -X POST http://localhost:8000/api/agents/execute \
 | Tier | Time Budget | Use Case |
 |------|-------------|----------|
 | `quick` | 5 min | Fast reconnaissance |
-| `medium` | 15 min | Standard scan |
-| `advanced` | 30 min | Deeper analysis |
-| `pro` | 1 hour | Thorough audit |
+| `medium` / `standard` | 15 min | Standard scan |
+| `advanced` / `deep` | 45 min | Deeper analysis |
+| `pro` / `exhaustive` | 90 min | Thorough audit |
 | `ultra` | 4 hours | Extensive coverage |
 | `evil` | 24 hours | Maximum depth |
 
@@ -502,7 +506,7 @@ claude login
 claude -p "Hello"
 ```
 
-DeepAudit spawns `claude -p` processes for each sub-agent (RepoProfiler, SinkHunter, etc.), using your subscription credits instead of API billing.
+DeepAudit spawns `claude -p` processes for each sub-agent (RepoProfiler, SinkHunter, DataflowTracer, Specialists, etc.), using your subscription credits instead of API billing. Default model: `claude-opus-4-6`.
 
 ## Codex CLI (Local Provider)
 
@@ -597,14 +601,17 @@ quick_hack/
 │   │   │   └── operations.py        # Core tool operations
 │   │   ├── tools.py                 # 19 tool definitions
 │   │   ├── validity_checklists/     # Per-vulnerability-type checklists
-│   │   └── deep_audit/              # 🆕 Wave-based orchestrator
+│   │   └── deep_audit/              # Wave-based orchestrator
 │   │       ├── README.md            # Architecture documentation
-│   │       ├── overseer.py          # LLM orchestrator
+│   │       ├── overseer.py          # LLM orchestrator + signal routing pipeline
 │   │       ├── dispatcher.py        # Claude CLI sub-agent spawning
 │   │       ├── state.py             # Campaign state management
 │   │       ├── filesystem.py        # /memories/ virtual filesystem
-│   │       ├── subagents.py         # Sub-agent prompts & tools
-│   │       ├── specialists/         # 64 vulnerability specialists
+│   │       ├── foundation.py        # FoundationContext + TraceStep/GuardInfo
+│   │       ├── subagents.py         # 11 hunters, specialists, triager prompts
+│   │       ├── calibration.py       # Specialist confidence calibration
+│   │       ├── signal_flow_tracker.py # Pipeline health reporting
+│   │       ├── specialists/         # 64 vulnerability specialists (14 families)
 │   │       └── tools/               # Dispatch, memory, finalize tools
 │   ├── routers/                     # 13 API endpoint modules
 │   │   ├── agents.py                # Agent execution endpoints
@@ -649,7 +656,7 @@ quick_hack/
 │   │   └── claude_sdk_provider.py   # Claude SDK/MCP
 │   ├── middleware/
 │   │   └── auth.py                  # JWT validation
-│   └── tests/                       # Pytest test suite (1086 tests)
+│   └── tests/                       # Pytest test suite (1350+ tests, 152 files)
 │       └── services/
 │           └── test_strict_classifier.py  # 41 triage tests
 ├── frontend/
@@ -716,8 +723,10 @@ pytest -k "test_exec" -v
 ```
 
 **Test Coverage:**
+- 152 test files across all backend modules
+- Deep audit pipeline: 154+ tests (signal routing, specialists, calibration, trace enforcement)
 - Triage system: 41 tests (exec/eval filtering, disposition rules, evidence gathering)
-- Total backend tests: 100+ tests
+- Total backend tests: 1350+ tests
 
 ## Key Architectural Decisions
 
@@ -730,22 +739,28 @@ Triage classifier never trusts finding descriptions from scanners, only verifies
 ### 3. Conservative Feature Intent Detection
 Requires 2+ strong signals (path + symbol/doc) to classify exec/eval as BY_DESIGN, preventing false positives from legitimate code execution features.
 
-### 4. LangGraph for Complex Workflows
-DeepAudit uses state machine for deterministic multi-step workflow with clear progress tracking and pause/resume capability.
+### 4. Source-to-Sink Trace Enforcement
+Structured `TraceStep` and `GuardInfo` dataclasses track exact file:line evidence through the pipeline. System-computed quality scoring (0.0-1.0) gates downstream agents — specialists see "NO VERIFIED TRACE" warnings when trace quality is low, and the triager enforces independent verification for incomplete traces.
 
-### 5. Sandboxed Tool Execution
+### 5. Multi-Stage Signal Routing Pipeline
+Every signal passes through 7 stages: Pre-screen (confidence adjustment) -> Decider (investigate or dismiss?) -> DataflowTracer (verified source-to-sink trace) -> FamilyCoordinator (specialist selection + context) -> Specialist (technical verification) -> Devil's Advocate (challenge quick dismissals) -> Triager (final classification). Each stage adds to the trace — never overwrites.
+
+### 6. Specialist Confidence Calibration
+Tracks specialist accuracy over time (true positives, false negatives, dismissal rates). Low-accuracy specialists get trust weight penalties, and their verdicts require cross-validation. Pipeline health reports show where signals are dropped and why.
+
+### 7. Sandboxed Tool Execution
 Bash commands run in Docker containers with read-only filesystem, no network, and resource limits for security.
 
-### 6. WebSocket for Real-Time Updates
+### 8. WebSocket for Real-Time Updates
 Agents broadcast progress via WebSocket instead of polling for low-latency user feedback.
 
-### 7. Provider Abstraction Layer
-Unified interface for 4 LLM providers enables easy switching and cost optimization.
+### 9. Provider Abstraction Layer
+Unified interface for 5 LLM providers (Anthropic, OpenAI, Ollama, Claude SDK, Codex CLI) enables easy switching and cost optimization.
 
-### 8. Disposition-First Triage
+### 10. Disposition-First Triage
 Six nuanced dispositions (not binary "vulnerable/safe") provide clear audit trail and different actions per classification.
 
-### 9. Span-Based Investigation Visualization
+### 11. Span-Based Investigation Visualization
 Reconstruction algorithm transforms flat event streams into structured DAG with hypothesis spans, tool call nesting, and artifact provenance. Feature flag-controlled with TreeLayout as default renderer, showing branching investigations with collapse/expand and outcome-based coloring.
 
 See [docs/plans/2026-01-12-architecture-reference.md](docs/plans/2026-01-12-architecture-reference.md) for complete architectural documentation (4,300+ lines covering every major component).

@@ -59,7 +59,17 @@ When the system evolves, we update SYSTEM-SPECIFICATION.md and move old versions
 
 ## Version History
 
-**Current:** v2.0.0 (2026-01-17)
+**Current:** v3.0.0 (2026-02-26)
+- Claude 4.6 model support (Opus 4.6, Sonnet 4.6)
+- Source-to-sink trace enforcement (TraceStep, GuardInfo, system-computed quality scoring)
+- 7-stage signal routing pipeline with DataflowTracer integration
+- 11 specialized hunter types (added Deserialization, RaceCondition, InvariantViolation, TrustBoundaryGap)
+- Specialist confidence calibration system
+- Devil's Advocate challenges weak confirmations (not just dismissals)
+- SignalFlowTracker pipeline health reporting
+- Write-through DB persistence for LLM interactions
+
+**Previous:** v2.0.0 (2026-01-17)
 - Phase 3 & 4 implementation
 - Evidence model migration to Pydantic
 - Input channel inference (2-signal minimum)

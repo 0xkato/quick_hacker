@@ -1659,6 +1659,12 @@ Begin your analysis now."""
             base = base.replace("{scope_id}", task.scope.replace("/", "_"))
             base = base.replace("{scope_path}", task.scope)
             base = base.replace("{case_file_path}", task.deliverable)
+            # Resolve {inputs} to actual filesystem path
+            if task.inputs:
+                inputs_str = ", ".join(str(self.filesystem.memory_root / inp.lstrip("/")) for inp in task.inputs)
+            else:
+                inputs_str = str(self.filesystem.memory_root / "understanding")
+            base = base.replace("{inputs}", inputs_str)
 
         return base
 
@@ -1793,6 +1799,7 @@ Begin your analysis now."""
                     scope=self.repo_path,
                     deliverable="/memories/understanding/trust_boundaries.json",
                     time_budget=time_budget_per_agent,
+                    inputs=["/memories/understanding"],
                 ),
                 DispatchTask(
                     agent_type="DataFlowMapper",
@@ -1800,6 +1807,7 @@ Begin your analysis now."""
                     scope=self.repo_path,
                     deliverable="/memories/understanding/data_flows.json",
                     time_budget=time_budget_per_agent,
+                    inputs=["/memories/understanding"],
                 ),
                 DispatchTask(
                     agent_type="InvariantExtractor",
@@ -1807,6 +1815,7 @@ Begin your analysis now."""
                     scope=self.repo_path,
                     deliverable="/memories/understanding/invariants.json",
                     time_budget=time_budget_per_agent,
+                    inputs=["/memories/understanding"],
                 ),
             ],
             rationale="Understanding Phase: Build Security Map before targeted hunting",

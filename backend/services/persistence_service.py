@@ -9,6 +9,7 @@ Enables:
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -50,15 +51,23 @@ class PersistenceService:
         """Get the path for an agent's state file."""
         return STATE_DIR / f"{agent_id}.json"
 
+    # Valid agent IDs are UUIDs or UUID prefixes (hex + hyphens only)
+    _VALID_AGENT_ID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{3}')
+
     def save_agent_state(self, snapshot: AgentStateSnapshot) -> str:
         """
         Save an agent state snapshot to disk.
 
         Returns the path to the saved file.
         """
+        agent_id = str(snapshot.agent_id)
+        if not self._VALID_AGENT_ID.match(agent_id):
+            print(f"[Persistence] Rejecting invalid agent_id: {agent_id[:80]}")
+            return ""
+
         self._ensure_state_dir()
 
-        state_path = self._get_state_path(snapshot.agent_id)
+        state_path = self._get_state_path(agent_id)
 
         # Convert to dict and serialize
         state_data = snapshot.model_dump(mode='json')
@@ -126,6 +135,9 @@ class PersistenceService:
 
         states = []
         for state_file in STATE_DIR.glob("*.json"):
+            # Skip files with invalid agent IDs (e.g. mock leakage)
+            if not self._VALID_AGENT_ID.match(state_file.stem):
+                continue
             try:
                 with open(state_file, 'r') as f:
                     state_data = json.load(f)

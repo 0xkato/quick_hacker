@@ -1,8 +1,8 @@
-"""Campaign controller -- orchestrates intake, extraction, and compilation.
+"""Campaign controller -- orchestrates intake, extraction, compilation, and execution.
 
 The controller ties together validation, capability profiling, target
-extraction, and harness compilation into lifecycle phase methods that
-transition a campaign from CREATED through COMPILING.
+extraction, harness compilation, and run lane creation into lifecycle
+phase methods that transition a campaign from CREATED through RUNNING.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from services.harness_service import harness_service
 from services.lane_service import lane_service
 from services.oracle_pack_service import oracle_pack_service
 from services.project_service import project_service
+from services.run_lane_service import run_lane_service
 from services.seed_set_service import seed_set_service
 from services.target_service import target_service
 from storage.object_store import LocalFileStore
@@ -252,10 +253,52 @@ class CampaignController:
 
         return updated
 
+    async def execute_campaign(self, campaign_id: str) -> CampaignResponse:
+        """Create run lanes and prepare for execution.
+
+        1. Get campaign.
+        2. Get all validated execution bundles.
+        3. For each bundle: create RunLane record (status=queued).
+        4. Update campaign status to RUNNING.
+        5. Return campaign (runs will be executed by workers).
+
+        Raises:
+            ValueError: If the campaign does not exist or has no bundles.
+        """
+        # 1. Get campaign
+        campaign = await campaign_service.get_campaign(campaign_id)
+        if campaign is None:
+            raise ValueError(f"Campaign not found: {campaign_id}")
+
+        # 2. Get all validated execution bundles
+        bundles = await execution_bundle_service.list_bundles(campaign_id)
+        if not bundles:
+            await campaign_service.update_campaign_status(
+                campaign_id,
+                CampaignStatus.FAILED.value,
+                error_message="No execution bundles found",
+            )
+            raise ValueError("No execution bundles found")
+
+        # 3. For each bundle: create RunLane record
+        for bundle in bundles:
+            await run_lane_service.create_run(
+                lane_spec_id=bundle.lane_spec_id,
+                execution_bundle_id=bundle.id,
+            )
+
+        # 4. Update campaign status to RUNNING
+        updated = await campaign_service.update_campaign_status(
+            campaign_id, CampaignStatus.RUNNING.value
+        )
+
+        return updated
+
     async def start_campaign(self, campaign_id: str) -> CampaignResponse:
-        """Full pipeline: plan -> compile -> ready for execution."""
+        """Full pipeline: plan -> compile -> execute."""
         await self.plan_campaign(campaign_id)
-        return await self.compile_campaign(campaign_id)
+        await self.compile_campaign(campaign_id)
+        return await self.execute_campaign(campaign_id)
 
 
 # Module-level singleton

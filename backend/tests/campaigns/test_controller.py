@@ -1,4 +1,4 @@
-"""Tests for campaigns.controller -- campaign planning and compilation."""
+"""Tests for campaigns.controller -- campaign planning, compilation, and execution."""
 
 import json
 from datetime import datetime, timezone
@@ -589,12 +589,13 @@ class TestStartCampaign:
     """Tests for CampaignController.start_campaign."""
 
     @pytest.mark.asyncio
-    async def test_start_chains_plan_and_compile(self):
-        """start_campaign calls plan then compile."""
+    async def test_start_chains_plan_compile_execute(self):
+        """start_campaign calls plan, compile, then execute."""
         controller = CampaignController()
 
         mock_plan_result = _make_campaign(status=CampaignStatus.EXTRACTING)
         mock_compile_result = _make_campaign(status=CampaignStatus.COMPILING)
+        mock_execute_result = _make_campaign(status=CampaignStatus.RUNNING)
 
         with (
             patch.object(
@@ -609,9 +610,159 @@ class TestStartCampaign:
                 new_callable=AsyncMock,
                 return_value=mock_compile_result,
             ) as mock_compile,
+            patch.object(
+                controller,
+                "execute_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_execute_result,
+            ) as mock_execute,
         ):
             result = await controller.start_campaign("c1")
 
         mock_plan.assert_called_once_with("c1")
         mock_compile.assert_called_once_with("c1")
-        assert result.status == CampaignStatus.COMPILING
+        mock_execute.assert_called_once_with("c1")
+        assert result.status == CampaignStatus.RUNNING
+
+
+# ===========================================================================
+# CampaignController.execute_campaign
+# ===========================================================================
+
+
+class TestExecuteCampaign:
+    """Tests for CampaignController.execute_campaign."""
+
+    @pytest.mark.asyncio
+    async def test_execute_creates_run_records(self):
+        """execute_campaign creates a RunLane for each bundle."""
+        mock_campaign = _make_campaign(status=CampaignStatus.COMPILING)
+        bundle1 = _make_bundle(id="eb1", lane_spec_id="ls1")
+        bundle2 = _make_bundle(id="eb2", lane_spec_id="ls2")
+        running_campaign = _make_campaign(status=CampaignStatus.RUNNING)
+
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.execution_bundle_service.list_bundles",
+                new_callable=AsyncMock,
+                return_value=[bundle1, bundle2],
+            ),
+            patch(
+                "campaigns.controller.run_lane_service.create_run",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ) as mock_create_run,
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=running_campaign,
+            ) as mock_update_status,
+        ):
+            result = await controller.execute_campaign("c1")
+
+        # A run was created for each bundle
+        assert mock_create_run.call_count == 2
+        call_kwargs_0 = mock_create_run.call_args_list[0].kwargs
+        assert call_kwargs_0["lane_spec_id"] == "ls1"
+        assert call_kwargs_0["execution_bundle_id"] == "eb1"
+
+        call_kwargs_1 = mock_create_run.call_args_list[1].kwargs
+        assert call_kwargs_1["lane_spec_id"] == "ls2"
+        assert call_kwargs_1["execution_bundle_id"] == "eb2"
+
+        # Campaign status transitioned to RUNNING
+        mock_update_status.assert_called_once_with(
+            "c1", CampaignStatus.RUNNING.value
+        )
+        assert result.status == CampaignStatus.RUNNING
+
+    @pytest.mark.asyncio
+    async def test_execute_transitions_to_running(self):
+        """execute_campaign transitions campaign status to RUNNING."""
+        mock_campaign = _make_campaign(status=CampaignStatus.COMPILING)
+        bundle = _make_bundle(id="eb1", lane_spec_id="ls1")
+        running_campaign = _make_campaign(status=CampaignStatus.RUNNING)
+
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.execution_bundle_service.list_bundles",
+                new_callable=AsyncMock,
+                return_value=[bundle],
+            ),
+            patch(
+                "campaigns.controller.run_lane_service.create_run",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=running_campaign,
+            ) as mock_update_status,
+        ):
+            result = await controller.execute_campaign("c1")
+
+        mock_update_status.assert_called_once_with(
+            "c1", CampaignStatus.RUNNING.value
+        )
+        assert result.status == CampaignStatus.RUNNING
+
+    @pytest.mark.asyncio
+    async def test_execute_no_bundles_fails(self):
+        """execute_campaign with no bundles raises ValueError."""
+        mock_campaign = _make_campaign(status=CampaignStatus.COMPILING)
+
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.execution_bundle_service.list_bundles",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=_make_campaign(status=CampaignStatus.FAILED),
+            ) as mock_update_status,
+        ):
+            with pytest.raises(ValueError, match="No execution bundles found"):
+                await controller.execute_campaign("c1")
+
+        mock_update_status.assert_called_once_with(
+            "c1",
+            CampaignStatus.FAILED.value,
+            error_message="No execution bundles found",
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_missing_campaign_fails(self):
+        """execute_campaign with non-existent campaign raises ValueError."""
+        controller = CampaignController()
+
+        with patch(
+            "campaigns.controller.campaign_service.get_campaign",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(ValueError, match="Campaign not found"):
+                await controller.execute_campaign("nonexistent")

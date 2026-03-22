@@ -88,3 +88,68 @@ async def list_campaign_lanes(
         lanes = await lane_service.list_lane_specs(target_id=t.id)
         all_lanes.extend(lanes)
     return all_lanes
+
+
+@router.get("/{campaign_id}/artifacts")
+async def list_campaign_artifacts(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """List all artifacts for a campaign."""
+    from services.artifact_service import artifact_service
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await artifact_service.list_artifacts(campaign_id)
+
+
+@router.get("/{campaign_id}/artifact-buckets")
+async def list_campaign_artifact_buckets(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """List artifact dedup buckets for a campaign."""
+    from services.artifact_service import artifact_service
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await artifact_service.list_buckets(campaign_id)
+
+
+@router.get("/{campaign_id}/coverage")
+async def get_campaign_coverage(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Get aggregated coverage summary for a campaign."""
+    from services.coverage_service import coverage_service
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await coverage_service.get_campaign_coverage_summary(campaign_id)
+
+
+@router.get("/{campaign_id}/steering")
+async def list_campaign_steering(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """List steering decisions for a campaign."""
+    from services.steering_service import steering_service
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await steering_service.list_decisions(campaign_id)
+
+
+@router.get("/{campaign_id}/issues")
+async def list_campaign_issues(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """List confirmed issues for a campaign."""
+    from services.issue_service import issue_service
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await issue_service.list_issues(campaign_id)

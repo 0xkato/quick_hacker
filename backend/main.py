@@ -19,6 +19,9 @@ from routers import simple_report
 from routers import behavior_tree as behavior_tree_router
 from routers import campaigns as campaigns_router
 from routers import lanes as lanes_router
+from routers import runs as runs_router
+from routers import artifacts as artifacts_router
+from routers import issues as issues_router
 from routers.websocket import set_main_loop
 from database import init_db
 from database.connection import engine
@@ -186,6 +189,24 @@ app.include_router(
     lanes_router.router,
     prefix="/api/lanes",
     tags=["Lanes"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    runs_router.router,
+    prefix="/api/runs",
+    tags=["Runs"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    artifacts_router.router,
+    prefix="/api/artifacts",
+    tags=["Artifacts"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    issues_router.router,
+    prefix="/api/issues",
+    tags=["Issues"],
     dependencies=[Depends(require_auth)],
 )
 

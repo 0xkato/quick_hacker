@@ -1,14 +1,27 @@
-"""Tests for campaigns.controller -- campaign planning workflow."""
+"""Tests for campaigns.controller -- campaign planning and compilation."""
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from campaigns.controller import CampaignController
-from models.campaign_enums import CampaignPreset, CampaignStatus
-from models.campaign_schemas import CampaignResponse
+from models.campaign_enums import (
+    CampaignPreset,
+    CampaignStatus,
+    FeedbackModel,
+    InputProducer,
+    LaneSpecStatus,
+    StructureModel,
+    TargetKind,
+)
+from models.campaign_schemas import (
+    CampaignResponse,
+    ExecutionBundleResponse,
+    LaneSpecResponse,
+    TargetResponse,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +43,61 @@ def _make_campaign(**overrides) -> CampaignResponse:
     )
     defaults.update(overrides)
     return CampaignResponse(**defaults)
+
+
+def _make_target(**overrides) -> TargetResponse:
+    """Build a TargetResponse with sensible defaults."""
+    defaults = dict(
+        id="t1",
+        campaign_id="c1",
+        kind=TargetKind.API_ROUTE,
+        entrypoint="GET /api/users",
+        language="python",
+        stateful=False,
+        priority_score=0.0,
+        created_at=datetime.now(timezone.utc),
+    )
+    defaults.update(overrides)
+    return TargetResponse(**defaults)
+
+
+def _make_lane_spec(**overrides) -> LaneSpecResponse:
+    """Build a LaneSpecResponse with sensible defaults."""
+    defaults = dict(
+        id="ls1",
+        target_id="t1",
+        revision=1,
+        structure_model=StructureModel.SCHEMA,
+        input_producer=InputProducer.GENERATION,
+        feedback_models=[FeedbackModel.API_SURFACE],
+        oracle_packs=["status_code", "schema_conformance"],
+        engine="schemathesis",
+        budget_seconds=60,
+        seed_sources=["openapi_examples"],
+        status=LaneSpecStatus.PLANNED,
+        created_at=datetime.now(timezone.utc),
+    )
+    defaults.update(overrides)
+    return LaneSpecResponse(**defaults)
+
+
+def _make_bundle(**overrides) -> ExecutionBundleResponse:
+    """Build an ExecutionBundleResponse with sensible defaults."""
+    defaults = dict(
+        id="eb1",
+        campaign_id="c1",
+        campaign_plan_revision=1,
+        lane_spec_id="ls1",
+        lane_spec_revision=1,
+        harness_id="h1",
+        harness_revision=1,
+        oracle_pack_id="op1",
+        oracle_pack_revision=1,
+        seed_set_id="ss1",
+        created_at=datetime.now(timezone.utc),
+    )
+    defaults.update(overrides)
+    return ExecutionBundleResponse(**defaults)
 
 
 # ===========================================================================
@@ -220,3 +288,330 @@ class TestCampaignController:
 
         # No targets to create, so batch should not be called
         mock_batch.assert_not_called()
+
+
+# ===========================================================================
+# CampaignController.compile_campaign
+# ===========================================================================
+
+
+class TestCompileCampaign:
+    """Tests for CampaignController.compile_campaign."""
+
+    @pytest.mark.asyncio
+    async def test_compile_creates_lanes_and_bundles(self, tmp_path):
+        """compile_campaign creates lane specs and execution bundles."""
+        mock_campaign = _make_campaign(status=CampaignStatus.EXTRACTING)
+        mock_target = _make_target(id="t1", entrypoint="GET /api/users")
+        mock_lane_spec = _make_lane_spec(id="ls1", target_id="t1")
+        compiling_campaign = _make_campaign(status=CampaignStatus.COMPILING)
+
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={"max_compilation_failures_per_lane": 3},
+            ),
+            patch(
+                "campaigns.controller.target_service.list_targets",
+                new_callable=AsyncMock,
+                return_value=[mock_target],
+            ),
+            patch(
+                "campaigns.controller.target_service.get_target",
+                new_callable=AsyncMock,
+                return_value=mock_target,
+            ),
+            patch(
+                "campaigns.controller.project_service.get_project_repo_path",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "campaigns.controller.detect_capability_profile",
+                return_value=MagicMock(openapi_path="openapi.json"),
+            ),
+            patch(
+                "campaigns.controller.lane_service.create_lane_spec",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
+            ) as mock_create_lane,
+            patch(
+                "campaigns.controller.harness_service.create_harness",
+                new_callable=AsyncMock,
+                return_value={"id": "h1", "revision": 1, "code_ref": "ref"},
+            ) as mock_create_harness,
+            patch(
+                "campaigns.controller.oracle_pack_service.create_oracle_pack",
+                new_callable=AsyncMock,
+                return_value={"id": "op1", "revision": 1, "config": {}},
+            ) as mock_create_oracle,
+            patch(
+                "campaigns.controller.seed_set_service.create_seed_set",
+                new_callable=AsyncMock,
+                return_value={"id": "ss1", "sources": [], "item_count": 0},
+            ) as mock_create_seed,
+            patch(
+                "campaigns.controller.execution_bundle_service.create_bundle",
+                new_callable=AsyncMock,
+                return_value=_make_bundle(),
+            ) as mock_create_bundle,
+            patch(
+                "campaigns.controller.lane_service.update_lane_spec_status",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
+            ) as mock_update_lane,
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=compiling_campaign,
+            ) as mock_update_status,
+            patch(
+                "campaigns.controller.LocalFileStore",
+            ) as MockStore,
+        ):
+            MockStore.return_value.put = MagicMock()
+
+            result = await controller.compile_campaign("c1")
+
+        # Lane spec was created
+        mock_create_lane.assert_called_once()
+
+        # Harness, oracle, seed, and bundle were created
+        mock_create_harness.assert_called_once()
+        mock_create_oracle.assert_called_once()
+        mock_create_seed.assert_called_once()
+        mock_create_bundle.assert_called_once()
+
+        # Lane marked as validated
+        mock_update_lane.assert_called_once_with("ls1", "validated")
+
+        # Campaign status updated to COMPILING
+        mock_update_status.assert_called_once_with(
+            "c1", CampaignStatus.COMPILING.value
+        )
+        assert result.status == CampaignStatus.COMPILING
+
+    @pytest.mark.asyncio
+    async def test_compile_retires_invalid_lanes(self, tmp_path):
+        """Invalid harness -> lane marked retired."""
+        mock_campaign = _make_campaign(status=CampaignStatus.EXTRACTING)
+        mock_target = _make_target(id="t1", entrypoint="GET /api/users")
+        mock_lane_spec = _make_lane_spec(id="ls1", target_id="t1")
+
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={"max_compilation_failures_per_lane": 1},
+            ),
+            patch(
+                "campaigns.controller.target_service.list_targets",
+                new_callable=AsyncMock,
+                return_value=[mock_target],
+            ),
+            patch(
+                "campaigns.controller.target_service.get_target",
+                new_callable=AsyncMock,
+                return_value=mock_target,
+            ),
+            patch(
+                "campaigns.controller.project_service.get_project_repo_path",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "campaigns.controller.detect_capability_profile",
+                return_value=MagicMock(openapi_path="openapi.json"),
+            ),
+            patch(
+                "campaigns.controller.lane_service.create_lane_spec",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
+            ),
+            # Force invalid harness by making compiler return bad code
+            patch(
+                "campaigns.controller.compile_schemathesis_config",
+                return_value="invalid python code }{}{",
+            ),
+            patch(
+                "campaigns.controller.validate_harness",
+                return_value=MagicMock(passed=False, errors=["Syntax error"]),
+            ),
+            patch(
+                "campaigns.controller.lane_service.update_lane_spec_status",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
+            ) as mock_update_lane,
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=_make_campaign(status=CampaignStatus.FAILED),
+            ),
+            patch(
+                "campaigns.controller.LocalFileStore",
+            ) as MockStore,
+        ):
+            MockStore.return_value.put = MagicMock()
+
+            result = await controller.compile_campaign("c1")
+
+        # Lane marked as retired (failure_count=1 >= max_failures=1)
+        mock_update_lane.assert_called_once_with("ls1", "retired")
+
+    @pytest.mark.asyncio
+    async def test_compile_fails_if_all_retired(self, tmp_path):
+        """All lanes retired -> campaign status FAILED."""
+        mock_campaign = _make_campaign(status=CampaignStatus.EXTRACTING)
+        mock_target = _make_target(id="t1", entrypoint="GET /api/users")
+        mock_lane_spec = _make_lane_spec(id="ls1", target_id="t1")
+
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={"max_compilation_failures_per_lane": 1},
+            ),
+            patch(
+                "campaigns.controller.target_service.list_targets",
+                new_callable=AsyncMock,
+                return_value=[mock_target],
+            ),
+            patch(
+                "campaigns.controller.target_service.get_target",
+                new_callable=AsyncMock,
+                return_value=mock_target,
+            ),
+            patch(
+                "campaigns.controller.project_service.get_project_repo_path",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "campaigns.controller.detect_capability_profile",
+                return_value=MagicMock(openapi_path="openapi.json"),
+            ),
+            patch(
+                "campaigns.controller.lane_service.create_lane_spec",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
+            ),
+            patch(
+                "campaigns.controller.compile_schemathesis_config",
+                return_value="bad code",
+            ),
+            patch(
+                "campaigns.controller.validate_harness",
+                return_value=MagicMock(passed=False, errors=["Syntax error"]),
+            ),
+            patch(
+                "campaigns.controller.lane_service.update_lane_spec_status",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
+            ),
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=_make_campaign(status=CampaignStatus.FAILED),
+            ) as mock_update_status,
+            patch(
+                "campaigns.controller.LocalFileStore",
+            ) as MockStore,
+        ):
+            MockStore.return_value.put = MagicMock()
+
+            result = await controller.compile_campaign("c1")
+
+        # Campaign FAILED because all lanes retired
+        mock_update_status.assert_called_once_with(
+            "c1",
+            CampaignStatus.FAILED.value,
+            error_message="All lanes retired due to compilation failures",
+        )
+        assert result.status == CampaignStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_compile_no_targets_fails(self):
+        """No targets -> ValueError raised."""
+        mock_campaign = _make_campaign(status=CampaignStatus.EXTRACTING)
+        controller = CampaignController()
+
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "campaigns.controller.target_service.list_targets",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "campaigns.controller.campaign_service.update_campaign_status",
+                new_callable=AsyncMock,
+                return_value=_make_campaign(status=CampaignStatus.FAILED),
+            ),
+        ):
+            with pytest.raises(ValueError, match="No targets found"):
+                await controller.compile_campaign("c1")
+
+
+# ===========================================================================
+# CampaignController.start_campaign
+# ===========================================================================
+
+
+class TestStartCampaign:
+    """Tests for CampaignController.start_campaign."""
+
+    @pytest.mark.asyncio
+    async def test_start_chains_plan_and_compile(self):
+        """start_campaign calls plan then compile."""
+        controller = CampaignController()
+
+        mock_plan_result = _make_campaign(status=CampaignStatus.EXTRACTING)
+        mock_compile_result = _make_campaign(status=CampaignStatus.COMPILING)
+
+        with (
+            patch.object(
+                controller,
+                "plan_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_plan_result,
+            ) as mock_plan,
+            patch.object(
+                controller,
+                "compile_campaign",
+                new_callable=AsyncMock,
+                return_value=mock_compile_result,
+            ) as mock_compile,
+        ):
+            result = await controller.start_campaign("c1")
+
+        mock_plan.assert_called_once_with("c1")
+        mock_compile.assert_called_once_with("c1")
+        assert result.status == CampaignStatus.COMPILING

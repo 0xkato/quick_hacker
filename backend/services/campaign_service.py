@@ -121,6 +121,16 @@ class CampaignService:
                 return None
             return _db_to_response(row)
 
+    async def get_campaign_config(
+        self, campaign_id: str
+    ) -> Optional[dict]:
+        """Return the raw config JSON for a campaign, or None if not found."""
+        async with get_session() as session:
+            row = await session.get(DBCampaign, campaign_id)
+            if row is None:
+                return None
+            return row.config or {}
+
     async def list_campaigns(
         self, repo_id: str | None = None
     ) -> list[CampaignResponse]:

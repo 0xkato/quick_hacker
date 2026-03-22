@@ -21,3 +21,24 @@ def test_targets_endpoint_registered():
 
     paths = [r.path for r in app.routes]
     assert any("targets" in p for p in paths)
+
+
+def test_start_endpoint_registered():
+    from main import app
+
+    paths = [r.path for r in app.routes]
+    assert any("start" in p for p in paths)
+
+
+def test_campaign_lanes_endpoint_registered():
+    from main import app
+
+    paths = [r.path for r in app.routes]
+    assert any("/campaigns/" in p and "/lanes" in p for p in paths)
+
+
+def test_lane_detail_endpoint_registered():
+    from main import app
+
+    paths = [r.path for r in app.routes]
+    assert any("/lanes/" in p and "{lane_id}" in p for p in paths)

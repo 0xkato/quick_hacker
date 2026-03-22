@@ -18,8 +18,6 @@ from typing import Any, Callable
 
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
 from services.tool_cache import ToolCache
-from services.git_head_tracker import GitHeadTracker
-from services.artifact_service import artifact_service
 
 # Import all mixins
 from .file_operations import FileOperationsMixin
@@ -90,11 +88,8 @@ class ToolCore(
         self._get_scan_limits = get_scan_limits or (lambda: ScanLimits())
         self.cache = cache
 
-        # Initialize git HEAD tracker if cache is enabled
-        if self.cache is not None:
-            self.git_head_tracker = GitHeadTracker(str(self.repo_path))
-        else:
-            self.git_head_tracker = None
+        # git_head_tracker removed; caching degrades gracefully when None
+        self.git_head_tracker = None
 
         # Create workspace policy
         self.workspace_policy = WorkspacePolicy(
@@ -103,55 +98,6 @@ class ToolCore(
             excluded_dirs=set(self.DEFAULT_EXCLUDED_DIRS),
         )
 
-        # Span context tracking
-        self._current_span_id: str | None = None
-        self._current_hypothesis_id: str | None = None
-
-    def set_span_context(
-        self,
-        span_id: str,
-        hypothesis_id: str | None = None
-    ) -> None:
-        """
-        Set current span context for artifact provenance tracking.
-
-        Args:
-            span_id: Current span being executed
-            hypothesis_id: Optional hypothesis ID
-        """
-        self._current_span_id = span_id
-        self._current_hypothesis_id = hypothesis_id
-
-    def clear_span_context(self) -> None:
-        """Clear current span context."""
-        self._current_span_id = None
-        self._current_hypothesis_id = None
-
-    def _track_artifact_provenance(self, artifact_id: str) -> None:
-        """
-        Track artifact provenance in current span.
-
-        Args:
-            artifact_id: Artifact ID to track
-        """
-        if not self._current_span_id or not self.agent_id:
-            return
-
-        # Import here to avoid circular dependency
-        from services.span_service import span_service
-
-        # Add artifact to span
-        span_service.attach_artifact(
-            agent_id=self.agent_id,
-            span_id=self._current_span_id,
-            artifact_id=artifact_id
-        )
-
-        # Track producer provenance
-        artifact_service.add_producer(
-            span_id=self._current_span_id,
-            artifact_id=artifact_id
-        )
 
 
 __all__ = [

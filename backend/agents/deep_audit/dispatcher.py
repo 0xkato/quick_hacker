@@ -1415,92 +1415,14 @@ Begin your analysis now."""
         foundation_context: Optional[FoundationContext],
         started_at: datetime,
     ) -> SubagentResult:
-        """Spawn sub-agent using ReactAgent with API key auth."""
+        """Spawn sub-agent using ReactAgent with API key auth.
+
+        DEPRECATED: ReactAgent has been removed. This legacy fallback now
+        returns a failed result immediately.
+        """
         try:
-            # Get prompt for this agent type (with foundation context if available)
-            prompt = self._get_subagent_prompt(task, foundation_context)
-
-            # Get tool subset for this agent type
-            allowed_tools = get_tools_for_agent_type(task.agent_type)
-
-            # Import here to avoid circular imports
-            from agents.react_agent import ReActSecurityAgent as ReactAgent
-            from models.schemas import AgentCreateRequest, ProviderConfig, ProviderType
-
-            # Create a minimal request for the sub-agent with full provider config
-            request = AgentCreateRequest(
-                repo_id=self.filesystem.project_id,
-                name=f"{task.agent_type}_{task.task_id}",
-                provider_config=ProviderConfig(
-                    provider=self.provider_config.get("provider", ProviderType.ANTHROPIC),
-                    model=self.provider_config.get("model", "claude-opus-4-6"),
-                    api_key=self.provider_config.get("api_key"),
-                    base_url=self.provider_config.get("base_url"),
-                ),
-                time_budget_seconds=task.time_budget,
-                custom_prompt=prompt,
-            )
-
-            # Create ReactAgent instance with filtered tools
-            # Pass on_message callback for UI visibility of sub-agent activity
-            agent = ReactAgent(
-                request=request,
-                repo_path=self.repo_path,
-                allowed_tools=allowed_tools,
-                on_message=self.on_message,
-            )
-
-            # Broadcast sub-agent started
-            self._broadcast(
-                WSMessageType.AGENT_STATUS,
-                agent.id,
-                {
-                    "agent_id": agent.id,
-                    "name": agent.name,
-                    "agent_type": task.agent_type,
-                    "status": "running",
-                    "task_id": task.task_id,
-                    "objective": task.objective,
-                }
-            )
-
-            # Override the system prompt with our task-specific prompt
-            agent.system_prompt = prompt
-
-            # Run the agent
-            await agent.run()
-
-            completed_at = datetime.utcnow()
-            status = "completed" if not agent.error_message else "failed"
-
-            # Broadcast sub-agent completed
-            self._broadcast(
-                WSMessageType.AGENT_STATUS,
-                agent.id,
-                {
-                    "agent_id": agent.id,
-                    "name": agent.name,
-                    "agent_type": task.agent_type,
-                    "status": status,
-                    "task_id": task.task_id,
-                    "findings_count": len(agent.findings) if hasattr(agent, 'findings') else 0,
-                    "error": agent.error_message,
-                }
-            )
-
-            # Notify completion (legacy callback)
-            if self.on_agent_complete:
-                self.on_agent_complete(task.task_id, task.agent_type, status)
-
-            return SubagentResult(
-                task_id=task.task_id,
-                agent_type=task.agent_type,
-                status=status,
-                output_path=task.deliverable,
-                started_at=started_at,
-                completed_at=completed_at,
-                error=agent.error_message,
-                tokens_used=getattr(agent, 'total_tokens', 0),
+            raise RuntimeError(
+                "ReactAgent has been removed. Use Claude Code (use_claude_code_auth=True) instead."
             )
 
         except asyncio.TimeoutError:

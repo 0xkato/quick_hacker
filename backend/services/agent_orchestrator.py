@@ -41,7 +41,6 @@ from models.schemas import (
 )
 from agents.base_agent import BaseAgent
 from agents.deep_audit import DeepAuditSupervisor, Overseer
-from agents.react_agent import ReActSecurityAgent
 from providers.claude_sdk_provider import ClaudeSDKProvider, SDK_AVAILABLE
 from providers.codex_cli_provider import CodexCLIProvider
 from services.claude_sdk_orchestrator import ClaudeSDKOrchestrator
@@ -57,7 +56,6 @@ from services.report_service import report_service
 from services.scan_service import scan_service
 from services.scan_tier_service import resolve_scan_budget
 from services.flow_service import flow_service
-from services.span_service import span_service
 from services.observability_service import observability_service
 from services.behavior_tree_service import behavior_tree_service
 from services.finding_triage_service import triage_service
@@ -323,10 +321,6 @@ class AgentOrchestrator:
             "on_message": self._broadcast_message,
         }
 
-        # ReActSecurityAgent accepts cache parameter
-        if agent_class == ReActSecurityAgent:
-            agent_kwargs["cache"] = cache
-
         agent = agent_class(**agent_kwargs)
 
         # Store cache on agent for potential reuse in _run_sdk_agent
@@ -565,8 +559,6 @@ class AgentOrchestrator:
                 del self._tasks[agent.id]
             # Cleanup flow graph to prevent memory leaks
             flow_service.clear_flow(agent.id)
-            # Cleanup spans to prevent memory leaks
-            span_service.clear_agent_spans(agent.id)
             # Persist LLM interactions and tool details to database
             try:
                 await observability_service.save_to_db(agent.id)
@@ -929,16 +921,6 @@ class AgentOrchestrator:
                 )
                 flow_service.update_node_status(agent_id, tool_node.id, "running")
                 current_tool_node_id = tool_node.id
-                # Attach to Structured Trace (best-effort).
-                try:
-                    flow_service.attach_node_to_structured_trace(
-                        agent_id,
-                        tool_node.id,
-                        tool_name=tool_name,
-                        args=tool_args if isinstance(tool_args, dict) else None,
-                    )
-                except Exception:
-                    pass
 
                 # Broadcast flow update
                 flow = flow_service.get_flow(agent_id)
@@ -1072,17 +1054,6 @@ class AgentOrchestrator:
                                     {"severity": severity_str, "finding": raw_finding, "subagent": subagent}
                                 )
                                 flow_service.update_node_status(agent_id, finding_node.id, "completed")
-                                # Attach finding to Structured Trace (best-effort).
-                                try:
-                                    flow_service.attach_node_to_structured_trace(
-                                        agent_id,
-                                        finding_node.id,
-                                        tool_name="report_finding",
-                                        args=raw_finding if isinstance(raw_finding, dict) else None,
-                                        file_path=str(raw_finding.get("file_path") or "") if isinstance(raw_finding, dict) else None,
-                                    )
-                                except Exception:
-                                    pass
 
                                 # === Create Finding object and broadcast to Findings panel ===
                                 finding_counter[0] += 1
@@ -1834,16 +1805,6 @@ class AgentOrchestrator:
                 tool_node = flow_service.add_node(agent.id, node_type, label, {"tool": normalized_name, "args": tool_args})
                 flow_service.update_node_status(agent.id, tool_node.id, "running")
                 current_tool_node_id = tool_node.id
-                # Attach to Structured Trace (best-effort).
-                try:
-                    flow_service.attach_node_to_structured_trace(
-                        agent.id,
-                        tool_node.id,
-                        tool_name=normalized_name,
-                        args=tool_args if isinstance(tool_args, dict) else None,
-                    )
-                except Exception:
-                    pass
 
                 flow = flow_service.get_flow(agent.id)
                 if flow:

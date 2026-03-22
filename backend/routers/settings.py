@@ -118,7 +118,7 @@ async def test_provider(provider: str):
 
     provider_settings = settings.providers[provider]
 
-    if not provider_settings.api_key and provider != "ollama":
+    if not provider_settings.api_key:
         return {"status": "error", "message": "No API key configured"}
 
     # Import and test provider
@@ -126,19 +126,7 @@ async def test_provider(provider: str):
         from models.schemas import ProviderConfig, ProviderType
         from providers import Message
 
-        if provider == "openai":
-            from providers.openai_provider import OpenAIProvider
-            config = ProviderConfig(
-                provider=ProviderType.OPENAI,
-                model=provider_settings.default_model or "gpt-4o",
-                api_key=provider_settings.api_key,
-                max_tokens=16,
-            )
-            p = OpenAIProvider(config)
-            await p.generate([Message(role="user", content=smoke_test_prompt)])
-            return {"status": "success", "message": "Connected to OpenAI"}
-
-        elif provider == "anthropic":
+        if provider == "anthropic":
             from providers.anthropic_provider import AnthropicProvider
             config = ProviderConfig(
                 provider=ProviderType.ANTHROPIC,
@@ -150,16 +138,8 @@ async def test_provider(provider: str):
             await p.generate([Message(role="user", content=smoke_test_prompt)])
             return {"status": "success", "message": "Connected to Anthropic"}
 
-        elif provider == "ollama":
-            from providers.ollama_provider import OllamaProvider
-            config = ProviderConfig(
-                provider=ProviderType.OLLAMA,
-                model=provider_settings.default_model or "llama3.1",
-                base_url=provider_settings.base_url,
-            )
-            p = OllamaProvider(config)
-            models = await p.list_models()
-            return {"status": "success", "message": f"Connected to Ollama ({len(models)} models)"}
+        else:
+            return {"status": "error", "message": f"Unsupported provider: {provider}"}
 
     except Exception as e:
         return {"status": "error", "message": str(e)}

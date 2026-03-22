@@ -197,12 +197,6 @@ class BaseAgent(ABC):
                 return
 
             candidates = attack_surface_service.scan_candidates(repo_path=self.repo_path)
-            # Populate Structured Trace roots (entrypoints + sinks) from static candidates.
-            # Best-effort; should not block the scan/triage flow.
-            try:
-                flow_service.populate_structured_from_candidates(self.id, candidates)
-            except Exception:
-                pass
             triaged = await attack_surface_service.triage(
                 agent_id=self.id,
                 repo_path=self.repo_path,

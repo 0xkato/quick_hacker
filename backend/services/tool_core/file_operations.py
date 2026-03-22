@@ -9,8 +9,6 @@ from typing import Any
 from services.security_scanners import semantic_grep
 from services.security_scanners.base import WorkspacePolicy, ScanLimits
 from services.redaction_service import redaction_service
-from services.artifact_service import artifact_service
-from models.investigation_trace import Artifact, ArtifactType, generate_artifact_id
 
 
 class FileOperationsMixin:
@@ -110,7 +108,6 @@ class FileOperationsMixin:
         """Read file contents with optional line range.
 
         This method is automatically cached if cache is enabled.
-        Creates FILE_SNIPPET artifact for investigation trace.
 
         Args:
             path: Relative path from repo root
@@ -120,7 +117,6 @@ class FileOperationsMixin:
         Returns:
             Dict with:
                 - content: File content as string
-                - artifact_id: ID of created artifact
 
         Raises:
             FileNotFoundError: If file doesn't exist
@@ -130,7 +126,7 @@ class FileOperationsMixin:
         cache_key = None
         git_head = None
         if self.cache is not None:
-            git_head = self.git_head_tracker.get_current_head()
+            git_head = self.git_head_tracker.get_current_head() if self.git_head_tracker else None
             if git_head is None:
                 import logging
                 logger = logging.getLogger(__name__)
@@ -146,19 +142,8 @@ class FileOperationsMixin:
                 )
                 cached_result = self.cache.get(cache_key)
                 if cached_result is not None:
-                    # Cached results are still strings - convert to dict format
-                    # Create artifact for cached content too
-                    artifact = self._create_file_artifact(
-                        content=cached_result,
-                        file_path=path,
-                        line_start=start_line,
-                        line_end=end_line
-                    )
-                    # Track provenance in current span
-                    self._track_artifact_provenance(artifact.artifact_id)
                     return {
                         "content": cached_result,
-                        "artifact_id": artifact.artifact_id
                     }
 
         # Cache miss or caching disabled - execute tool
@@ -171,8 +156,6 @@ class FileOperationsMixin:
         # No line range specified - return full content
         if start_line is None and end_line is None:
             result_content = content
-            actual_start = None
-            actual_end = None
         else:
             # Apply line slicing with clamping
             total_lines = len(lines)
@@ -189,29 +172,14 @@ class FileOperationsMixin:
             # Guard against start >= end
             if start_idx >= end_idx:
                 result_content = ""
-                actual_start = start_line
-                actual_end = end_line
             else:
                 sliced = lines[start_idx:end_idx]
                 # Add line numbers
                 numbered = [f"{i + start_idx + 1}: {line}" for i, line in enumerate(sliced)]
                 result_content = "\n".join(numbered)
-                actual_start = start_idx + 1
-                actual_end = end_idx
 
-        # Redact secrets before returning/storing artifacts (LLMs should not receive raw secrets).
+        # Redact secrets before returning (LLMs should not receive raw secrets).
         result_content = redaction_service.redact(result_content)
-
-        # Create artifact
-        artifact = self._create_file_artifact(
-            content=result_content,
-            file_path=path,
-            line_start=actual_start,
-            line_end=actual_end
-        )
-
-        # Track provenance in current span
-        self._track_artifact_provenance(artifact.artifact_id)
 
         # Store in cache if enabled (store content string)
         if self.cache is not None and cache_key is not None:
@@ -219,7 +187,6 @@ class FileOperationsMixin:
 
         return {
             "content": result_content,
-            "artifact_id": artifact.artifact_id
         }
 
     async def list_directory(
@@ -246,7 +213,7 @@ class FileOperationsMixin:
         cache_key = None
         git_head = None
         if self.cache is not None:
-            git_head = self.git_head_tracker.get_current_head()
+            git_head = self.git_head_tracker.get_current_head() if self.git_head_tracker else None
             if git_head is None:
                 # Log degraded state - caching disabled due to git failure
                 import logging
@@ -349,7 +316,7 @@ class FileOperationsMixin:
         cache_key = None
         git_head = None
         if self.cache is not None:
-            git_head = self.git_head_tracker.get_current_head()
+            git_head = self.git_head_tracker.get_current_head() if self.git_head_tracker else None
             if git_head is None:
                 # Log degraded state - caching disabled due to git failure
                 import logging
@@ -423,93 +390,3 @@ class FileOperationsMixin:
 
         return result
 
-    def _create_file_artifact(
-        self,
-        content: str,
-        file_path: str,
-        line_start: int | None = None,
-        line_end: int | None = None
-    ) -> Artifact:
-        """
-        Create FILE_SNIPPET artifact.
-
-        Args:
-            content: File content
-            file_path: Path to file (relative to repo root)
-            line_start: Optional starting line
-            line_end: Optional ending line
-
-        Returns:
-            Created artifact
-        """
-        # Generate deterministic artifact ID
-        artifact_id = generate_artifact_id(content)
-
-        # Generate summary
-        if line_start and line_end:
-            summary = f"File snippet from {file_path}:{line_start}-{line_end}"
-        else:
-            summary = f"File content from {file_path}"
-
-        # Truncate summary to 200 chars
-        if len(summary) > 200:
-            summary = summary[:197] + "..."
-
-        # Create artifact (idempotent)
-        artifact = artifact_service.create_artifact(
-            artifact_id=artifact_id,
-            artifact_type=ArtifactType.FILE_SNIPPET,
-            content=content,
-            summary=summary,
-            file_path=file_path,
-            line_start=line_start,
-            line_end=line_end
-        )
-
-        # Calculate size
-        artifact.size_bytes = len(content.encode('utf-8'))
-
-        return artifact
-
-    def _create_tool_output_artifact(
-        self,
-        content: str,
-        tool_name: str,
-        query: str | None = None
-    ) -> Artifact:
-        """
-        Create TOOL_OUTPUT artifact.
-
-        Args:
-            content: Tool output content
-            tool_name: Name of tool that produced output
-            query: Optional query/pattern used
-
-        Returns:
-            Created artifact
-        """
-        # Generate deterministic artifact ID
-        artifact_id = generate_artifact_id(content)
-
-        # Generate summary
-        if query:
-            summary = f"{tool_name} output for '{query}'"
-        else:
-            summary = f"{tool_name} output"
-
-        # Truncate summary to 200 chars
-        if len(summary) > 200:
-            summary = summary[:197] + "..."
-
-        # Create artifact (idempotent)
-        artifact = artifact_service.create_artifact(
-            artifact_id=artifact_id,
-            artifact_type=ArtifactType.TOOL_OUTPUT,
-            content=content,
-            summary=summary
-        )
-
-        # Calculate size
-        artifact.size_bytes = len(content.encode('utf-8'))
-
-        return artifact

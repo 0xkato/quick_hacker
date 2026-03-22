@@ -98,7 +98,6 @@ class TestToolCoreReadFile:
         result = await tool_core.read_file("src/main.py")
         assert isinstance(result, dict)
         assert "content" in result
-        assert "artifact_id" in result
         assert "def main(): pass" in result["content"]
 
     @pytest.mark.asyncio

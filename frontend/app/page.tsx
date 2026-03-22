@@ -948,7 +948,6 @@ export default function Home() {
 	                <FlowVisualization
 	                  agentId={agentMgmt.selectedAgentId}
 	                  flow={agentMgmt.agentFlow}
-	                  variant="structured"
 	                  findings={findingsMgmt.findings}
 	                  onOpenChat={handleOpenChatFromFlow}
 	                  onOpenFile={handleNavigateToFile}

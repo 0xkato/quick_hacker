@@ -3,8 +3,7 @@
 from datetime import datetime, timezone
 import importlib
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 
 
 def test_findings_service_importable():
@@ -39,43 +38,6 @@ def test_findings_service_metadata_mapping_uses_metadata_attr():
 
     pydantic_finding = service._to_pydantic(db_finding)
     assert pydantic_finding.metadata == {"persisted": True}
-
-
-@pytest.mark.asyncio
-async def test_create_finding_raises_on_db_failure():
-    """_create_finding must propagate DB errors, not swallow them."""
-    from agents.react_agent import ReActSecurityAgent
-
-    # Build a minimal mock agent with the _create_finding method
-    agent = MagicMock(spec=ReActSecurityAgent)
-    agent.id = "test-agent"
-    agent.repo_id = "test-repo"
-    agent.agent_type = MagicMock()
-    agent.agent_type.value = "react"
-    agent.findings = []
-    agent._log = MagicMock()
-    agent._broadcast = MagicMock()
-
-    # Bind the real method to our mock
-    agent._create_finding = ReActSecurityAgent._create_finding.__get__(agent, type(agent))
-
-    finding_data = {
-        "title": "Test XSS",
-        "severity": "high",
-        "description": "XSS in input",
-        "file_path": "app.py",
-        "line_start": 10,
-        "vulnerability_type": "XSS",
-    }
-
-    with patch("agents.react_agent.findings_service") as mock_svc:
-        mock_svc.save_finding = AsyncMock(side_effect=Exception("DB connection refused"))
-
-        with pytest.raises(Exception, match="DB connection refused"):
-            await agent._create_finding(finding_data)
-
-    # Finding should NOT be in memory if DB save failed
-    assert len(agent.findings) == 0
 
 
 def test_findings_service_has_count_method():
@@ -147,16 +109,3 @@ def test_report_service_uses_findings_param_over_agent_findings():
     assert report.findings_summary[0].title == "DB Finding"
 
 
-def test_progress_broadcast_uses_db_count():
-    """Progress broadcast should report findings_count from DB, not len(self.findings)."""
-    with open("agents/react_agent.py") as f:
-        source = f.read()
-
-    # Find the iteration PROGRESS broadcast (contains "iteration" and "findings_count")
-    # This is the broadcast with "max_iterations" — the one we need to fix
-    marker = '"max_iterations"'
-    idx = source.index(marker)
-    # Get surrounding context (the full broadcast dict)
-    progress_section = source[max(0, idx - 200):idx + 300]
-    assert "len(self.findings)" not in progress_section, \
-        "Progress broadcast still uses len(self.findings) — should use self._db_findings_count"

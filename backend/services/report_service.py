@@ -13,7 +13,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 import uuid
 
 from models.observability import (
@@ -22,9 +22,6 @@ from models.observability import (
     TimelineEvent,
 )
 from models.schemas import WSMessage, WSMessageType, Severity
-
-if TYPE_CHECKING:
-    from agents.react import ReActSecurityAgent
 
 
 # Report output directory

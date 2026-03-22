@@ -70,6 +70,56 @@ JOB_QUEUE_MAP: dict[JobType, str] = {
 # Job dataclasses
 # ---------------------------------------------------------------------------
 @dataclass
+class ExtractorJob:
+    """Extract targets from a repository using the capability profile."""
+
+    campaign_id: str
+    repo_path: str = ""
+    capability_profile: dict = field(default_factory=dict)
+    job_type: JobType = field(default=JobType.EXTRACTOR, init=False)
+
+
+@dataclass
+class PlannerJob:
+    """Plan lane specs for extracted targets."""
+
+    campaign_id: str
+    target_ids: list[str] = field(default_factory=list)
+    campaign_preset: str = "quick"
+    job_type: JobType = field(default=JobType.PLANNER, init=False)
+
+
+@dataclass
+class CompilerJob:
+    """Compile a lane spec into an execution bundle."""
+
+    campaign_id: str
+    lane_spec_id: str = ""
+    lane_spec_revision: int = 1
+    target_metadata: dict = field(default_factory=dict)
+    job_type: JobType = field(default=JobType.COMPILER, init=False)
+
+
+@dataclass
+class SteeringJob:
+    """Steer campaign based on metrics snapshot."""
+
+    campaign_id: str
+    metrics_snapshot: dict = field(default_factory=dict)
+    job_type: JobType = field(default=JobType.STEERING, init=False)
+
+
+@dataclass
+class AnalystJob:
+    """Analyze an artifact and produce an evidence package."""
+
+    campaign_id: str
+    artifact_id: str = ""
+    evidence_package_ref: str = ""
+    job_type: JobType = field(default=JobType.ANALYST, init=False)
+
+
+@dataclass
 class PackageLaneBundleJob:
     """Package a lane spec into an execution bundle."""
 

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from middleware.auth import AuthContext, require_auth
-from models.campaign_schemas import CampaignCreateRequest, CampaignResponse
+from models.campaign_schemas import CampaignCreateRequest, CampaignResponse, TargetResponse
 from services.campaign_service import campaign_service
 
 router = APIRouter()
@@ -36,3 +36,26 @@ async def get_campaign(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
+
+
+@router.post("/{campaign_id}/plan", response_model=CampaignResponse)
+async def plan_campaign(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Trigger planning phase -- validate contract, extract targets."""
+    try:
+        from campaigns.controller import campaign_controller
+        return await campaign_controller.plan_campaign(campaign_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{campaign_id}/targets", response_model=list[TargetResponse])
+async def list_campaign_targets(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """List targets discovered for a campaign."""
+    from services.target_service import target_service
+    return await target_service.list_targets(campaign_id)

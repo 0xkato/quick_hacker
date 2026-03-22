@@ -7,12 +7,17 @@ from execution.jobs import (
     QUEUE_PACKAGE,
     QUEUE_REPLAY,
     JOB_QUEUE_MAP,
+    AnalystJob,
+    CompilerJob,
+    ExtractorJob,
     HarnessValidationJob,
     JobType,
     MinimizationJob,
     PackageLaneBundleJob,
+    PlannerJob,
     ReplayJob,
     RunLaneJob,
+    SteeringJob,
 )
 
 
@@ -151,3 +156,33 @@ class TestMinimizationJob:
             budget_seconds=300,
         )
         assert job.budget_seconds == 300
+
+
+class TestExtractorJob:
+    def test_extractor_job(self) -> None:
+        job = ExtractorJob(campaign_id="c1", repo_path="/tmp/repo")
+        assert job.job_type == JobType.EXTRACTOR
+
+
+class TestPlannerJob:
+    def test_planner_job(self) -> None:
+        job = PlannerJob(campaign_id="c1", target_ids=["t1"])
+        assert job.job_type == JobType.PLANNER
+
+
+class TestCompilerJob:
+    def test_compiler_job(self) -> None:
+        job = CompilerJob(campaign_id="c1", lane_spec_id="ls1")
+        assert job.job_type == JobType.COMPILER
+
+
+class TestSteeringJob:
+    def test_steering_job(self) -> None:
+        job = SteeringJob(campaign_id="c1")
+        assert job.job_type == JobType.STEERING
+
+
+class TestAnalystJob:
+    def test_analyst_job(self) -> None:
+        job = AnalystJob(campaign_id="c1", artifact_id="a1")
+        assert job.job_type == JobType.ANALYST

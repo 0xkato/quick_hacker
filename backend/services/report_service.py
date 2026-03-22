@@ -73,7 +73,6 @@ class ReportService:
         Returns the report object and saves it to disk.
         """
         from services.observability_service import observability_service
-        from services.flow_service import flow_service
 
         report_id = str(uuid.uuid4())[:12]
 
@@ -270,8 +269,6 @@ class ReportService:
 
     def _save_report_files(self, report: InvestigationReport, agent: "ReActSecurityAgent") -> None:
         """Save report to disk in various formats."""
-        from services.flow_service import flow_service
-
         self._ensure_report_dir()
         base_path = REPORT_DIR / f"{agent.id}_{report.id}"
 
@@ -287,21 +284,6 @@ class ReportService:
         with open(md_path, 'w') as f:
             f.write(markdown)
         report.markdown_path = md_path
-
-        # Save flow JSON
-        flow = flow_service.get_flow(agent.id)
-        if flow:
-            flow_json_path = f"{base_path}_flow.json"
-            with open(flow_json_path, 'w') as f:
-                json.dump(flow.to_dict(), f, indent=2)
-            report.flow_json_path = flow_json_path
-
-            # Generate simple SVG
-            flow_svg_path = f"{base_path}_flow.svg"
-            svg = self._generate_flow_svg(flow)
-            with open(flow_svg_path, 'w') as f:
-                f.write(svg)
-            report.flow_svg_path = flow_svg_path
 
         print(f"[Report] Saved report files for agent {agent.id}")
 
@@ -378,66 +360,6 @@ class ReportService:
             "info": "![Info](https://img.shields.io/badge/-Info-gray)",
         }
         return badges.get(severity, severity.upper())
-
-    def _generate_flow_svg(self, flow) -> str:
-        """Generate a simple SVG diagram of the investigation flow."""
-        nodes = flow.nodes
-        edges = flow.edges
-
-        if not nodes:
-            return '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text x="10" y="50">No flow data</text></svg>'
-
-        # Simple vertical layout
-        node_height = 40
-        node_width = 200
-        spacing = 60
-        padding = 20
-
-        height = len(nodes) * (node_height + spacing) + padding * 2
-        width = node_width + padding * 2
-
-        svg_parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
-            '<style>',
-            '  .node { fill: #2d2d2d; stroke: #569cd6; stroke-width: 2; rx: 5; }',
-            '  .node-text { fill: #e0e0e0; font-family: monospace; font-size: 12px; }',
-            '  .edge { stroke: #808080; stroke-width: 1; fill: none; }',
-            '  .finding { fill: #5a1d1d; stroke: #f48771; }',
-            '  .completed { stroke: #4ec9b0; }',
-            '</style>',
-        ]
-
-        # Draw edges first (behind nodes)
-        node_positions = {}
-        for i, node in enumerate(nodes):
-            y = padding + i * (node_height + spacing)
-            node_positions[node.id] = (padding + node_width // 2, y + node_height // 2)
-
-        for edge in edges:
-            if edge.source in node_positions and edge.target in node_positions:
-                x1, y1 = node_positions[edge.source]
-                x2, y2 = node_positions[edge.target]
-                svg_parts.append(f'<line class="edge" x1="{x1}" y1="{y1 + node_height//2}" x2="{x2}" y2="{y2 - node_height//2}"/>')
-
-        # Draw nodes
-        for i, node in enumerate(nodes):
-            x = padding
-            y = padding + i * (node_height + spacing)
-
-            extra_class = ""
-            if node.type == "finding":
-                extra_class = " finding"
-            elif node.status == "completed":
-                extra_class = " completed"
-
-            svg_parts.append(f'<rect class="node{extra_class}" x="{x}" y="{y}" width="{node_width}" height="{node_height}"/>')
-
-            # Truncate label if too long
-            label = node.label[:25] + "..." if len(node.label) > 25 else node.label
-            svg_parts.append(f'<text class="node-text" x="{x + 10}" y="{y + 25}">{label}</text>')
-
-        svg_parts.append('</svg>')
-        return "\n".join(svg_parts)
 
     def get_report(self, agent_id: str, report_id: Optional[str] = None) -> Optional[InvestigationReport]:
         """Get a saved report."""

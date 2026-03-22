@@ -92,7 +92,6 @@ def test_report_service_uses_findings_param_over_agent_findings():
     agent.findings = []  # Agent memory is EMPTY
 
     with patch("services.observability_service.observability_service") as mock_obs, \
-         patch("services.flow_service.flow_service"), \
          patch.object(service, "_save_report_files"), \
          patch.object(service, "_broadcast"):
         mock_obs.get_stats.return_value = {}

@@ -1,5 +1,5 @@
 """API routers for quick_hack."""
 
-from . import git, files, agents, websocket
+from . import git, files, websocket
 
-__all__ = ["git", "files", "agents", "websocket"]
+__all__ = ["git", "files", "websocket"]

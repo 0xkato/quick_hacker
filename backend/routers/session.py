@@ -50,62 +50,9 @@ async def pause_session(
     if not project:
         raise HTTPException(status_code=400, detail="No project selected")
 
-    # Import here to avoid circular imports
-    from services.agents import orchestrator as agent_orchestrator
-
-    # Get all agents for this project
-    active_agents = []
-    for agent in agent_orchestrator._agents.values():
-        if agent.repo_id == project.id:
-            active_agents.append(agent)
-
-    # Request pause on all running agents
-    pausing_agents = []
-    for agent in active_agents:
-        if agent.is_pausable():
-            agent.request_pause()
-            pausing_agents.append(agent)
-
-    # Wait for agents to reach pause point (with timeout)
-    import asyncio
-    max_wait = 60  # seconds
-    wait_interval = 0.5
-    waited = 0
-
-    while waited < max_wait:
-        all_paused = all(
-            a.status.value in ("paused", "completed", "failed", "cancelled")
-            for a in pausing_agents
-        )
-        if all_paused:
-            break
-        await asyncio.sleep(wait_interval)
-        waited += wait_interval
-
-    # Build snapshot
+    # Old agent orchestrator removed -- no agents to pause
     snapshot_agents = []
-    for agent in active_agents:
-        pause_state = agent.get_pause_state()
-        snapshot_agents.append(
-            SessionSnapshotAgent(
-                id=agent.id,
-                agent_type=agent.agent_type.value,
-                status=agent.status.value,
-                target_files=agent.target_files or [],
-                processed_files=pause_state.get("processed_files", []),
-                pending_files=pause_state.get("pending_files", []),
-                current_file=pause_state.get("current_file"),
-                config={
-                    "provider": agent.provider_config.provider.value if agent.provider_config else "unknown",
-                    "model": agent.provider_config.model if agent.provider_config else "unknown",
-                },
-            )
-        )
-
-    # Collect findings
     all_findings = []
-    for agent in active_agents:
-        all_findings.extend([f.model_dump(mode="json") for f in agent.findings])
 
     # Build UI state
     ui = SessionSnapshotUIState(

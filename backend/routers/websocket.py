@@ -10,7 +10,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
 from models.schemas import WSMessage
-from services.agents import orchestrator
 from services.observability_service import observability_service
 from services.persistence_service import persistence_service
 from services.report_service import report_service
@@ -128,19 +127,12 @@ async def broadcast_session_event(event_type: str, data: dict):
     await manager.broadcast(message)
 
 
-# Register the callback with the orchestrator
-orchestrator.add_message_callback(broadcast_agent_message)
-
 # Register the callback with the observability service
 observability_service.set_broadcast_callback(broadcast_agent_message)
 
 # Register callbacks for other services that emit WSMessage events
 persistence_service.set_broadcast_callback(broadcast_agent_message)
 report_service.set_broadcast_callback(broadcast_agent_message)
-
-# Register the callback with the behavior tree service
-from services.behavior_tree_service import behavior_tree_service
-behavior_tree_service.set_broadcast_callback(broadcast_agent_message)
 
 
 @router.websocket("")
@@ -271,11 +263,10 @@ async def websocket_endpoint(
                 )
 
             elif msg_type == "get_status":
-                # Send current orchestrator stats
-                stats = await orchestrator.get_stats()
+                # Return basic status (old orchestrator removed)
                 await manager.send_personal(
                     websocket,
-                    {"type": "status", "data": stats}
+                    {"type": "status", "data": {"active_agents": 0, "status": "idle"}}
                 )
 
             else:

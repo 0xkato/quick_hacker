@@ -17,7 +17,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-__all__ = ["git_service", "file_service", "ToolCore", "ClaudeSDKOrchestrator", "SCAN_TIER_BUDGETS"]
+__all__ = ["git_service", "file_service", "ToolCore"]
 
 
 def __getattr__(name: str) -> Any:  # pragma: no cover - exercised indirectly
@@ -25,7 +25,4 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - exercised indirectly
         return import_module(f"{__name__}.{name}")
     if name == "ToolCore":
         return getattr(import_module(f"{__name__}.tool_core"), name)
-    if name in ("ClaudeSDKOrchestrator", "SCAN_TIER_BUDGETS"):
-        mod = import_module(f"{__name__}.claude_sdk_orchestrator")
-        return getattr(mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

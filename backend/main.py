@@ -3,20 +3,18 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from routers import git, files, agents, websocket, projects, flow, auth, call_tree, cache, feature_flags
+from routers import git, files, websocket, projects, auth
 from routers import settings as settings_router
 from routers import chat as chat_router
-from routers import graph as graph_router
 from routers import session as session_router
 from routers import protocol_routes
 from routers import findings
 from routers import reports
 from routers import simple_report
-from routers import behavior_tree as behavior_tree_router
 from routers import campaigns as campaigns_router
 from routers import lanes as lanes_router
 from routers import runs as runs_router
@@ -40,7 +38,7 @@ async def lifespan(app: FastAPI):
     print(f"Repos directory: {settings.repos_dir.absolute()}")
     print(f"Max concurrent agents: {settings.max_concurrent_agents}")
 
-    # Store main event loop for WebSocket broadcasts from agents
+    # Store main event loop for WebSocket broadcasts
     set_main_loop(asyncio.get_running_loop())
     print("Main event loop registered")
 
@@ -104,12 +102,6 @@ app.include_router(
     dependencies=[Depends(require_auth)],
 )
 app.include_router(
-    agents.router,
-    prefix="/api/agents",
-    tags=["Agents"],
-    dependencies=[Depends(require_auth)],
-)
-app.include_router(
     settings_router.router,
     prefix="/api",
     tags=["Settings"],
@@ -120,41 +112,11 @@ app.include_router(
     tags=["Chat"],
     dependencies=[Depends(require_auth)],
 )
-app.include_router(
-    flow.router,
-    prefix="/api",
-    tags=["Flow"],
-    dependencies=[Depends(require_auth)],
-)
-app.include_router(
-    call_tree.router,
-    prefix="/api",
-    tags=["CallTree"],
-    dependencies=[Depends(require_auth)],
-)
-app.include_router(
-    graph_router.router,
-    prefix="/api",
-    tags=["Graph"],
-    dependencies=[Depends(require_auth)],
-)
 app.include_router(websocket.router, prefix="/ws", tags=["WebSocket"])
 app.include_router(auth.router)
 app.include_router(
     session_router.router,
     prefix="/api",
-    dependencies=[Depends(require_auth)],
-)
-app.include_router(
-    cache.router,
-    prefix="/api",
-    tags=["Cache"],
-    dependencies=[Depends(require_auth)],
-)
-app.include_router(
-    feature_flags.router,
-    prefix="/api",
-    tags=["FeatureFlags"],
     dependencies=[Depends(require_auth)],
 )
 app.include_router(
@@ -171,12 +133,6 @@ app.include_router(
 )
 app.include_router(
     simple_report.router,
-    dependencies=[Depends(require_auth)],
-)
-app.include_router(
-    behavior_tree_router.router,
-    prefix="/api",
-    tags=["BehaviorTree"],
     dependencies=[Depends(require_auth)],
 )
 app.include_router(

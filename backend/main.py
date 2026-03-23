@@ -23,7 +23,8 @@ from routers import artifacts as artifacts_router
 from routers import issues as issues_router
 from routers import harnesses as harnesses_router
 from routers import oracle_packs as oracle_packs_router
-from routers.websocket import set_main_loop
+from routers.websocket import set_main_loop, manager as ws_manager
+from observability.campaign_events import campaign_broadcaster
 from database import init_db
 from database.connection import engine
 from database.schema_checker import initialize_triage_availability
@@ -44,6 +45,10 @@ async def lifespan(app: FastAPI):
     # Store main event loop for WebSocket broadcasts
     set_main_loop(asyncio.get_running_loop())
     print("Main event loop registered")
+
+    # Wire campaign event broadcaster to WebSocket manager
+    campaign_broadcaster.set_broadcast_fn(ws_manager.broadcast)
+    print("Campaign event broadcaster wired to WebSocket")
 
     # Initialize database
     await init_db()

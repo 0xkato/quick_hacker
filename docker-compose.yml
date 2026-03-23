@@ -128,6 +128,70 @@ services:
     networks:
       - quick_hack
 
+  # ===================
+  # Dramatiq Workers
+  # ===================
+  worker-package:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m dramatiq execution.workers.package_worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://quickhack:quickhack_dev@postgres:5432/quickhack
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+    networks:
+      - quick_hack
+    restart: unless-stopped
+
+  worker-fuzz:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m dramatiq execution.workers.fuzz_worker_actor
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://quickhack:quickhack_dev@postgres:5432/quickhack
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - quick_hack
+    restart: unless-stopped
+
+  worker-replay:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m dramatiq execution.workers.replay_worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://quickhack:quickhack_dev@postgres:5432/quickhack
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+    networks:
+      - quick_hack
+    restart: unless-stopped
+
 volumes:
   claude_auth_data:
     driver: local

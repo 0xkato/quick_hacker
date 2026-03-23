@@ -1,7 +1,12 @@
+import asyncio
+import json
+import logging
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable, Coroutine
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 class CampaignEventType(str, Enum):
@@ -69,17 +74,43 @@ class CampaignEvent:
 class CampaignEventBroadcaster:
     """Wraps WebSocket broadcasting with campaign-specific events and throttling.
 
-    For v1: no actual throttling implementation — just the event creation and
-    message formatting. Throttling will be added when WebSocket is wired.
+    Call ``set_broadcast_fn`` during app startup to wire actual WebSocket
+    broadcasting.  Without it, ``emit`` still returns the formatted message
+    for testing/logging.
     """
 
-    def emit(self, event: CampaignEvent) -> dict:
-        """Format event as WebSocket message. Returns the message dict.
+    def __init__(self):
+        self._broadcast_fn: Callable[[dict], Coroutine] | None = None
 
-        In production this would broadcast via the WebSocket manager.
-        For now, returns the formatted message for testing/logging.
+    def set_broadcast_fn(self, fn: Callable[[dict], Coroutine]):
+        """Set the WebSocket broadcast function. Called during app startup."""
+        self._broadcast_fn = fn
+
+    def emit(self, event: CampaignEvent) -> dict:
+        """Format event as WebSocket message and broadcast if wired.
+
+        Returns the message dict regardless of broadcast success.
         """
-        return event.to_ws_message()
+        msg = event.to_ws_message()
+        if self._broadcast_fn:
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(self._broadcast_fn(msg))
+                task.add_done_callback(self._handle_broadcast_error)
+            except RuntimeError:
+                # No running event loop -- best-effort skip
+                logger.debug("No running event loop for campaign broadcast")
+        return msg
+
+    @staticmethod
+    def _handle_broadcast_error(task: asyncio.Task):
+        """Log exceptions from fire-and-forget broadcast tasks."""
+        try:
+            exc = task.exception()
+            if exc is not None:
+                logger.error(f"Campaign broadcast failed: {exc}")
+        except asyncio.CancelledError:
+            pass
 
     def emit_campaign_status(self, campaign_id: str, status: str, **extra) -> dict:
         return self.emit(CampaignEvent(

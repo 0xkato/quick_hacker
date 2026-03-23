@@ -136,6 +136,9 @@ cd "$ROOT_DIR"
 
 BACKEND_PID=""
 FRONTEND_PID=""
+FUZZ_WORKER_PID=""
+PACKAGE_WORKER_PID=""
+REPLAY_WORKER_PID=""
 
 # Start backend
 if [ "$FRONTEND_ONLY" = false ]; then
@@ -158,6 +161,24 @@ if [ "$FRONTEND_ONLY" = false ]; then
         exit 1
     fi
     echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"
+
+    # Start Dramatiq workers
+    echo "Starting Dramatiq workers..."
+
+    # Start fuzz worker
+    python -m dramatiq execution.workers.fuzz_worker_actor > "$ROOT_DIR/.logs/worker-fuzz.log" 2>&1 &
+    FUZZ_WORKER_PID=$!
+    echo -e "${GREEN}✓ Fuzz worker started (PID: $FUZZ_WORKER_PID)${NC}"
+
+    # Start package worker
+    python -m dramatiq execution.workers.package_worker > "$ROOT_DIR/.logs/worker-package.log" 2>&1 &
+    PACKAGE_WORKER_PID=$!
+    echo -e "${GREEN}✓ Package worker started (PID: $PACKAGE_WORKER_PID)${NC}"
+
+    # Start replay worker
+    python -m dramatiq execution.workers.replay_worker > "$ROOT_DIR/.logs/worker-replay.log" 2>&1 &
+    REPLAY_WORKER_PID=$!
+    echo -e "${GREEN}✓ Replay worker started (PID: $REPLAY_WORKER_PID)${NC}"
 fi
 
 # Start frontend
@@ -193,6 +214,19 @@ show_logs() {
         tail -f "$FRONTEND_LOG" | sed "s/^/[${GREEN}FRONTEND${NC}] /" &
         FRONTEND_TAIL_PID=$!
     fi
+
+    if [ -n "$FUZZ_WORKER_PID" ]; then
+        tail -f "$ROOT_DIR/.logs/worker-fuzz.log" | sed "s/^/[${YELLOW}FUZZ${NC}] /" &
+        FUZZ_TAIL_PID=$!
+    fi
+    if [ -n "$PACKAGE_WORKER_PID" ]; then
+        tail -f "$ROOT_DIR/.logs/worker-package.log" | sed "s/^/[${YELLOW}PKG${NC}] /" &
+        PACKAGE_TAIL_PID=$!
+    fi
+    if [ -n "$REPLAY_WORKER_PID" ]; then
+        tail -f "$ROOT_DIR/.logs/worker-replay.log" | sed "s/^/[${YELLOW}REPLAY${NC}] /" &
+        REPLAY_TAIL_PID=$!
+    fi
 }
 
 # Cleanup function
@@ -203,6 +237,26 @@ cleanup() {
     # Kill tail processes
     [ -n "$BACKEND_TAIL_PID" ] && kill $BACKEND_TAIL_PID 2>/dev/null || true
     [ -n "$FRONTEND_TAIL_PID" ] && kill $FRONTEND_TAIL_PID 2>/dev/null || true
+    [ -n "$FUZZ_TAIL_PID" ] && kill $FUZZ_TAIL_PID 2>/dev/null || true
+    [ -n "$PACKAGE_TAIL_PID" ] && kill $PACKAGE_TAIL_PID 2>/dev/null || true
+    [ -n "$REPLAY_TAIL_PID" ] && kill $REPLAY_TAIL_PID 2>/dev/null || true
+
+    # Kill worker processes
+    if [ -n "$FUZZ_WORKER_PID" ]; then
+        echo "Stopping fuzz worker..."
+        kill $FUZZ_WORKER_PID 2>/dev/null || true
+        wait $FUZZ_WORKER_PID 2>/dev/null || true
+    fi
+    if [ -n "$PACKAGE_WORKER_PID" ]; then
+        echo "Stopping package worker..."
+        kill $PACKAGE_WORKER_PID 2>/dev/null || true
+        wait $PACKAGE_WORKER_PID 2>/dev/null || true
+    fi
+    if [ -n "$REPLAY_WORKER_PID" ]; then
+        echo "Stopping replay worker..."
+        kill $REPLAY_WORKER_PID 2>/dev/null || true
+        wait $REPLAY_WORKER_PID 2>/dev/null || true
+    fi
 
     # Kill service processes
     if [ -n "$BACKEND_PID" ]; then

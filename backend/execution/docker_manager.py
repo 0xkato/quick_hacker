@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 
 import httpx
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,33 @@ class TargetStackInfo:
     network_name: str
     container_ids: list[str]
     compose_path: str
+
+
+def _get_first_service_and_port(compose_path: str) -> tuple[str, int]:
+    """Extract first service name and exposed port from a compose file.
+
+    Parses the compose YAML and returns the first service that exposes a port.
+    Falls back to (first_service_name, 8080) if no ports are declared.
+    """
+    with open(compose_path) as f:
+        compose = yaml.safe_load(f)
+    services = compose.get("services", {})
+    for name, config in services.items():
+        ports = config.get("ports", [])
+        if ports:
+            # Parse "8080:8080", "127.0.0.1:8080:8080", or "8080" formats
+            port_str = str(ports[0])
+            if ":" in port_str:
+                parts = port_str.split(":")
+                container_port = int(parts[-1].split("/")[0])
+            else:
+                container_port = int(port_str.split("/")[0])
+            return name, container_port
+        # Service without ports — try next
+        continue
+    # No service with ports found; fall back
+    first_service = next(iter(services), "app")
+    return first_service, 8080
 
 
 class DockerNetworkManager:
@@ -126,8 +154,13 @@ class DockerNetworkManager:
             cid.strip() for cid in ps_result.stdout.strip().splitlines() if cid.strip()
         ]
 
+        # Resolve base_url from compose service name so workers in the same
+        # Docker network can reach the target by hostname.
+        service_name, port = _get_first_service_and_port(compose_path)
+        base_url = f"http://{service_name}:{port}"
+
         return TargetStackInfo(
-            base_url=f"http://localhost",
+            base_url=base_url,
             network_name=network_name,
             container_ids=container_ids,
             compose_path=compose_path,

@@ -154,7 +154,7 @@ services:
   worker-fuzz:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.worker
     command: python -m dramatiq execution.workers.fuzz_worker_actor
     environment:
       - REDIS_URL=redis://redis:6379

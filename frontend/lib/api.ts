@@ -270,6 +270,15 @@ export const campaigns = {
   async getGraph(id: string) {
     return request(`/api/campaigns/${id}/graph`);
   },
+  async getPlan(id: string) {
+    return request(`/api/campaigns/${id}/plan`);
+  },
+  async getPlans(id: string) {
+    return request(`/api/campaigns/${id}/plans`);
+  },
+  async createLane(id: string, data: any) {
+    return request(`/api/campaigns/${id}/lanes`, { method: 'POST', body: JSON.stringify(data) });
+  },
 };
 
 export const targets = {
@@ -297,6 +306,24 @@ export const lanes = {
   async getCoverage(id: string) {
     return request(`/api/lanes/${id}/coverage`);
   },
+  async getOraclePacks(id: string) {
+    return request(`/api/lanes/${id}/oracle-packs`);
+  },
+  async recompile(id: string) {
+    return request(`/api/lanes/${id}/recompile`, { method: 'POST' });
+  },
+  async restart(id: string) {
+    return request(`/api/lanes/${id}/restart`, { method: 'POST' });
+  },
+  async steer(id: string) {
+    return request(`/api/lanes/${id}/steer`, { method: 'POST' });
+  },
+  async getCorpus(id: string) {
+    return request(`/api/lanes/${id}/corpus`);
+  },
+  async pruneCorpus(id: string) {
+    return request(`/api/lanes/${id}/corpus/prune`, { method: 'POST' });
+  },
 };
 
 export const runs = {
@@ -308,6 +335,9 @@ export const runs = {
   },
   async cancel(id: string) {
     return request(`/api/runs/${id}/cancel`, { method: 'POST' });
+  },
+  async getLogs(id: string) {
+    return request(`/api/runs/${id}/logs`);
   },
 };
 
@@ -324,6 +354,12 @@ export const artifacts = {
   async classify(id: string, classification: string, analysis_outcome?: string) {
     return request(`/api/artifacts/${id}/classify`, { method: 'POST', body: JSON.stringify({ classification, analysis_outcome }) });
   },
+  async getBucket(bucketId: string) {
+    return request(`/api/artifacts/buckets/${bucketId}`);
+  },
+  async getEvidence(id: string) {
+    return request(`/api/artifacts/${id}/evidence`);
+  },
 };
 
 export const issues = {
@@ -332,6 +368,30 @@ export const issues = {
   },
   async revalidate(id: string) {
     return request(`/api/issues/${id}/revalidate`, { method: 'POST' });
+  },
+  async getRegressionTest(id: string) {
+    return request(`/api/issues/${id}/regression-test`);
+  },
+};
+
+export const harnesses = {
+  async get(id: string) {
+    return request(`/api/harnesses/${id}`);
+  },
+  async getValidation(id: string) {
+    return request(`/api/harnesses/${id}/validation`);
+  },
+  async getRevisions(id: string) {
+    return request(`/api/harnesses/${id}/revisions`);
+  },
+};
+
+export const oraclePacks = {
+  async get(id: string) {
+    return request(`/api/oracle-packs/${id}`);
+  },
+  async getRevisions(id: string) {
+    return request(`/api/oracle-packs/${id}/revisions`);
   },
 };
 

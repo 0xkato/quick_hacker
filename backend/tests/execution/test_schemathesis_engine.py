@@ -14,23 +14,15 @@ class TestBuildCommand:
 
     def test_basic_command(self) -> None:
         engine = SchemathesisEngine()
-        cmd = engine._build_command("/tmp/spec.yaml", "http://localhost:3000", 60)
+        cmd = engine._build_command("/tmp/harness.py", "http://localhost:3000", 60)
 
         assert cmd == [
-            "schemathesis",
-            "run",
-            "/tmp/spec.yaml",
-            "--base-url",
-            "http://localhost:3000",
-            "--hypothesis-deadline",
-            "60000",
+            "python", "-m", "pytest",
+            "/tmp/harness.py",
+            "-v",
+            "--tb=short",
+            "--timeout=60",
         ]
-
-    def test_custom_binary(self) -> None:
-        engine = SchemathesisEngine(binary="/usr/local/bin/st")
-        cmd = engine._build_command("/spec.yaml", "http://target:8080", 30)
-
-        assert cmd[0] == "/usr/local/bin/st"
 
     def test_extra_flags_appended(self) -> None:
         engine = SchemathesisEngine()
@@ -44,12 +36,11 @@ class TestBuildCommand:
         assert "--dry-run" in cmd
         assert "--workers=4" in cmd
 
-    def test_deadline_scales_to_milliseconds(self) -> None:
+    def test_timeout_flag_uses_seconds(self) -> None:
         engine = SchemathesisEngine()
-        cmd = engine._build_command("/spec.yaml", "http://localhost", 120)
+        cmd = engine._build_command("/harness.py", "http://localhost", 120)
 
-        idx = cmd.index("--hypothesis-deadline")
-        assert cmd[idx + 1] == "120000"
+        assert "--timeout=120" in cmd
 
 
 class TestRunSuccess:
@@ -80,7 +71,10 @@ class TestRunSuccess:
         result = engine.run("/spec.yaml", "http://localhost:3000", 60)
 
         assert result.metrics["failures_count"] == 0
-        assert result.metrics["status_classes"] == {}
+        assert result.metrics["tests_passed"] == 0
+        assert result.metrics["tests_failed"] == 0
+        assert result.metrics["tests_total"] == 0
+        assert result.metrics["validity_ratio"] == 1.0
         assert result.metrics["exit_code"] == 0
 
 
@@ -88,21 +82,20 @@ class TestRunFailuresFound:
     """Exit code 1 — schemathesis found failures."""
 
     SAMPLE_OUTPUT = """\
-=== FAILURES ===
-1. Server Error
+============================= test session starts ==============================
+collected 5 items
 
-    POST /api/users 500
-    GET /api/items/999 500
+test_harness.py::test_POST_api_users[Case1] FAILED
+test_harness.py::test_GET_api_items_999[Case1] FAILED
+test_harness.py::test_PUT_api_items_1[Case1] FAILED
+test_harness.py::test_GET_api_health[Case1] PASSED
+test_harness.py::test_DELETE_api_items_1[Case1] PASSED
 
-    Reproduce with:
-        curl -X POST http://localhost:3000/api/users
-
-2. Response Conformance
-
-    PUT /api/items/1 422
-
-=== SUMMARY ===
-Performed 150 requests. Failures: 3
+=========================== short test summary info ============================
+FAILED test_harness.py::test_POST_api_users[Case1] - assert 200 != 500
+FAILED test_harness.py::test_GET_api_items_999[Case1] - assert 200 != 500
+FAILED test_harness.py::test_PUT_api_items_1[Case1] - assert 200 != 422
+========================= 2 passed, 3 failed in 1.23s =========================
 """
 
     @patch("execution.engines.schemathesis_engine.subprocess.run")
@@ -128,19 +121,25 @@ Performed 150 requests. Failures: 3
 
         assert len(result.artifact_candidates) == 3
         assert result.artifact_candidates[0] == {
+            "test_name": "test_POST_api_users",
             "method": "POST",
             "path": "/api/users",
-            "status_code": 500,
+            "params": "Case1",
+            "message": "assert 200 != 500",
         }
         assert result.artifact_candidates[1] == {
+            "test_name": "test_GET_api_items_999",
             "method": "GET",
             "path": "/api/items/999",
-            "status_code": 500,
+            "params": "Case1",
+            "message": "assert 200 != 500",
         }
         assert result.artifact_candidates[2] == {
+            "test_name": "test_PUT_api_items_1",
             "method": "PUT",
             "path": "/api/items/1",
-            "status_code": 422,
+            "params": "Case1",
+            "message": "assert 200 != 422",
         }
 
     @patch("execution.engines.schemathesis_engine.subprocess.run")
@@ -153,7 +152,10 @@ Performed 150 requests. Failures: 3
         result = engine.run("/spec.yaml", "http://localhost:3000", 60)
 
         assert result.metrics["failures_count"] == 3
-        assert result.metrics["status_classes"] == {"5xx": 2, "4xx": 1}
+        assert result.metrics["tests_passed"] == 2
+        assert result.metrics["tests_failed"] == 3
+        assert result.metrics["tests_total"] == 5
+        assert result.metrics["operations_hit"] == 3
 
     @patch("execution.engines.schemathesis_engine.subprocess.run")
     def test_no_errors_on_exit_1(self, mock_run: MagicMock) -> None:

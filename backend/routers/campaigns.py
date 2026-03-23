@@ -252,30 +252,31 @@ async def get_campaign_graph(
     auth_context: AuthContext = Depends(require_auth),
 ):
     """Get campaign graph (targets, lanes, artifacts as nodes)."""
+    from campaigns.state import campaign_state_manager
     from services.target_service import target_service
-    from services.lane_service import lane_service
     from services.artifact_service import artifact_service
+    from services.issue_service import issue_service
+    from services.steering_service import steering_service
 
     campaign = await campaign_service.get_campaign(campaign_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
+    # Build snapshot from live data
     targets = await target_service.list_targets(campaign_id)
-    nodes = []
-    edges = []
-
-    for t in targets:
-        nodes.append({"id": t.id, "type": "target", "label": t.entrypoint})
-        lanes = await lane_service.list_lane_specs(target_id=t.id)
-        for lane in lanes:
-            nodes.append({"id": lane.id, "type": "lane", "label": lane.engine})
-            edges.append({"source": t.id, "target": lane.id})
-
     artifacts = await artifact_service.list_artifacts(campaign_id)
-    for a in artifacts:
-        nodes.append({"id": a.id, "type": "artifact", "label": a.type.value})
+    issues_list = await issue_service.list_issues(campaign_id)
+    steering = await steering_service.list_decisions(campaign_id)
 
-    return {"nodes": nodes, "edges": edges}
+    campaign_state_manager.update_snapshot(
+        campaign_id,
+        target_count=len(targets),
+        artifact_count=len(artifacts) if isinstance(artifacts, list) else 0,
+        issue_count=len(issues_list) if isinstance(issues_list, list) else 0,
+        steering_decisions=len(steering) if isinstance(steering, list) else 0,
+    )
+
+    return campaign_state_manager.to_graph_data(campaign_id)
 
 
 # ---------------------------------------------------------------------------

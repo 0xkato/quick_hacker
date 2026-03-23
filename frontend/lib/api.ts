@@ -505,6 +505,15 @@ export interface ChatContext {
   findings?: Finding[];
   selected_text?: string;
   flow_context_pack?: unknown;
+  // Campaign fields
+  campaign_id?: string;
+  selected_target_id?: string;
+  selected_lane_id?: string;
+  selected_run_id?: string;
+  selected_artifact_id?: string;
+  selected_issue_id?: string;
+  selected_graph_node_id?: string;
+  selection_range?: { start: number; end: number };
 }
 
 export const chat = {

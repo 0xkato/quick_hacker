@@ -8,7 +8,7 @@ import { ActivityView } from './usePanelLayout';
 export interface UseSessionManagementOptions {
   currentProjectId: string | null;
   isAuthenticated: boolean;
-  agents: Array<{ id: string; status: string }>;
+  agents?: Array<{ id: string; status: string }>;
 }
 
 export interface UseSessionManagementResult {
@@ -31,7 +31,7 @@ export interface UseSessionManagementResult {
 export function useSessionManagement({
   currentProjectId,
   isAuthenticated,
-  agents,
+  agents = [],
 }: UseSessionManagementOptions): UseSessionManagementResult {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('active');
   const [snapshotInfo, setSnapshotInfo] = useState<SnapshotInfo | null>(null);

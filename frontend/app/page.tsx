@@ -101,7 +101,7 @@ export default function Home() {
   // ---- campaign state ----
   const campaignMgmt = useCampaignManagement({ projectId: currentProject?.id ?? null, isAuthenticated });
   const targetData = useTargets(campaignMgmt.selectedCampaignId);
-  const _laneData = useLanes(campaignMgmt.selectedCampaignId);
+  const laneData = useLanes(campaignMgmt.selectedCampaignId);
   const coverageData = useCoverage(campaignMgmt.selectedCampaignId);
   const artifactData = useArtifacts(campaignMgmt.selectedCampaignId);
   const issueData = useIssues(campaignMgmt.selectedCampaignId);
@@ -115,7 +115,6 @@ export default function Home() {
   const sessionMgmt = useSessionManagement({
     currentProjectId: currentProject?.id ?? null,
     isAuthenticated,
-    agents: [] as any, // campaigns don't use the old agent array
   });
 
   // ---- websocket ----
@@ -462,7 +461,7 @@ export default function Home() {
               )}
 
               {panels.activeView === 'targets' && (
-                <TargetList targets={targetData.targets} />
+                <TargetList targets={targetData.targets} isLoading={targetData.isLoading} />
               )}
 
               {panels.activeView === 'campaigns' && (
@@ -476,23 +475,24 @@ export default function Home() {
                   onResumeCampaign={campaignMgmt.resumeCampaign as any}
                   onCancelCampaign={campaignMgmt.cancelCampaign as any}
                   repoId={currentProject.id}
+                  lanes={laneData.lanes}
                 />
               )}
 
               {panels.activeView === 'coverage' && (
-                <CoveragePanel coverage={coverageData.coverage} />
+                <CoveragePanel coverage={coverageData.coverage} isLoading={coverageData.isLoading} />
               )}
 
               {panels.activeView === 'failures' && (
-                <FailuresPanel artifacts={artifactData.artifacts} buckets={artifactData.buckets} />
+                <FailuresPanel artifacts={artifactData.artifacts} buckets={artifactData.buckets} isLoading={artifactData.isLoading} />
               )}
 
               {panels.activeView === 'findings' && (
-                <IssuesList issues={issueData.issues} />
+                <IssuesList issues={issueData.issues} isLoading={issueData.isLoading} />
               )}
 
               {panels.activeView === 'steering' && (
-                <SteeringPanel decisions={steeringData.decisions} />
+                <SteeringPanel decisions={steeringData.decisions} isLoading={steeringData.isLoading} />
               )}
             </div>
           </aside>

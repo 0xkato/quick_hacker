@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import type { Campaign, CampaignCreateRequest, CampaignPreset } from '@/types';
+import type { Campaign, CampaignCreateRequest, CampaignPreset, LaneSpec } from '@/types';
 
 interface CampaignManagerProps {
   campaigns: Campaign[];
@@ -12,9 +12,10 @@ interface CampaignManagerProps {
   onResumeCampaign: (id: string) => Promise<void>;
   onCancelCampaign: (id: string) => Promise<void>;
   repoId: string | null;
+  lanes?: LaneSpec[];
 }
 
-export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaign, onCreateCampaign, onStartCampaign, onPauseCampaign, onResumeCampaign, onCancelCampaign, repoId }: CampaignManagerProps) {
+export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaign, onCreateCampaign, onStartCampaign, onPauseCampaign, onResumeCampaign, onCancelCampaign, repoId, lanes }: CampaignManagerProps) {
   const [preset, setPreset] = useState<CampaignPreset>('quick');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -34,10 +35,12 @@ export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaig
   const statusColor = (s: string) => {
     switch (s) {
       case 'running': return 'text-green-400';
+      case 'planning': case 'extracting': case 'compiling': return 'text-cyan-400';
       case 'completed': return 'text-blue-400';
       case 'failed': return 'text-red-400';
       case 'paused': return 'text-yellow-400';
       case 'cancelled': return 'text-gray-400';
+      case 'created': return 'text-gray-300';
       default: return 'text-gray-300';
     }
   };
@@ -106,6 +109,24 @@ export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaig
           </div>
         ))}
       </div>
+
+      {/* Lanes section */}
+      {selectedCampaignId && lanes && lanes.length > 0 && (
+        <div className="border-t border-[var(--border-primary)]">
+          <div className="p-2 bg-[var(--bg-tertiary)]">
+            <span className="text-xs text-[var(--text-muted)]">{lanes.length} lanes</span>
+          </div>
+          {lanes.map(l => (
+            <div key={l.id} className="p-2 border-b border-[var(--border-primary)] text-[10px]">
+              <div className="flex justify-between">
+                <span className="text-[var(--text-primary)]">{l.engine} · {l.structure_model}</span>
+                <span className={l.status === 'validated' ? 'text-green-400' : l.status === 'retired' ? 'text-red-400' : 'text-gray-400'}>{l.status}</span>
+              </div>
+              <div className="text-[var(--text-muted)]">{l.oracle_packs?.join(', ')}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

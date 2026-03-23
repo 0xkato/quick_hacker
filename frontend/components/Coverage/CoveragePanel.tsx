@@ -3,9 +3,14 @@ import type { CoverageSummary } from '@/types';
 
 interface CoveragePanelProps {
   coverage: CoverageSummary | null;
+  isLoading?: boolean;
 }
 
-export function CoveragePanel({ coverage }: CoveragePanelProps) {
+export function CoveragePanel({ coverage, isLoading }: CoveragePanelProps) {
+  if (isLoading) {
+    return <div className="p-4 text-xs text-[var(--text-muted)] text-center animate-pulse">Loading...</div>;
+  }
+
   if (!coverage) {
     return <div className="p-4 text-xs text-[var(--text-muted)] text-center">No coverage data yet. Start a campaign to collect coverage.</div>;
   }

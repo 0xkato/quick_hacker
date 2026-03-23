@@ -14,11 +14,23 @@ from models.campaign_schemas import ProofChecklist
 
 @dataclass
 class IssueGatingResult:
-    """Result of evaluating a proof checklist for issue promotion."""
+    """Result of evaluating a proof checklist for issue promotion.
 
-    disposition: str
+    When ``is_issue`` is True, ``disposition`` is set to a valid
+    IssueDisposition value (confirmed_security_issue,
+    confirmed_non_security_bug, hardening_observation).
+
+    When ``is_issue`` is False, ``disposition`` is None and
+    ``analysis_outcome`` carries the non-issue classification
+    (e.g. "research_lead", "by_design").
+    """
+
+    disposition: str | None
     # One of: confirmed_security_issue, confirmed_non_security_bug,
-    #         hardening_observation, research_lead, by_design
+    #         hardening_observation -- or None if not an issue.
+
+    analysis_outcome: str | None = None
+    # "research_lead" or "by_design" for non-issues; None for issues.
 
     reasoning: list[str] = field(default_factory=list)
 
@@ -58,7 +70,8 @@ def evaluate_proof(checklist: ProofChecklist) -> IssueGatingResult:
             reasoning.append("not_test_only gate failed: appears to be test-only code")
 
         return IssueGatingResult(
-            disposition="research_lead",
+            disposition=None,
+            analysis_outcome="research_lead",
             reasoning=reasoning,
             is_issue=False,
         )

@@ -12,13 +12,14 @@ import hashlib
 def compute_bucket_key(artifact_candidate: dict) -> str:
     """Compute a dedup bucket key from an artifact candidate.
 
-    Key is based on: endpoint + error_type + status_code (if HTTP).
-    Same endpoint + same error pattern -> same bucket.
+    Key is based on: method + path + status_code (the fields produced
+    by the fuzz worker / schemathesis engine).
+    Same method + path + status_code -> same bucket.
     """
-    endpoint = artifact_candidate.get("endpoint", "unknown")
-    error_type = artifact_candidate.get("error_type", "unknown")
+    method = artifact_candidate.get("method", "unknown")
+    path = artifact_candidate.get("path", "unknown")
     status_code = str(artifact_candidate.get("status_code", ""))
-    raw = f"{endpoint}:{error_type}:{status_code}"
+    raw = f"{method} {path}:{status_code}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 

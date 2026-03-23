@@ -100,65 +100,72 @@ class TestHardeningObservation:
 
 class TestResearchLead:
     def test_target_not_real(self):
-        """target_real=False -> research_lead."""
+        """target_real=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(target_real=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("target_real" in r for r in result.reasoning)
 
     def test_harness_not_validated(self):
-        """harness_validated=False -> research_lead."""
+        """harness_validated=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(harness_validated=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("harness_validated" in r for r in result.reasoning)
 
     def test_real_code_not_reached(self):
-        """real_code_reached=False -> research_lead."""
+        """real_code_reached=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(real_code_reached=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("real_code_reached" in r for r in result.reasoning)
 
     def test_not_reproduced_cleanly(self):
-        """reproduced_cleanly=False -> research_lead."""
+        """reproduced_cleanly=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(reproduced_cleanly=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("reproduced_cleanly" in r for r in result.reasoning)
 
     def test_minimization_not_attempted(self):
-        """artifact_minimization_attempted=False -> research_lead."""
+        """artifact_minimization_attempted=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(artifact_minimization_attempted=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("artifact_minimization_attempted" in r for r in result.reasoning)
 
     def test_is_harness_artifact(self):
-        """not_harness_artifact=False -> research_lead."""
+        """not_harness_artifact=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(not_harness_artifact=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("not_harness_artifact" in r for r in result.reasoning)
 
     def test_is_test_only(self):
-        """not_test_only=False -> research_lead."""
+        """not_test_only=False -> research_lead (non-issue)."""
         checklist = _all_core_pass(not_test_only=False)
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert any("not_test_only" in r for r in result.reasoning)
 
@@ -175,7 +182,8 @@ class TestResearchLead:
         )
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False
         assert len(result.reasoning) == 7
 
@@ -187,5 +195,6 @@ class TestResearchLead:
         )
         result = evaluate_proof(checklist)
 
-        assert result.disposition == "research_lead"
+        assert result.disposition is None
+        assert result.analysis_outcome == "research_lead"
         assert result.is_issue is False

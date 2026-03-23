@@ -19,27 +19,33 @@ from evidence.bucketer import compute_bucket_key, should_replay, process_raw_art
 
 
 class TestComputeBucketKey:
-    def test_same_endpoint_and_error_produce_same_key(self):
-        """Identical endpoint + error_type + status_code -> same bucket key."""
-        c1 = {"endpoint": "/api/users", "error_type": "500", "status_code": 500}
-        c2 = {"endpoint": "/api/users", "error_type": "500", "status_code": 500}
+    def test_same_method_path_status_produce_same_key(self):
+        """Identical method + path + status_code -> same bucket key."""
+        c1 = {"method": "POST", "path": "/api/users", "status_code": 500}
+        c2 = {"method": "POST", "path": "/api/users", "status_code": 500}
         assert compute_bucket_key(c1) == compute_bucket_key(c2)
 
-    def test_different_endpoints_produce_different_keys(self):
-        """Different endpoints should produce different bucket keys."""
-        c1 = {"endpoint": "/api/users", "error_type": "500", "status_code": 500}
-        c2 = {"endpoint": "/api/orders", "error_type": "500", "status_code": 500}
+    def test_different_paths_produce_different_keys(self):
+        """Different paths should produce different bucket keys."""
+        c1 = {"method": "POST", "path": "/api/users", "status_code": 500}
+        c2 = {"method": "POST", "path": "/api/orders", "status_code": 500}
         assert compute_bucket_key(c1) != compute_bucket_key(c2)
 
-    def test_different_error_types_produce_different_keys(self):
-        """Different error types on the same endpoint -> different keys."""
-        c1 = {"endpoint": "/api/users", "error_type": "timeout", "status_code": 504}
-        c2 = {"endpoint": "/api/users", "error_type": "crash", "status_code": 500}
+    def test_different_status_codes_produce_different_keys(self):
+        """Different status codes on the same path -> different keys."""
+        c1 = {"method": "GET", "path": "/api/users", "status_code": 504}
+        c2 = {"method": "GET", "path": "/api/users", "status_code": 500}
+        assert compute_bucket_key(c1) != compute_bucket_key(c2)
+
+    def test_different_methods_produce_different_keys(self):
+        """Different methods on the same path -> different keys."""
+        c1 = {"method": "GET", "path": "/api/users", "status_code": 500}
+        c2 = {"method": "POST", "path": "/api/users", "status_code": 500}
         assert compute_bucket_key(c1) != compute_bucket_key(c2)
 
     def test_key_is_16_hex_chars(self):
         """Bucket key should be a 16-character hex string."""
-        key = compute_bucket_key({"endpoint": "/test", "error_type": "err"})
+        key = compute_bucket_key({"method": "GET", "path": "/test", "status_code": 500})
         assert len(key) == 16
         int(key, 16)  # valid hex
 
@@ -105,8 +111,8 @@ class TestProcessRawArtifact:
     ):
         """process_raw_artifact should create both artifact and bucket."""
         candidate = {
-            "endpoint": "/api/test",
-            "error_type": "crash",
+            "method": "POST",
+            "path": "/api/test",
             "status_code": 500,
             "type": "crash",
         }
@@ -139,8 +145,8 @@ class TestProcessRawArtifact:
         }
 
         candidate = {
-            "endpoint": "/api/test",
-            "error_type": "crash",
+            "method": "POST",
+            "path": "/api/test",
             "status_code": 500,
             "type": "crash",
         }
@@ -165,8 +171,8 @@ class TestProcessRawArtifact:
     ):
         """process_raw_artifact should store evidence in object store."""
         candidate = {
-            "endpoint": "/api/test",
-            "error_type": "crash",
+            "method": "POST",
+            "path": "/api/test",
             "status_code": 500,
             "type": "crash",
             "evidence": {"trace": "stack trace here"},

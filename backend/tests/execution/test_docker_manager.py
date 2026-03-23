@@ -34,7 +34,7 @@ class TestCreateCampaignNetwork:
         mgr.create_campaign_network("abc123")
 
         mock_run.assert_called_once_with(
-            ["docker", "network", "create", "qh_abc123"],
+            ["docker", "network", "create", "--internal", "qh_abc123"],
             capture_output=True,
             text=True,
             check=True,

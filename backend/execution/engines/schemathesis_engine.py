@@ -103,7 +103,7 @@ class SchemathesisEngine(EngineInterface):
         success = exit_code == 0
 
         failures = self._extract_failures(stdout)
-        metrics = self._extract_metrics(stdout, failures)
+        metrics = self._extract_metrics(stdout, failures, exit_code=exit_code)
         metrics["exit_code"] = exit_code
 
         errors: list[str] = []
@@ -138,16 +138,33 @@ class SchemathesisEngine(EngineInterface):
         return failures
 
     def _extract_metrics(
-        self, stdout: str, failures: list[dict[str, Any]]
+        self, stdout: str, failures: list[dict[str, Any]],
+        exit_code: int = 0,
     ) -> dict[str, Any]:
-        """Build a metrics dict from parsed output."""
+        """Build a metrics dict from parsed output.
+
+        Extracts as much as possible from CLI output. Fields that are
+        not available from the schemathesis CLI in v1 get reasonable
+        defaults / estimates.
+        """
+        status_codes = [f["status_code"] for f in failures]
+
         status_classes: dict[str, int] = {}
-        for f in failures:
-            code = f["status_code"]
+        for code in status_codes:
             cls = f"{code // 100}xx"
             status_classes[cls] = status_classes.get(cls, 0) + 1
 
         return {
             "failures_count": len(failures),
             "status_classes": status_classes,
+            "operations_hit": len(
+                set(f["path"] for f in failures)
+            ) if failures else 0,
+            "status_classes_seen": list(set(
+                f"{str(s)[0]}xx" for s in status_codes
+            )),
+            "requests_per_sec": 0,  # Not available from CLI output in v1
+            "validity_ratio": 1.0 if exit_code == 0 else 0.5,  # Rough estimate
+            "sequence_depth": 1,  # Default for non-stateful
+            "parameters_exercised": 0,  # Not available from CLI in v1
         }

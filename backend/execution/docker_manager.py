@@ -43,7 +43,7 @@ class DockerNetworkManager:
         logger.info("Creating Docker network: %s", network_name)
 
         subprocess.run(
-            ["docker", "network", "create", network_name],
+            ["docker", "network", "create", "--internal", network_name],
             capture_output=True,
             text=True,
             check=True,

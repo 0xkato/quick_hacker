@@ -103,10 +103,9 @@ class CampaignController:
            d. Validate harness (validate_harness).
            e. If valid: store harness artifact, create harness record,
               oracle pack, seed set, and execution bundle.
-           f. If invalid: track failure count.
-        5. After max_compilation_failures_per_lane failures: mark lane retired.
-        6. Update campaign status to COMPILING.
-        7. If all lanes retired: update to FAILED.
+           f. If invalid: retire lane immediately (v1: one attempt per lane).
+        5. Update campaign status to COMPILING.
+        6. If all lanes retired: update to FAILED.
 
         Raises:
             ValueError: If the campaign does not exist.
@@ -115,9 +114,6 @@ class CampaignController:
         campaign = await campaign_service.get_campaign(campaign_id)
         if campaign is None:
             raise ValueError(f"Campaign not found: {campaign_id}")
-
-        campaign_config = await campaign_service.get_campaign_config(campaign_id) or {}
-        max_failures = campaign_config.get("max_compilation_failures_per_lane", 3)
 
         # 2. Get targets
         targets = await target_service.list_targets(campaign_id)
@@ -155,7 +151,6 @@ class CampaignController:
         )
         store = LocalFileStore(artifact_root)
 
-        failure_count = 0
         total_lanes = len(planned_lanes)
         retired_count = 0
 
@@ -230,13 +225,12 @@ class CampaignController:
                     lane_spec.id, "validated"
                 )
             else:
-                # 4f. Track failure
-                failure_count += 1
-                if failure_count >= max_failures:
-                    await lane_service.update_lane_spec_status(
-                        lane_spec.id, "retired"
-                    )
-                    retired_count += 1
+                # 4f. Per-lane failure: v1 has no retry loop, so a single
+                # compilation failure immediately retires the lane.
+                await lane_service.update_lane_spec_status(
+                    lane_spec.id, "retired"
+                )
+                retired_count += 1
 
         # 5. Update campaign status
         if retired_count == total_lanes:
@@ -293,6 +287,34 @@ class CampaignController:
         )
 
         return updated
+
+    async def check_steering(self, campaign_id: str) -> dict | None:
+        """Check if steering action needed. Returns decision or None.
+
+        v1 stub: wires steering engine to the controller but does not
+        implement full metrics aggregation yet.
+        """
+        from campaigns.steering import generate_steering_decision
+        from services.coverage_service import coverage_service
+        from services.steering_service import steering_service
+
+        # Get coverage snapshots for all runs in this campaign
+        snapshots: list[dict] = []  # aggregate from coverage_service
+        lane_metrics: list[dict] = []  # aggregate from lane metrics
+        artifact_counts: dict = {}  # count per bucket
+
+        decision = generate_steering_decision(
+            campaign_id, lane_metrics, snapshots, artifact_counts
+        )
+        if decision:
+            await steering_service.record_decision(
+                campaign_id=decision.campaign_id,
+                decision_type=decision.decision_type,
+                triggering_metrics=decision.triggering_metrics,
+                recommendation=decision.recommendation,
+                affected_lane_ids=decision.affected_lane_ids,
+            )
+        return decision
 
     async def start_campaign(self, campaign_id: str) -> CampaignResponse:
         """Full pipeline: plan -> compile -> execute."""

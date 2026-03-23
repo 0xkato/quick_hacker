@@ -158,8 +158,11 @@ class TestCampaignController:
         ):
             result = await controller.plan_campaign("c1")
 
-        # Assert status updated to EXTRACTING
-        mock_update.assert_called_once_with("c1", CampaignStatus.EXTRACTING.value)
+        # Assert status updated to EXTRACTING (with started_at kwarg)
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args
+        assert call_args[0] == ("c1", CampaignStatus.EXTRACTING.value)
+        assert "started_at" in call_args[1]
         assert result.status == CampaignStatus.EXTRACTING
 
         # Assert targets were created (2 operations: GET + POST)
@@ -282,8 +285,11 @@ class TestCampaignController:
         ):
             result = await controller.plan_campaign("c1")
 
-        # Status still transitions to EXTRACTING
-        mock_update.assert_called_once_with("c1", CampaignStatus.EXTRACTING.value)
+        # Status still transitions to EXTRACTING (with started_at kwarg)
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args
+        assert call_args[0] == ("c1", CampaignStatus.EXTRACTING.value)
+        assert "started_at" in call_args[1]
         assert result.status == CampaignStatus.EXTRACTING
 
         # No targets to create, so batch should not be called
@@ -635,11 +641,15 @@ class TestExecuteCampaign:
 
     @pytest.mark.asyncio
     async def test_execute_creates_run_records(self):
-        """execute_campaign creates a RunLane for each bundle."""
+        """execute_campaign creates a RunLane for each bundle and enqueues jobs."""
         mock_campaign = _make_campaign(status=CampaignStatus.COMPILING)
         bundle1 = _make_bundle(id="eb1", lane_spec_id="ls1")
         bundle2 = _make_bundle(id="eb2", lane_spec_id="ls2")
         running_campaign = _make_campaign(status=CampaignStatus.RUNNING)
+
+        mock_run = MagicMock()
+        mock_run.id = "run1"
+        mock_run.timeout_seconds = 1800
 
         controller = CampaignController()
 
@@ -655,15 +665,22 @@ class TestExecuteCampaign:
                 return_value=[bundle1, bundle2],
             ),
             patch(
+                "campaigns.controller.project_service.get_project_repo_path",
+                return_value=None,
+            ),
+            patch(
                 "campaigns.controller.run_lane_service.create_run",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=mock_run,
             ) as mock_create_run,
             patch(
                 "campaigns.controller.campaign_service.update_campaign_status",
                 new_callable=AsyncMock,
                 return_value=running_campaign,
             ) as mock_update_status,
+            patch(
+                "execution.workers.fuzz_worker_actor.run_lane",
+            ) as mock_run_lane_actor,
         ):
             result = await controller.execute_campaign("c1")
 
@@ -677,10 +694,14 @@ class TestExecuteCampaign:
         assert call_kwargs_1["lane_spec_id"] == "ls2"
         assert call_kwargs_1["execution_bundle_id"] == "eb2"
 
-        # Campaign status transitioned to RUNNING
-        mock_update_status.assert_called_once_with(
-            "c1", CampaignStatus.RUNNING.value
-        )
+        # Dramatiq jobs were enqueued
+        assert mock_run_lane_actor.send.call_count == 2
+
+        # Campaign status transitioned to RUNNING (with started_at)
+        mock_update_status.assert_called_once()
+        call_args = mock_update_status.call_args
+        assert call_args[0] == ("c1", CampaignStatus.RUNNING.value)
+        assert "started_at" in call_args[1]
         assert result.status == CampaignStatus.RUNNING
 
     @pytest.mark.asyncio
@@ -689,6 +710,10 @@ class TestExecuteCampaign:
         mock_campaign = _make_campaign(status=CampaignStatus.COMPILING)
         bundle = _make_bundle(id="eb1", lane_spec_id="ls1")
         running_campaign = _make_campaign(status=CampaignStatus.RUNNING)
+
+        mock_run = MagicMock()
+        mock_run.id = "run1"
+        mock_run.timeout_seconds = 1800
 
         controller = CampaignController()
 
@@ -704,21 +729,29 @@ class TestExecuteCampaign:
                 return_value=[bundle],
             ),
             patch(
+                "campaigns.controller.project_service.get_project_repo_path",
+                return_value=None,
+            ),
+            patch(
                 "campaigns.controller.run_lane_service.create_run",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=mock_run,
             ),
             patch(
                 "campaigns.controller.campaign_service.update_campaign_status",
                 new_callable=AsyncMock,
                 return_value=running_campaign,
             ) as mock_update_status,
+            patch(
+                "execution.workers.fuzz_worker_actor.run_lane",
+            ),
         ):
             result = await controller.execute_campaign("c1")
 
-        mock_update_status.assert_called_once_with(
-            "c1", CampaignStatus.RUNNING.value
-        )
+        mock_update_status.assert_called_once()
+        call_args = mock_update_status.call_args
+        assert call_args[0] == ("c1", CampaignStatus.RUNNING.value)
+        assert "started_at" in call_args[1]
         assert result.status == CampaignStatus.RUNNING
 
     @pytest.mark.asyncio
@@ -744,6 +777,9 @@ class TestExecuteCampaign:
                 new_callable=AsyncMock,
                 return_value=_make_campaign(status=CampaignStatus.FAILED),
             ) as mock_update_status,
+            patch(
+                "execution.workers.fuzz_worker_actor.run_lane",
+            ),
         ):
             with pytest.raises(ValueError, match="No execution bundles found"):
                 await controller.execute_campaign("c1")
@@ -759,10 +795,15 @@ class TestExecuteCampaign:
         """execute_campaign with non-existent campaign raises ValueError."""
         controller = CampaignController()
 
-        with patch(
-            "campaigns.controller.campaign_service.get_campaign",
-            new_callable=AsyncMock,
-            return_value=None,
+        with (
+            patch(
+                "campaigns.controller.campaign_service.get_campaign",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "execution.workers.fuzz_worker_actor.run_lane",
+            ),
         ):
             with pytest.raises(ValueError, match="Campaign not found"):
                 await controller.execute_campaign("nonexistent")

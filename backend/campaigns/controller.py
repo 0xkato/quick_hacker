@@ -83,10 +83,19 @@ class CampaignController:
         if targets:
             await target_service.create_targets_batch(campaign_id, targets)
 
-        # 7. Transition status to EXTRACTING
+        # 7. Transition status to EXTRACTING with started_at
+        from datetime import datetime, timezone
+
+        from observability.campaign_events import campaign_broadcaster
+
         updated = await campaign_service.update_campaign_status(
-            campaign_id, CampaignStatus.EXTRACTING.value
+            campaign_id,
+            CampaignStatus.EXTRACTING.value,
+            started_at=datetime.now(timezone.utc),
         )
+
+        # Emit WebSocket event
+        campaign_broadcaster.emit_campaign_status(campaign_id, "extracting")
 
         return updated
 
@@ -236,7 +245,15 @@ class CampaignController:
                 )
                 retired_count += 1
 
+                # Emit lane retired event
+                from observability.campaign_events import campaign_broadcaster
+                campaign_broadcaster.emit_lane_retired(
+                    campaign_id, lane_spec.id, "validation_failed"
+                )
+
         # 5. Update campaign status
+        from observability.campaign_events import campaign_broadcaster
+
         if retired_count == total_lanes:
             # All lanes retired
             updated = await campaign_service.update_campaign_status(
@@ -244,25 +261,33 @@ class CampaignController:
                 CampaignStatus.FAILED.value,
                 error_message="All lanes retired due to compilation failures",
             )
+            campaign_broadcaster.emit_campaign_status(campaign_id, "failed")
         else:
             updated = await campaign_service.update_campaign_status(
                 campaign_id, CampaignStatus.COMPILING.value
             )
+            campaign_broadcaster.emit_campaign_status(campaign_id, "compiling")
 
         return updated
 
     async def execute_campaign(self, campaign_id: str) -> CampaignResponse:
-        """Create run lanes and prepare for execution.
+        """Create run lanes, enqueue Dramatiq jobs, and start execution.
 
         1. Get campaign.
         2. Get all validated execution bundles.
-        3. For each bundle: create RunLane record (status=queued).
-        4. Update campaign status to RUNNING.
-        5. Return campaign (runs will be executed by workers).
+        3. For each bundle: create RunLane record (status=queued) and enqueue job.
+        4. Update campaign status to RUNNING with started_at timestamp.
+        5. Emit WebSocket event.
+        6. Return campaign.
 
         Raises:
             ValueError: If the campaign does not exist or has no bundles.
         """
+        from datetime import datetime, timezone
+
+        from execution.workers.fuzz_worker_actor import run_lane
+        from observability.campaign_events import campaign_broadcaster
+
         # 1. Get campaign
         campaign = await campaign_service.get_campaign(campaign_id)
         if campaign is None:
@@ -278,17 +303,53 @@ class CampaignController:
             )
             raise ValueError("No execution bundles found")
 
-        # 3. For each bundle: create RunLane record
+        # Resolve repo path for compose file discovery
+        repo_path = project_service.get_project_repo_path(campaign.repo_id)
+
+        # 3. For each bundle: create RunLane record and enqueue Dramatiq job
+        created_runs = []
         for bundle in bundles:
-            await run_lane_service.create_run(
+            run = await run_lane_service.create_run(
                 lane_spec_id=bundle.lane_spec_id,
                 execution_bundle_id=bundle.id,
             )
 
-        # 4. Update campaign status to RUNNING
+            # Build job data for the Dramatiq actor
+            job_data = {
+                "run_lane_id": run.id,
+                "execution_bundle_id": bundle.id,
+                "campaign_id": campaign_id,
+                "harness_code_ref": f"campaigns/{campaign_id}/harnesses/{bundle.lane_spec_id}.py",
+                "compose_path": "",
+                "openapi_url": "openapi.json",
+                "timeout_seconds": run.timeout_seconds or 1800,
+            }
+
+            # Resolve compose_path from project repo
+            if repo_path:
+                for name in [
+                    "docker-compose.yml",
+                    "compose.yaml",
+                    "docker-compose.yaml",
+                    "compose.yml",
+                ]:
+                    candidate = os.path.join(repo_path, name)
+                    if os.path.exists(candidate):
+                        job_data["compose_path"] = candidate
+                        break
+
+            run_lane.send(job_data)
+            created_runs.append(run)
+
+        # 4. Update campaign status to RUNNING with started_at
         updated = await campaign_service.update_campaign_status(
-            campaign_id, CampaignStatus.RUNNING.value
+            campaign_id,
+            CampaignStatus.RUNNING.value,
+            started_at=datetime.now(timezone.utc),
         )
+
+        # 5. Emit WebSocket event
+        campaign_broadcaster.emit_campaign_status(campaign_id, "running")
 
         return updated
 
@@ -331,7 +392,7 @@ class CampaignController:
                         if run_coverage else 1.0
                     ),
                     "requests_per_sec": 0,
-                    "budget_used_pct": 0.5,  # estimate until real tracking
+                    "budget_used_pct": 50.0,  # estimate until real tracking (percentage)
                 })
 
         # Count artifacts

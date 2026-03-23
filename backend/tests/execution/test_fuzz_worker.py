@@ -97,6 +97,11 @@ class TestHappyPath:
                 new_callable=AsyncMock,
             ) as mock_coverage,
             patch("tempfile.NamedTemporaryFile") as mock_tmpfile,
+            patch(
+                "evidence.bucketer.process_raw_artifact",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             mock_tmpfile.return_value.__enter__ = MagicMock(
                 return_value=MagicMock(name="/tmp/harness.py", write=MagicMock())

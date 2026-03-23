@@ -162,7 +162,7 @@ class TargetResponse(BaseModel):
     kind: TargetKind
     entrypoint: str
     language: str | None = None
-    schemas: dict[str, Any] | None = None
+    schemas: Any = None
     stateful: bool = False
     actors: list[str] | None = None
     reset_strategy: str | None = None

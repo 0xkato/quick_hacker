@@ -170,12 +170,91 @@ async def execute_run_lane(
             artifact_candidates.append(
                 {
                     "run_lane_id": run_lane_id,
-                    "type": "crash",
+                    "type": failure.get("type", "crash"),
                     "method": failure.get("method"),
                     "path": failure.get("path"),
                     "status_code": failure.get("status_code"),
                 }
             )
+
+        # 9b. Process artifact candidates through evidence pipeline
+        from evidence.bucketer import process_raw_artifact
+        from evidence.replayer import replay_artifact as replay_fn
+        from evidence.classifier import classify_after_replay
+        from issues.gating import evaluate_proof
+        from models.campaign_schemas import ProofChecklist
+        from services.artifact_service import artifact_service
+        from services.issue_service import issue_service
+        from observability.campaign_events import campaign_broadcaster
+
+        for candidate in artifact_candidates:
+            # Step 1: Bucket and create artifact
+            artifact = await process_raw_artifact(
+                campaign_id=campaign_id,
+                run_lane_id=run_lane_id,
+                candidate=candidate,
+                artifact_service=artifact_service,
+                object_store=store,
+            )
+
+            if artifact is None:
+                continue  # Bucket full, skip replay
+
+            # Step 2: Replay for reproducibility (sync function)
+            replay_result = await asyncio.to_thread(
+                replay_fn,
+                artifact_candidate=candidate,
+                base_url=stack_info.base_url,
+                attempts=3,
+            )
+
+            # Step 3: Classify based on replay
+            classification = classify_after_replay(replay_result, candidate)
+
+            # Update artifact classification
+            artifact_id = artifact["artifact_id"]
+            await artifact_service.update_classification(
+                artifact_id,
+                classification=classification,
+            )
+
+            # Step 4: If issue candidate, run gating
+            if classification == "issue_candidate":
+                checklist = ProofChecklist(
+                    target_real=True,
+                    harness_validated=True,
+                    real_code_reached=True,
+                    external_input_controlled=True,
+                    oracle_triggered_or_sanitizer_hit=True,
+                    reproduced_cleanly=replay_result.reproduced,
+                    artifact_minimization_attempted=False,
+                    not_harness_artifact=True,
+                    not_test_only=True,
+                    security_impact_confirmed=False,
+                )
+
+                gating_result = evaluate_proof(checklist)
+
+                if gating_result.is_issue:
+                    issue = await issue_service.create_issue(
+                        artifact_id=artifact_id,
+                        severity="medium",
+                        title=f"Failure in {candidate.get('method', '?')} {candidate.get('path', '?')}",
+                        description=f"Status {candidate.get('status_code', '?')} - {gating_result.disposition}",
+                        category=candidate.get("type", "unknown"),
+                        cwe_id=None,
+                        disposition=gating_result.disposition,
+                        proof=checklist.model_dump(),
+                        root_cause=None,
+                        recommended_fix=None,
+                    )
+
+                    campaign_broadcaster.emit_issue_upsert(
+                        campaign_id=campaign_id,
+                        issue_id=issue.id,
+                        disposition=gating_result.disposition or "unknown",
+                        severity="medium",
+                    )
 
         # 10. Update run status to COMPLETED or FAILED
         final_status = "completed" if result.success else "failed"

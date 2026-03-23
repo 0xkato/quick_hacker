@@ -72,11 +72,15 @@ class TestTeardownNetwork:
         )
 
 
+@patch(
+    "execution.docker_manager._get_first_service_and_port",
+    return_value=("app", 8080),
+)
 class TestLaunchTargetStack:
     """Compose stack launch."""
 
     @patch("execution.docker_manager.subprocess.run")
-    def test_launches_compose_up(self, mock_run: MagicMock) -> None:
+    def test_launches_compose_up(self, mock_run: MagicMock, _mock_port: MagicMock) -> None:
         # First call: compose up; second call: compose ps -q
         mock_run.side_effect = [
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
@@ -104,7 +108,7 @@ class TestLaunchTargetStack:
         ]
 
     @patch("execution.docker_manager.subprocess.run")
-    def test_parses_container_ids(self, mock_run: MagicMock) -> None:
+    def test_parses_container_ids(self, mock_run: MagicMock, _mock_port: MagicMock) -> None:
         mock_run.side_effect = [
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
             subprocess.CompletedProcess(
@@ -118,7 +122,7 @@ class TestLaunchTargetStack:
         assert info.container_ids == ["aaa111", "bbb222", "ccc333"]
 
     @patch("execution.docker_manager.subprocess.run")
-    def test_passes_env_vars(self, mock_run: MagicMock) -> None:
+    def test_passes_env_vars(self, mock_run: MagicMock, _mock_port: MagicMock) -> None:
         mock_run.side_effect = [
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
             subprocess.CompletedProcess(
@@ -137,7 +141,7 @@ class TestLaunchTargetStack:
         assert env["QH_NETWORK"] == "qh_camp1"
 
     @patch("execution.docker_manager.subprocess.run")
-    def test_sets_qh_network_env(self, mock_run: MagicMock) -> None:
+    def test_sets_qh_network_env(self, mock_run: MagicMock, _mock_port: MagicMock) -> None:
         mock_run.side_effect = [
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
             subprocess.CompletedProcess(

@@ -7,9 +7,6 @@ import { SubmissionResult } from './protocol';
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type FindingClassification = 'security_issue' | 'bug' | 'misconfiguration' | 'hardening';
 export type FixType = 'code' | 'config' | 'docs' | 'warning';
-export type AgentStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
-export type AgentType = 'deep_audit' | 'custom' | 'triage';
-export type ScanTier = 'quick' | 'medium' | 'advanced' | 'pro' | 'ultra' | 'evil';
 export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'codex_cli';
 
 // === Triage System ===
@@ -30,7 +27,7 @@ export interface ChecklistItem {
   reason: string;
 }
 
-export interface ProofChecklist {
+export interface TriageProofChecklist {
   source_controlled_input: ChecklistItem;
   sink_present: ChecklistItem;
   dataflow_evidenced: ChecklistItem;
@@ -145,46 +142,6 @@ export interface PhaseHandoffEvent {
   handoff_reason: string;
 }
 
-// === Agent ===
-
-export interface AgentCreateRequest {
-  repo_id: string;
-  agent_type: AgentType;
-  provider_config?: ProviderConfig;
-  scan_tier?: ScanTier | string;
-  time_budget_seconds?: number;
-  scanner_config?: ProviderConfig;
-  analyzer_config?: ProviderConfig;
-  handoff_after?: HandoffMode;
-  name?: string;
-  custom_prompt?: string;
-  target_files?: string[];
-  focus_areas?: string[];
-  use_claude_sdk?: boolean;  // Use Claude Agent SDK for native tool loop (Anthropic only)
-  use_claude_code_auth?: boolean;  // Use Claude Code subscription auth (true) or API key (false)
-  use_overseer?: boolean;  // Enable parallel sub-agents for deeper coverage
-}
-
-export interface Agent {
-  id: string;
-  repo_id: string;
-  name: string;
-  agent_type: AgentType;
-  status: AgentStatus;
-  provider_config: ProviderConfig;
-  scan_tier?: string;
-  time_budget_seconds?: number;
-  custom_prompt?: string;
-  target_files?: string[];
-  focus_areas?: string[];
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
-  files_analyzed: number;
-  findings_count: number;
-  error_message?: string;
-}
-
 // === LLM Validation ===
 
 /**
@@ -231,7 +188,7 @@ export interface Finding {
   disposition?: Disposition;
   classification_confidence?: number;
   exploit_confidence?: number;
-  proof_checklist?: ProofChecklist;
+  proof_checklist?: TriageProofChecklist;
   reasoning?: string[];
   triage_policy_version?: string;
   triaged_at?: string;
@@ -275,25 +232,12 @@ export interface WSMessage {
   timestamp: string;
 }
 
-export interface AgentProgress {
-  current: number;
-  total: number;
-  file?: string;
-}
-
 // === API ===
 
 export interface APIResponse<T = unknown> {
   success: boolean;
   message?: string;
   data?: T;
-}
-
-export interface AgentStats {
-  total_agents: number;
-  status_counts: Record<string, number>;
-  total_findings: number;
-  max_concurrent: number;
 }
 
 // === Settings ===
@@ -339,13 +283,6 @@ export interface FlowEdge {
   source: string;
   target: string;
   label?: string;
-}
-
-export interface InvestigationFlow {
-  session_id: string;
-  nodes: FlowNode[];
-  edges: FlowEdge[];
-  current_node_id?: string;
 }
 
 // === Call Tree ===
@@ -410,78 +347,6 @@ export interface ToolDetail {
   llm_reasoning?: string;
   confidence_score?: number;
   subagent?: string;  // Sub-agent that made this call (Overseer mode)
-}
-
-export interface AgentStateSnapshot {
-  id: string;
-  agent_id: string;
-  created_at: string;
-  repo_id: string;
-  repo_path: string;
-  agent_type: string;
-  provider_config: Record<string, unknown>;
-  custom_prompt?: string;
-  target_files?: string[];
-  focus_areas?: string[];
-  status: string;
-  files_analyzed: number;
-  total_files: number;
-  current_file?: string;
-  findings: Array<Record<string, unknown>>;
-  conversation_history: Array<Record<string, unknown>>;
-  flow_nodes: Array<Record<string, unknown>>;
-  flow_edges: Array<Record<string, unknown>>;
-  current_flow_node_id?: string;
-  investigation_context?: Record<string, unknown>;
-  total_prompt_tokens: number;
-  total_completion_tokens: number;
-  total_api_calls: number;
-  last_error?: string;
-  retry_count: number;
-}
-
-export interface FindingSummary {
-  id: string;
-  severity: Severity;
-  title: string;
-  file_path: string;
-  line_start: number;
-  vulnerability_type: string;
-  confidence: number;
-}
-
-export interface TimelineEvent {
-  timestamp: string;
-  event_type: string;
-  description: string;
-  data?: Record<string, unknown>;
-}
-
-export interface InvestigationReport {
-  id: string;
-  agent_id: string;
-  generated_at: string;
-  executive_summary: string;
-  agent_name: string;
-  agent_type: string;
-  repo_id: string;
-  repo_name: string;
-  started_at?: string;
-  completed_at?: string;
-  duration_seconds?: number;
-  findings_summary: FindingSummary[];
-  findings_by_severity: Record<string, number>;
-  findings_by_type: Record<string, number>;
-  total_files: number;
-  files_with_findings: string[];
-  timeline: TimelineEvent[];
-  total_prompt_tokens: number;
-  total_completion_tokens: number;
-  total_api_calls: number;
-  estimated_cost?: number;
-  flow_json_path?: string;
-  flow_svg_path?: string;
-  markdown_path?: string;
 }
 
 export interface TokenUsage {
@@ -633,4 +498,159 @@ export interface BTNodeUpdate {
   label?: string;
   data_merge?: Record<string, unknown>;
   children_count?: number;
+}
+
+// === Campaign Platform Types ===
+
+export type CampaignStatus = 'created' | 'planning' | 'extracting' | 'compiling' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type CampaignPreset = 'quick' | 'medium' | 'advanced' | 'pro' | 'ultra' | 'evil';
+export type TargetKind = 'api_route' | 'parser' | 'workflow' | 'browser' | 'cli' | 'message_consumer' | 'native_function';
+export type LaneSpecStatus = 'planned' | 'compiled' | 'validated' | 'retired';
+export type RunLaneStatus = 'queued' | 'running' | 'stalled' | 'completed' | 'failed' | 'cancelled' | 'superseded';
+export type ArtifactType = 'crash' | 'hang' | 'oracle_hit' | 'differential_failure';
+export type ArtifactClassification = 'issue_candidate' | 'harness_artifact' | 'flaky_unconfirmed';
+export type IssueDisposition = 'confirmed_security_issue' | 'confirmed_non_security_bug' | 'hardening_observation';
+export type IssueSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface CampaignCreateRequest {
+  repo_id: string;
+  campaign_preset?: CampaignPreset;
+  lm_provider?: string;
+  lm_model?: string;
+  enabled_engines?: string[];
+  max_parallel_lanes?: number;
+  budget_seconds?: number;
+  steering_interval_seconds?: number;
+  target_scope?: string;
+  directed_targets?: string[];
+  custom_oracles?: string[];
+}
+
+export interface Campaign {
+  id: string;
+  repo_id: string;
+  status: CampaignStatus;
+  preset: CampaignPreset;
+  budget_seconds: number;
+  max_parallel_lanes: number;
+  lm_provider?: string;
+  lm_model?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  error_message?: string;
+}
+
+export interface Target {
+  id: string;
+  campaign_id: string;
+  kind: TargetKind;
+  entrypoint: string;
+  language?: string;
+  schemas?: string[];
+  stateful: boolean;
+  actors?: string[];
+  reset_strategy?: string;
+  priority_score?: number;
+  created_at: string;
+}
+
+export interface LaneSpec {
+  id: string;
+  target_id: string;
+  revision: number;
+  structure_model: string;
+  input_producer: string;
+  feedback_models: string[];
+  oracle_packs: string[];
+  engine: string;
+  budget_seconds?: number;
+  seed_sources?: string[];
+  status: LaneSpecStatus;
+  created_at: string;
+}
+
+export interface RunLane {
+  id: string;
+  lane_spec_id: string;
+  execution_bundle_id: string;
+  status: RunLaneStatus;
+  started_at?: string;
+  completed_at?: string;
+  cpu_limit?: string;
+  memory_limit_mb?: number;
+  timeout_seconds?: number;
+  resource_profile?: string;
+}
+
+export interface Artifact {
+  id: string;
+  run_lane_id: string;
+  type: ArtifactType;
+  bucket_key?: string;
+  artifact_classification: ArtifactClassification;
+  analysis_outcome?: string;
+  reproducible?: boolean;
+  stability_score?: number;
+  minimized?: boolean;
+  replay_recipe?: Record<string, unknown>;
+  evidence_refs?: string[];
+  created_at: string;
+}
+
+export interface ArtifactBucket {
+  id: string;
+  campaign_id: string;
+  bucket_key: string;
+  artifact_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface ProofChecklist {
+  target_real: boolean;
+  harness_validated: boolean;
+  real_code_reached: boolean;
+  external_input_controlled: boolean;
+  oracle_triggered_or_sanitizer_hit: boolean;
+  reproduced_cleanly: boolean;
+  artifact_minimization_attempted: boolean;
+  not_harness_artifact: boolean;
+  not_test_only: boolean;
+  security_impact_confirmed: boolean;
+}
+
+export interface Issue {
+  id: string;
+  artifact_id: string;
+  severity: IssueSeverity;
+  title: string;
+  description: string;
+  category?: string;
+  cwe_id?: string;
+  disposition: IssueDisposition;
+  proof: ProofChecklist;
+  root_cause?: string;
+  recommended_fix?: string;
+  regression_test_id?: string;
+  created_at: string;
+}
+
+export interface SteeringDecision {
+  id: string;
+  campaign_id: string;
+  decision_type: string;
+  triggering_metrics: Record<string, unknown>;
+  recommendation: string;
+  affected_lane_ids: string[];
+  created_at: string;
+}
+
+export interface CoverageSummary {
+  operations_hit: number;
+  parameters_exercised: number;
+  status_classes_seen: string[];
+  sequence_depth: number;
+  validity_ratio: number;
+  requests_per_sec: number;
 }

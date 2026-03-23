@@ -7,22 +7,9 @@ import type {
   RepoCloneRequest,
   FileNode,
   FileContent,
-  Agent,
-  AgentCreateRequest,
-  AgentStatus,
-  Finding,
-  AgentStats,
-  InvestigationFlow,
-  CallTreeRoute,
-  LLMInteraction,
-  ToolDetail,
-  InvestigationReport,
-  AgentStateSnapshot,
+  CampaignCreateRequest,
   SnapshotInfo,
   SessionSnapshot,
-  CodeGraph,
-  GraphStats,
-  GraphNode,
   BTNode,
 } from '@/types';
 import type {
@@ -230,329 +217,120 @@ export const files = {
   },
 };
 
-// === Call Tree API ===
+// === Campaign API ===
 
-export const calltree = {
-  async listRoutes(repoId: string): Promise<CallTreeRoute[]> {
-    return request<CallTreeRoute[]>(`/api/calltree/${repoId}/routes`);
+export const campaigns = {
+  async create(data: CampaignCreateRequest) {
+    return request('/api/campaigns', { method: 'POST', body: JSON.stringify(data) });
   },
-
-  async getTree(
-    repoId: string,
-    routeId: string,
-    options?: {
-      maxDepth?: number;
-      maxNodes?: number;
-      includeExternal?: boolean;
-    }
-  ): Promise<InvestigationFlow> {
-    const params = new URLSearchParams();
-    params.set('route_id', routeId);
-    if (options?.maxDepth !== undefined) params.set('max_depth', String(options.maxDepth));
-    if (options?.maxNodes !== undefined) params.set('max_nodes', String(options.maxNodes));
-    if (options?.includeExternal !== undefined) {
-      params.set('include_external', String(options.includeExternal));
-    }
-    return request<InvestigationFlow>(`/api/calltree/${repoId}/tree?${params.toString()}`);
+  async list(repoId?: string) {
+    const params = repoId ? `?repo_id=${repoId}` : '';
+    return request(`/api/campaigns${params}`);
   },
-};
-
-// === Agents API ===
-
-export const agents = {
-  async create(req: AgentCreateRequest): Promise<Agent> {
-    return request<Agent>('/api/agents', {
-      method: 'POST',
-      body: JSON.stringify(req),
-    });
+  async get(id: string) {
+    return request(`/api/campaigns/${id}`);
   },
-
-  async start(agentId: string): Promise<Agent> {
-    return request<Agent>(`/api/agents/${agentId}/start`, { method: 'POST' });
+  async plan(id: string) {
+    return request(`/api/campaigns/${id}/plan`, { method: 'POST' });
   },
-
-  async pause(agentId: string): Promise<Agent> {
-    return request<Agent>(`/api/agents/${agentId}/pause`, { method: 'POST' });
+  async start(id: string) {
+    return request(`/api/campaigns/${id}/start`, { method: 'POST' });
   },
-
-  async resume(agentId: string): Promise<Agent> {
-    return request<Agent>(`/api/agents/${agentId}/resume`, { method: 'POST' });
+  async pause(id: string) {
+    return request(`/api/campaigns/${id}/pause`, { method: 'POST' });
   },
-
-  async cancel(agentId: string): Promise<Agent> {
-    return request<Agent>(`/api/agents/${agentId}/cancel`, { method: 'POST' });
+  async resume(id: string) {
+    return request(`/api/campaigns/${id}/resume`, { method: 'POST' });
   },
-
-  async list(repoId?: string, status?: AgentStatus): Promise<Agent[]> {
-    const params = new URLSearchParams();
-    if (repoId) params.set('repo_id', repoId);
-    if (status) params.set('status', status);
-    const query = params.toString();
-    return request<Agent[]>(`/api/agents${query ? `?${query}` : ''}`);
+  async cancel(id: string) {
+    return request(`/api/campaigns/${id}/cancel`, { method: 'POST' });
   },
-
-  async get(agentId: string): Promise<Agent> {
-    return request<Agent>(`/api/agents/${agentId}`);
+  async getTargets(id: string) {
+    return request(`/api/campaigns/${id}/targets`);
   },
-
-  async delete(agentId: string): Promise<void> {
-    await request(`/api/agents/${agentId}`, { method: 'DELETE' });
+  async getLanes(id: string) {
+    return request(`/api/campaigns/${id}/lanes`);
   },
-
-  async getFindings(agentId: string): Promise<Finding[]> {
-    return request<Finding[]>(`/api/agents/${agentId}/findings`);
+  async getArtifacts(id: string) {
+    return request(`/api/campaigns/${id}/artifacts`);
   },
-
-  async getAllFindings(repoId?: string): Promise<Finding[]> {
-    const query = repoId ? `?repo_id=${repoId}` : '';
-    return request<Finding[]>(`/api/agents/findings/all${query}`);
+  async getArtifactBuckets(id: string) {
+    return request(`/api/campaigns/${id}/artifact-buckets`);
   },
-
-  async quickTriage(agentId: string, findingIds?: string[]): Promise<{
-    triaged_count: number;
-    filtered_count: number;
-    findings: Finding[];
-  }> {
-    return request(`/api/agents/${agentId}/quick-triage`, {
-      method: 'POST',
-      body: JSON.stringify({ finding_ids: findingIds }),
-    });
+  async getCoverage(id: string) {
+    return request(`/api/campaigns/${id}/coverage`);
   },
-
-  async llmTriage(
-    agentId: string,
-    findingIds?: string[],
-    config?: {
-      provider: string;
-      model: string;
-      apiKey?: string;
-      useClaudeSDK: boolean;
-      useClaudeCodeAuth: boolean;
-      maxFindings?: number;  // undefined = no limit
-    }
-  ): Promise<{
-    triaged_count: number;
-    results: Array<{
-      finding_id: string;
-      decision: string;
-      confidence: number;
-      reasoning: string[];
-    }>;
-    findings: Finding[];
-    triage_agent_id?: string;  // ID of triage agent for viewing LLM interactions
-  }> {
-    // LLM triage can take time with many findings - use 1 hour timeout
-    return request(`/api/agents/${agentId}/llm-triage`, {
-      method: 'POST',
-      body: JSON.stringify({
-        finding_ids: findingIds,
-        provider: config?.provider,
-        model: config?.model,
-        api_key: config?.apiKey,
-        use_claude_sdk: config?.useClaudeSDK,
-        use_claude_code_auth: config?.useClaudeCodeAuth,
-        max_findings: config?.maxFindings,  // undefined = no limit (triage all)
-      }),
-    }, 3600000);
+  async getSteering(id: string) {
+    return request(`/api/campaigns/${id}/steering`);
   },
-
-  async loadAgentState(agentId: string): Promise<{
-    status: string;
-    agent_id: string;
-    interactions_loaded: number;
-    tool_details_loaded: number;
-    flow_nodes_loaded: number;
-    findings_loaded: number;
-  }> {
-    return request(`/api/agents/${agentId}/load`, { method: 'POST' });
+  async getIssues(id: string) {
+    return request(`/api/campaigns/${id}/issues`);
   },
-
-  /**
-   * Triage all findings for a repository without requiring a specific agent.
-   * Use this from the "All Agents" view.
-   */
-  async llmTriageByRepo(
-    repoId: string,
-    findingIds?: string[],
-    config?: {
-      provider: string;
-      model: string;
-      apiKey?: string;
-      useClaudeSDK: boolean;
-      useClaudeCodeAuth: boolean;
-      maxFindings?: number;
-    }
-  ): Promise<{
-    triaged_count: number;
-    results: Array<{
-      finding_id: string;
-      decision: string;
-      confidence: number;
-      reasoning: string[];
-    }>;
-    findings: Finding[];
-    triage_agent_id?: string;
-  }> {
-    return request(`/api/agents/findings/triage?repo_id=${encodeURIComponent(repoId)}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        finding_ids: findingIds,
-        provider: config?.provider,
-        model: config?.model,
-        api_key: config?.apiKey,
-        use_claude_sdk: config?.useClaudeSDK,
-        use_claude_code_auth: config?.useClaudeCodeAuth,
-        max_findings: config?.maxFindings,
-      }),
-    }, 3600000);
-  },
-
-  async getStats(): Promise<AgentStats> {
-    return request<AgentStats>('/api/agents/stats');
-  },
-
-  async getModels(): Promise<Record<string, string[]>> {
-    return request<Record<string, string[]>>('/api/agents/models');
-  },
-
-  async getFlow(agentId: string): Promise<InvestigationFlow> {
-    return request<InvestigationFlow>(`/api/agents/${agentId}/flow`);
-  },
-
-  async getFlowStats(agentId: string): Promise<Record<string, unknown>> {
-    return request(`/api/agents/${agentId}/flow/stats`);
-  },
-
-  async clearFlow(agentId: string): Promise<void> {
-    await request(`/api/agents/${agentId}/flow`, { method: 'DELETE' });
-  },
-
-  async queueInvestigation(
-    agentId: string,
-    nodeId: string,
-    notes?: string
-  ): Promise<{ queued: boolean; task_id?: string; reason?: string }> {
-    return request(`/api/agents/${agentId}/investigate`, {
-      method: 'POST',
-      body: JSON.stringify({ node_id: nodeId, notes }),
-    });
-  },
-
-  async getLLMInteractions(
-    agentId: string,
-    limit?: number,
-    offset?: number
-  ): Promise<LLMInteraction[]> {
-    const params = new URLSearchParams();
-    if (limit) params.set('limit', String(limit));
-    if (offset) params.set('offset', String(offset));
-    const query = params.toString();
-    return request(`/api/agents/${agentId}/llm-interactions${query ? `?${query}` : ''}`);
-  },
-
-  async getToolDetails(
-    agentId: string,
-    limit?: number,
-    offset?: number
-  ): Promise<ToolDetail[]> {
-    const params = new URLSearchParams();
-    if (limit) params.set('limit', String(limit));
-    if (offset) params.set('offset', String(offset));
-    const query = params.toString();
-    return request(`/api/agents/${agentId}/tool-details${query ? `?${query}` : ''}`);
-  },
-
-  async getObservabilityStats(agentId: string): Promise<ObservabilityStats> {
-    return request(`/api/agents/${agentId}/observability-stats`);
-  },
-
-  async getBehaviorTree(agentId: string): Promise<BTNode[]> {
-    return request(`/api/behavior-tree/${agentId}`);
-  },
-
-  // Report endpoints
-  async getReport(agentId: string, reportId?: string): Promise<InvestigationReport> {
-    const query = reportId ? `?report_id=${reportId}` : '';
-    return request(`/api/agents/${agentId}/report${query}`);
-  },
-
-  async downloadReport(agentId: string, format: 'md' | 'json' | 'svg'): Promise<Blob> {
-    const url = `${API_BASE}/api/agents/${agentId}/report/download?format=${format}`;
-    const response = await fetchWithAuth(url);
-    if (!response.ok) {
-      throw new APIError(response.status, 'Failed to download report');
-    }
-    return response.blob();
-  },
-
-  async listReports(agentId?: string): Promise<Array<{ id: string; agent_id: string; repo_name: string; generated_at: string; findings_count: number }>> {
-    const query = agentId ? `?agent_id=${agentId}` : '';
-    return request(`/api/agents/reports/all${query}`);
-  },
-
-  // State persistence endpoints
-  async getState(agentId: string): Promise<AgentStateSnapshot> {
-    return request(`/api/agents/${agentId}/state`);
-  },
-
-  async getStateSummary(agentId: string): Promise<Record<string, unknown>> {
-    return request(`/api/agents/${agentId}/state/summary`);
-  },
-
-  async deleteState(agentId: string): Promise<void> {
-    await request(`/api/agents/${agentId}/state`, { method: 'DELETE' });
-  },
-
-  async listSavedStates(): Promise<Array<Record<string, unknown>>> {
-    return request('/api/agents/saved-states');
-  },
-
-  // Reconstruction API
-  async reconstruct(agentId: string, events: any[]): Promise<{
-    spans: Record<string, any>;
-    edges: any[];
-    event_to_span: Record<string, string>;
-  }> {
-    return request(`/api/agents/${agentId}/reconstruct`, {
-      method: 'POST',
-      body: JSON.stringify({ events }),
-    });
+  async getGraph(id: string) {
+    return request(`/api/campaigns/${id}/graph`);
   },
 };
 
-// === Code Graph API ===
-
-export const codeGraph = {
-  async initialize(agentId: string, repoPath: string): Promise<CodeGraph> {
-    return request<CodeGraph>(`/api/agents/${agentId}/graph/initialize`, {
-      method: 'POST',
-      body: JSON.stringify({ repo_path: repoPath }),
-    });
+export const targets = {
+  async get(id: string) {
+    return request(`/api/targets/${id}`);
   },
-
-  async get(agentId: string): Promise<CodeGraph> {
-    return request<CodeGraph>(`/api/agents/${agentId}/graph`);
+  async getLanes(id: string) {
+    return request(`/api/targets/${id}/lanes`);
   },
-
-  async getStats(agentId: string): Promise<GraphStats> {
-    return request<GraphStats>(`/api/agents/${agentId}/graph/stats`);
+  async reprioritize(id: string, priority_score: number) {
+    return request(`/api/targets/${id}/reprioritize`, { method: 'POST', body: JSON.stringify({ priority_score }) });
   },
+};
 
-  async expandNode(agentId: string, nodeId: string): Promise<{ expanded_node_id: string; new_nodes: GraphNode[] }> {
-    return request(`/api/agents/${agentId}/graph/expand/${nodeId}`, {
-      method: 'POST',
-    });
+export const lanes = {
+  async get(id: string) {
+    return request(`/api/lanes/${id}`);
   },
-
-  async markVisited(agentId: string, filePath: string, durationMs?: number): Promise<{ marked: boolean; node_id?: string }> {
-    return request(`/api/agents/${agentId}/graph/mark-visited`, {
-      method: 'POST',
-      body: JSON.stringify({ file_path: filePath, duration_ms: durationMs }),
-    });
+  async getRuns(id: string) {
+    return request(`/api/lanes/${id}/runs`);
   },
+  async getHarnesses(id: string) {
+    return request(`/api/lanes/${id}/harnesses`);
+  },
+  async getCoverage(id: string) {
+    return request(`/api/lanes/${id}/coverage`);
+  },
+};
 
-  async clear(agentId: string): Promise<void> {
-    return request(`/api/agents/${agentId}/graph`, { method: 'DELETE' });
+export const runs = {
+  async get(id: string) {
+    return request(`/api/runs/${id}`);
+  },
+  async getMetrics(id: string) {
+    return request(`/api/runs/${id}/metrics`);
+  },
+  async cancel(id: string) {
+    return request(`/api/runs/${id}/cancel`, { method: 'POST' });
+  },
+};
+
+export const artifacts = {
+  async get(id: string) {
+    return request(`/api/artifacts/${id}`);
+  },
+  async replay(id: string) {
+    return request(`/api/artifacts/${id}/replay`, { method: 'POST' });
+  },
+  async minimize(id: string) {
+    return request(`/api/artifacts/${id}/minimize`, { method: 'POST' });
+  },
+  async classify(id: string, classification: string, analysis_outcome?: string) {
+    return request(`/api/artifacts/${id}/classify`, { method: 'POST', body: JSON.stringify({ classification, analysis_outcome }) });
+  },
+};
+
+export const issues = {
+  async get(id: string) {
+    return request(`/api/issues/${id}`);
+  },
+  async revalidate(id: string) {
+    return request(`/api/issues/${id}/revalidate`, { method: 'POST' });
   },
 };
 

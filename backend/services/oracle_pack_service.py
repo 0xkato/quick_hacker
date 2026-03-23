@@ -10,6 +10,8 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
+from sqlalchemy import select
+
 from database.campaign_models import OraclePack as DBOraclePack
 from database.connection import get_session
 
@@ -67,6 +69,20 @@ class OraclePackService:
             if row is None:
                 return None
             return _db_to_dict(row)
+
+    async def list_oracle_packs_for_lane(
+        self, lane_spec_id: str
+    ) -> list[dict]:
+        """List all oracle packs for a lane spec."""
+        async with get_session() as session:
+            stmt = (
+                select(DBOraclePack)
+                .where(DBOraclePack.lane_spec_id == lane_spec_id)
+                .order_by(DBOraclePack.revision.desc())
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [_db_to_dict(r) for r in rows]
 
 
 # Module-level singleton

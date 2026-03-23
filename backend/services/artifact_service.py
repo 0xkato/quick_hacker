@@ -213,6 +213,16 @@ class ArtifactService:
             rows = result.scalars().all()
             return [_bucket_to_dict(r) for r in rows]
 
+    async def get_bucket(
+        self, bucket_id: str
+    ) -> Optional[dict]:
+        """Return a single artifact bucket by ID, or None if not found."""
+        async with get_session() as session:
+            row = await session.get(DBArtifactBucket, bucket_id)
+            if row is None:
+                return None
+            return _bucket_to_dict(row)
+
 
 # Module-level singleton
 artifact_service = ArtifactService()

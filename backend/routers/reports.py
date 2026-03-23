@@ -185,6 +185,30 @@ async def preview_findings_report(
     )
 
 
+@router.get("/campaigns/export")
+async def export_campaign_report(
+    campaign_id: str = Query(..., description="Campaign ID to generate report for"),
+    format: str = Query("md", description="Report format (md or json)"),
+):
+    """Export a campaign report (stub for v1)."""
+    return Response(
+        content=f"# Campaign Report\n\nCampaign: {campaign_id}\n\nReport placeholder.",
+        media_type="text/markdown" if format == "md" else "application/json",
+    )
+
+
+@router.get("/issues/export")
+async def export_issues_report(
+    campaign_id: str = Query(..., description="Campaign ID to export issues for"),
+    format: str = Query("md", description="Report format (md or json)"),
+):
+    """Export an issues report (stub for v1)."""
+    return Response(
+        content=f"# Issues Report\n\nCampaign: {campaign_id}\n\nIssue report placeholder.",
+        media_type="text/markdown" if format == "md" else "application/json",
+    )
+
+
 @router.get("/findings/stats")
 async def get_findings_statistics(
     agent_id: str = Query(..., description="Agent/project ID"),

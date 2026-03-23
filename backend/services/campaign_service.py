@@ -13,7 +13,7 @@ from typing import Optional
 
 from sqlalchemy import select
 
-from database.campaign_models import Campaign as DBCampaign
+from database.campaign_models import Campaign as DBCampaign, CampaignPlan as DBCampaignPlan
 from database.connection import get_session
 from models.campaign_enums import CampaignPreset, CampaignStatus
 from models.campaign_schemas import CampaignCreateRequest, CampaignResponse
@@ -172,6 +172,52 @@ class CampaignService:
             await session.flush()
             await session.refresh(row)
             return _db_to_response(row)
+
+    async def get_current_plan(
+        self, campaign_id: str
+    ) -> Optional[dict]:
+        """Return the latest plan revision for a campaign, or None."""
+        async with get_session() as session:
+            stmt = (
+                select(DBCampaignPlan)
+                .where(DBCampaignPlan.campaign_id == campaign_id)
+                .order_by(DBCampaignPlan.revision.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "campaign_id": row.campaign_id,
+                "revision": row.revision,
+                "plan_data": row.plan_data,
+                "created_at": row.created_at,
+            }
+
+    async def list_plans(
+        self, campaign_id: str
+    ) -> list[dict]:
+        """List all plan revisions for a campaign."""
+        async with get_session() as session:
+            stmt = (
+                select(DBCampaignPlan)
+                .where(DBCampaignPlan.campaign_id == campaign_id)
+                .order_by(DBCampaignPlan.revision.desc())
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [
+                {
+                    "id": r.id,
+                    "campaign_id": r.campaign_id,
+                    "revision": r.revision,
+                    "plan_data": r.plan_data,
+                    "created_at": r.created_at,
+                }
+                for r in rows
+            ]
 
 
 # Module-level singleton

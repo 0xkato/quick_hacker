@@ -122,6 +122,31 @@ class IssueService:
             rows = result.scalars().all()
             return [_db_to_response(r) for r in rows]
 
+    async def get_regression_test_for_issue(
+        self, issue_id: str
+    ) -> Optional[dict]:
+        """Return the regression test for an issue, or None if not found."""
+        async with get_session() as session:
+            stmt = (
+                select(DBRegressionTest)
+                .where(DBRegressionTest.issue_id == issue_id)
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "issue_id": row.issue_id,
+                "file_ref": row.file_ref,
+                "created_at": (
+                    row.created_at.isoformat()
+                    if row.created_at
+                    else None
+                ),
+            }
+
     async def create_regression_test(
         self,
         issue_id: str,

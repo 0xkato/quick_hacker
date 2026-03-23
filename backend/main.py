@@ -16,10 +16,13 @@ from routers import findings
 from routers import reports
 from routers import simple_report
 from routers import campaigns as campaigns_router
+from routers import targets as targets_router
 from routers import lanes as lanes_router
 from routers import runs as runs_router
 from routers import artifacts as artifacts_router
 from routers import issues as issues_router
+from routers import harnesses as harnesses_router
+from routers import oracle_packs as oracle_packs_router
 from routers.websocket import set_main_loop
 from database import init_db
 from database.connection import engine
@@ -142,6 +145,12 @@ app.include_router(
     dependencies=[Depends(require_auth)],
 )
 app.include_router(
+    targets_router.router,
+    prefix="/api/targets",
+    tags=["Targets"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
     lanes_router.router,
     prefix="/api/lanes",
     tags=["Lanes"],
@@ -163,6 +172,18 @@ app.include_router(
     issues_router.router,
     prefix="/api/issues",
     tags=["Issues"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    harnesses_router.router,
+    prefix="/api/harnesses",
+    tags=["Harnesses"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    oracle_packs_router.router,
+    prefix="/api/oracle-packs",
+    tags=["Oracle Packs"],
     dependencies=[Depends(require_auth)],
 )
 

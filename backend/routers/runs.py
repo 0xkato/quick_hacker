@@ -44,3 +44,15 @@ async def cancel_run(
     if not result:
         raise HTTPException(status_code=404, detail="Run not found")
     return result
+
+
+@router.get("/{run_id}/logs")
+async def get_run_logs(
+    run_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Get logs for a run lane (stub for v1)."""
+    run = await run_lane_service.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"logs": [], "total": 0}

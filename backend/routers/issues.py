@@ -30,3 +30,18 @@ async def revalidate_issue(
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
     return {"status": "revalidation_queued"}
+
+
+@router.get("/{issue_id}/regression-test")
+async def get_issue_regression_test(
+    issue_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Get the regression test for an issue."""
+    issue = await issue_service.get_issue(issue_id)
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    test = await issue_service.get_regression_test_for_issue(issue_id)
+    if not test:
+        return {"regression_test": None}
+    return test

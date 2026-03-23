@@ -1,9 +1,27 @@
-"""Campaign CRUD endpoints -- create, list, get campaigns."""
+"""Campaign CRUD endpoints -- create, list, get, lifecycle, plan, graph."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 from middleware.auth import AuthContext, require_auth
 from models.campaign_schemas import CampaignCreateRequest, CampaignResponse, LaneSpecResponse, TargetResponse
 from services.campaign_service import campaign_service
+
+
+class CreateLaneRequest(BaseModel):
+    """Request body for creating a lane within a campaign."""
+    target_id: str
+    engine: str = "schemathesis"
+    structure_model: str = "raw"
+    input_producer: str = "mutation"
+    feedback_models: list[str] | None = None
+    oracle_packs: list[str] | None = None
+    budget_seconds: int | None = None
+    seed_sources: list[str] | None = None
+
+
+class ReprioritizeRequest(BaseModel):
+    """Request body for reprioritizing a target."""
+    priority_score: float
 
 router = APIRouter()
 
@@ -153,3 +171,144 @@ async def list_campaign_issues(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return await issue_service.list_issues(campaign_id)
+
+
+# ---------------------------------------------------------------------------
+# Campaign lifecycle: pause / resume / cancel
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{campaign_id}/pause", response_model=CampaignResponse)
+async def pause_campaign(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Pause a running campaign."""
+    result = await campaign_service.update_campaign_status(campaign_id, "paused")
+    if not result:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return result
+
+
+@router.post("/{campaign_id}/resume", response_model=CampaignResponse)
+async def resume_campaign(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Resume a paused campaign."""
+    result = await campaign_service.update_campaign_status(campaign_id, "running")
+    if not result:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return result
+
+
+@router.post("/{campaign_id}/cancel", response_model=CampaignResponse)
+async def cancel_campaign(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Cancel a campaign."""
+    result = await campaign_service.update_campaign_status(campaign_id, "cancelled")
+    if not result:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Campaign plan & graph
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{campaign_id}/plan")
+async def get_campaign_plan(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Get the current (latest revision) plan for a campaign."""
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    plan = await campaign_service.get_current_plan(campaign_id)
+    if not plan:
+        return {"id": None, "campaign_id": campaign_id, "revision": 0, "plan_data": {}, "created_at": None}
+    return plan
+
+
+@router.get("/{campaign_id}/plans")
+async def list_campaign_plans(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Get plan revision history for a campaign."""
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await campaign_service.list_plans(campaign_id)
+
+
+@router.get("/{campaign_id}/graph")
+async def get_campaign_graph(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Get campaign graph (targets, lanes, artifacts as nodes)."""
+    from services.target_service import target_service
+    from services.lane_service import lane_service
+    from services.artifact_service import artifact_service
+
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    targets = await target_service.list_targets(campaign_id)
+    nodes = []
+    edges = []
+
+    for t in targets:
+        nodes.append({"id": t.id, "type": "target", "label": t.entrypoint})
+        lanes = await lane_service.list_lane_specs(target_id=t.id)
+        for lane in lanes:
+            nodes.append({"id": lane.id, "type": "lane", "label": lane.engine})
+            edges.append({"source": t.id, "target": lane.id})
+
+    artifacts = await artifact_service.list_artifacts(campaign_id)
+    for a in artifacts:
+        nodes.append({"id": a.id, "type": "artifact", "label": a.type.value})
+
+    return {"nodes": nodes, "edges": edges}
+
+
+# ---------------------------------------------------------------------------
+# POST lane within campaign context
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{campaign_id}/lanes", response_model=LaneSpecResponse)
+async def create_campaign_lane(
+    campaign_id: str,
+    body: CreateLaneRequest,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Create a new lane spec within a campaign's target."""
+    from services.lane_service import lane_service
+    from services.target_service import target_service
+
+    campaign = await campaign_service.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    # Verify the target belongs to this campaign
+    target = await target_service.get_target(body.target_id)
+    if not target or target.campaign_id != campaign_id:
+        raise HTTPException(status_code=400, detail="Target not found or does not belong to this campaign")
+
+    return await lane_service.create_lane_spec(
+        target_id=body.target_id,
+        engine=body.engine,
+        structure_model=body.structure_model,
+        input_producer=body.input_producer,
+        feedback_models=body.feedback_models,
+        oracle_packs=body.oracle_packs,
+        budget_seconds=body.budget_seconds,
+        seed_sources=body.seed_sources,
+    )

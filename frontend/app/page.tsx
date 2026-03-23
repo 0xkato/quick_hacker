@@ -347,7 +347,7 @@ export default function Home() {
             title="Campaigns"
           >
             <Rocket className="w-6 h-6" />
-            {campaignMgmt.campaigns.some(c => (c as any).status === 'running') && (
+            {campaignMgmt.campaigns.some(c => c.status === 'running') && (
               <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-accent scan-indicator" />
             )}
           </button>
@@ -473,6 +473,7 @@ export default function Home() {
                   onCreateCampaign={campaignMgmt.createCampaign as any}
                   onStartCampaign={campaignMgmt.startCampaign as any}
                   onPauseCampaign={campaignMgmt.pauseCampaign as any}
+                  onResumeCampaign={campaignMgmt.resumeCampaign as any}
                   onCancelCampaign={campaignMgmt.cancelCampaign as any}
                   repoId={currentProject.id}
                 />
@@ -513,7 +514,7 @@ export default function Home() {
                   <option value="">Select campaign...</option>
                   {campaignMgmt.campaigns.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {(c as any).name || c.id} ({(c as any).status || 'unknown'})
+                      {c.preset} campaign ({c.status})
                     </option>
                   ))}
                 </select>
@@ -538,7 +539,7 @@ export default function Home() {
                   <option value="">Select campaign...</option>
                   {campaignMgmt.campaigns.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {(c as any).name || c.id} ({(c as any).status || 'unknown'})
+                      {c.preset} campaign ({c.status})
                     </option>
                   ))}
                 </select>
@@ -644,10 +645,10 @@ export default function Home() {
           {currentProject.file_count > 0 && (
             <span>{currentProject.file_count} files</span>
           )}
-          {campaignMgmt.campaigns.filter(c => (c as any).status === 'running').length > 0 && (
+          {campaignMgmt.campaigns.filter(c => c.status === 'running').length > 0 && (
             <span className="flex items-center gap-1">
               <RefreshCw className="w-3 h-3 animate-spin" />
-              {campaignMgmt.campaigns.filter(c => (c as any).status === 'running').length} running
+              {campaignMgmt.campaigns.filter(c => c.status === 'running').length} running
             </span>
           )}
           <span className="flex items-center gap-1">

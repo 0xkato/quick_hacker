@@ -524,6 +524,18 @@ export interface CampaignCreateRequest {
   target_scope?: string;
   directed_targets?: string[];
   custom_oracles?: string[];
+  max_lm_jobs?: number;
+  seed_sources?: string[];
+  corpus_reuse_policy?: string;
+  actor_profiles?: string[];
+  env_profile?: Record<string, unknown>;
+  methodology_overrides?: Record<string, unknown>;
+  target_filters?: Record<string, unknown>;
+  plateau_window_seconds?: number;
+  max_compilation_failures_per_lane?: number;
+  max_steering_cycles?: number;
+  repro_attempts?: number;
+  minimization_budget_seconds?: number;
 }
 
 export interface Campaign {
@@ -547,7 +559,7 @@ export interface Target {
   kind: TargetKind;
   entrypoint: string;
   language?: string;
-  schemas?: string[];
+  schemas?: unknown;
   stateful: boolean;
   actors?: string[];
   reset_strategy?: string;

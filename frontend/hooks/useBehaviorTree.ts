@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BTNode, BTNodeUpdate } from '@/types';
-import { agents as agentsApi } from '@/lib/api';
 
 interface UseBehaviorTreeOptions {
   selectedAgentId: string | null;
@@ -131,19 +130,16 @@ export function useBehaviorTree({ selectedAgentId, isAuthenticated }: UseBehavio
     });
   }, []);
 
-  const loadFullTree = useCallback(async (agentId: string) => {
+  // Behavior tree router does not exist on the backend — stub loadFullTree as a no-op.
+  const loadFullTree = useCallback(async (_agentId: string) => {
     setIsLoading(true);
     try {
-      const treeNodes = await agentsApi.getBehaviorTree(agentId);
-      if (treeNodes.length > 0) {
-        addNodes(treeNodes);
-      }
-    } catch (err) {
-      console.error('[BehaviorTree] Failed to load tree:', err);
+      // No backend behavior-tree endpoint available.
+      // Tree nodes are populated via WebSocket bt_node_add / bt_node_batch events.
     } finally {
       setIsLoading(false);
     }
-  }, [addNodes]);
+  }, []);
 
   // Reset when agent changes
   useEffect(() => {

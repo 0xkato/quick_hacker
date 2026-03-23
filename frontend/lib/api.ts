@@ -7,6 +7,7 @@ import type {
   RepoCloneRequest,
   FileNode,
   FileContent,
+  Finding,
   CampaignCreateRequest,
   SnapshotInfo,
   SessionSnapshot,

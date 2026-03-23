@@ -3,596 +3,234 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Files,
-  Search,
+  Crosshair,
+  Rocket,
+  BarChart3,
+  AlertTriangle,
+  Shield,
+  Network,
+  Compass,
   GitBranch,
-  Bug,
   Settings,
+  MessageSquare,
+  X,
   ChevronRight,
   RefreshCw,
   Circle,
-  X,
-  MessageSquare,
-  LogOut,
   FolderGit2,
-  Network,
-  Brain,
-  Shield,
+  LogOut,
 } from 'lucide-react';
+
+// Auth
+import { useAuth } from '@/hooks/useAuth';
+import { AuthScreen } from '@/components/Auth';
+
+// Layout / shell
+import { usePanelLayout, type ActivityView } from '@/hooks/usePanelLayout';
+import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
+import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
 import { MonacoEditor } from '@/components/Editor/MonacoEditor';
 import { FileTree } from '@/components/FileExplorer/FileTree';
-import { AgentManager } from '@/components/AgentPanel/AgentManager';
-import { FindingsList } from '@/components/FindingsPanel/FindingsList';
-import { FindingDrawer } from '@/components/FindingsPanel/FindingDrawer';
-import { FindingFullView } from '@/components/FindingsPanel/FindingFullView';
 import { ChatPanel } from '@/components/ChatPanel/ChatPanel';
-import { SettingsModal } from '@/components/SettingsModal/SettingsModal';
-import { ProjectSelector } from '@/components/ProjectSelector/ProjectSelector';
-import { FlowVisualization } from '@/components/FlowVisualization/FlowVisualization';
-import { LLMInteractionPanel } from '@/components/LLMInteractionPanel';
-import { BehaviorTree, BTNodeDetail } from '@/components/BehaviorTree';
-import { ReportModal } from '@/components/ReportPanel';
-import { ThreatModelModal } from '@/components/ThreatModel/ThreatModelModal';
-import { AuthModal, AuthScreen } from '@/components/Auth';
 import { SessionControls } from '@/components/SessionControls';
 import { ResumeDialog } from '@/components/ResumeDialog';
-import { useWebSocket } from '@/hooks/useWebSocket';
-import { useAuth } from '@/hooks/useAuth';
-import { useAgentManagement } from '@/hooks/useAgentManagement';
-import { useFindingsManagement } from '@/hooks/useFindingsManagement';
-import { useProjectWorkspace } from '@/hooks/useProjectWorkspace';
-import { usePanelLayout, type ActivityView } from '@/hooks/usePanelLayout';
-import { useSessionManagement } from '@/hooks/useSessionManagement';
-import { useObservability } from '@/hooks/useObservability';
-import { useBehaviorTree } from '@/hooks/useBehaviorTree';
-import { agents as agentsApi, projects as projectsApi, files as filesApi, setAuthFunctions, type Project } from '@/lib/api';
-import type {
-  InvestigationReport,
-} from '@/types';
 
-type ThreatModel = 'A' | 'AB' | 'ABC';
+// Campaign components
+import { CampaignManager } from '@/components/Campaigns';
+import { TargetList } from '@/components/Targets';
+import { CoveragePanel } from '@/components/Coverage';
+import { FailuresPanel } from '@/components/Failures';
+import { IssuesList } from '@/components/Findings';
+import { CampaignGraph } from '@/components/Graph';
+import { SteeringPanel } from '@/components/Steering';
+import { BehaviorTree, BTNodeDetail } from '@/components/BehaviorTree';
+
+// Campaign hooks
+import { useCampaignManagement } from '@/hooks/useCampaignManagement';
+import { useTargets } from '@/hooks/useTargets';
+import { useLanes } from '@/hooks/useLanes';
+import { useCoverage } from '@/hooks/useCoverage';
+import { useArtifacts } from '@/hooks/useArtifacts';
+import { useIssues } from '@/hooks/useIssues';
+import { useSteering } from '@/hooks/useSteering';
+
+// Existing hooks
+import { useProjectWorkspace } from '@/hooks/useProjectWorkspace';
+import { useWebSocket } from '@/hooks/useWebSocket';
+import { useSessionManagement } from '@/hooks/useSessionManagement';
+import { useBehaviorTree } from '@/hooks/useBehaviorTree';
+
+import { projects as projectsApi, files as filesApi, setAuthFunctions, type Project } from '@/lib/api';
+
+// ---------------------------------------------------------------------------
+// Sidebar title map
+// ---------------------------------------------------------------------------
+const SIDEBAR_TITLES: Partial<Record<ActivityView, string>> = {
+  explorer: 'EXPLORER',
+  targets: 'TARGETS',
+  campaigns: 'CAMPAIGNS',
+  coverage: 'COVERAGE',
+  failures: 'FAILURES',
+  findings: 'ISSUES',
+  steering: 'STEERING',
+};
+
+// Views that hide the sidebar and take over the main content area
+const FULL_WIDTH_VIEWS: ActivityView[] = ['graph', 'behavior'];
+
+// Views that show content in the sidebar
+const SIDEBAR_VIEWS: ActivityView[] = [
+  'explorer', 'targets', 'campaigns', 'coverage', 'failures', 'findings', 'steering',
+];
 
 export default function Home() {
-  // Project state
+  // ---- project state ----
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [isProjectLoading, setIsProjectLoading] = useState(true);
-  const [showThreatModelModal, setShowThreatModelModal] = useState(false);
-  const [threatModelPresetPreview, setThreatModelPresetPreview] = useState<ThreatModel | null>(null);
 
-  // Report state
-  const [currentReport, setCurrentReport] = useState<InvestigationReport | null>(null);
-  const [showReportModal, setShowReportModal] = useState(false);
-
-  // Modal state
+  // ---- modals ----
   const [showSettings, setShowSettings] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
 
-  // Chat state (post-scan contextual chat)
-  const [chatFlowContextPack, setChatFlowContextPack] = useState<unknown | null>(null);
-  const [chatSeedMessage, setChatSeedMessage] = useState<{ id: string; text: string } | null>(null);
-
-  // Auth state
+  // ---- auth ----
   const { user, isAuthenticated, isLoading: isAuthLoading, logout, getAccessToken, refreshToken } = useAuth();
 
-  // WebSocket connection state - tracked separately to pass to useAgentManagement
-  // This allows us to disable polling when WebSocket is connected
-  const [wsConnectedState, setWsConnectedState] = useState(false);
-
-  // Custom hooks for state management
+  // ---- layout ----
   const panels = usePanelLayout();
   const workspace = useProjectWorkspace({ currentProject });
-  const agentMgmt = useAgentManagement({
-    projectId: currentProject?.id || null,
-    isAuthenticated,
-    isWebSocketConnected: wsConnectedState,
-  });
-  const findingsMgmt = useFindingsManagement({
-    projectId: currentProject?.id || null,
-    agents: agentMgmt.agents,
-    selectedAgentId: agentMgmt.selectedAgentId,
-    activeView: panels.activeView,
-  });
-  const sessionMgmt = useSessionManagement({
-    currentProjectId: currentProject?.id || null,
-    isAuthenticated,
-    agents: agentMgmt.agents,
-  });
-  const observability = useObservability({
-    selectedAgentId: agentMgmt.selectedAgentId,
-    isAuthenticated,
-  });
+
+  // ---- campaign state ----
+  const campaignMgmt = useCampaignManagement({ projectId: currentProject?.id ?? null, isAuthenticated });
+  const targetData = useTargets(campaignMgmt.selectedCampaignId);
+  const _laneData = useLanes(campaignMgmt.selectedCampaignId);
+  const coverageData = useCoverage(campaignMgmt.selectedCampaignId);
+  const artifactData = useArtifacts(campaignMgmt.selectedCampaignId);
+  const issueData = useIssues(campaignMgmt.selectedCampaignId);
+  const steeringData = useSteering(campaignMgmt.selectedCampaignId);
   const behaviorTree = useBehaviorTree({
-    selectedAgentId: agentMgmt.selectedAgentId,
+    selectedAgentId: campaignMgmt.selectedCampaignId,
     isAuthenticated,
+  });
+
+  // ---- session ----
+  const sessionMgmt = useSessionManagement({
+    currentProjectId: currentProject?.id ?? null,
+    isAuthenticated,
+    agents: [] as any, // campaigns don't use the old agent array
+  });
+
+  // ---- websocket ----
+  const { isConnected } = useWebSocket({
+    enabled: isAuthenticated,
+    onBTNodeAdd: useCallback((agentId: string, node: any) => {
+      if (agentId !== campaignMgmt.selectedCampaignId) return;
+      behaviorTree.addNode(node);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [campaignMgmt.selectedCampaignId, behaviorTree.addNode]),
+    onBTNodeUpdate: useCallback((agentId: string, update: any) => {
+      if (agentId !== campaignMgmt.selectedCampaignId) return;
+      behaviorTree.updateNode(update);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [campaignMgmt.selectedCampaignId, behaviorTree.updateNode]),
+    onBTNodeBatch: useCallback((agentId: string, nodes: any[]) => {
+      if (agentId !== campaignMgmt.selectedCampaignId) return;
+      behaviorTree.addNodes(nodes);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [campaignMgmt.selectedCampaignId, behaviorTree.addNodes]),
   });
 
   const projectLoadTokenRef = useRef(0);
 
-  // Debouncing/throttling refs for WebSocket message batching
-  // Accumulator refs for batching LLM interactions and tool details
-  const llmInteractionBatchRef = useRef<any[]>([]);
-  const toolDetailBatchRef = useRef<any[]>([]);
-  const llmFlushTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const toolFlushTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Throttling refs for progress updates (max 5/sec = 200ms interval)
-  const lastProgressUpdateRef = useRef<Record<string, number>>({});
-  const pendingProgressRef = useRef<Record<string, any>>({});
-  const progressFlushTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
-
-  // Debouncing ref for refreshFindings (500ms)
-  const refreshFindingsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Track last agent status to avoid redundant updates
-  const lastAgentStatusRef = useRef<Record<string, string>>({});
-
-  // Auto-select agent for findings view - now handled by useFindingsManagement hook
-  // Persist selected agent across refreshes - now handled by useAgentManagement hook
-
-  // Set up API auth functions
+  // ---- set up API auth ----
   useEffect(() => {
     setAuthFunctions(getAccessToken, refreshToken);
   }, [getAccessToken, refreshToken]);
 
-  // Debounced refreshFindings - waits 500ms after last call before executing
-  const debouncedRefreshFindings = useCallback(() => {
-    if (refreshFindingsTimeoutRef.current) {
-      clearTimeout(refreshFindingsTimeoutRef.current);
-    }
-    refreshFindingsTimeoutRef.current = setTimeout(() => {
-      findingsMgmt.refreshFindings();
-      refreshFindingsTimeoutRef.current = null;
-    }, 500);
-  }, [findingsMgmt]);
-
-  // Flush batched LLM interactions to state
-  const flushLlmInteractions = useCallback(() => {
-    if (llmInteractionBatchRef.current.length === 0) return;
-    const batch = llmInteractionBatchRef.current;
-    llmInteractionBatchRef.current = [];
-    observability.setLlmInteractions((prev) => [...prev, ...batch]);
-  }, [observability]);
-
-  // Flush batched tool details to state
-  const flushToolDetails = useCallback(() => {
-    if (toolDetailBatchRef.current.length === 0) return;
-    const batch = toolDetailBatchRef.current;
-    toolDetailBatchRef.current = [];
-    observability.setToolDetails((prev) => [...prev, ...batch]);
-  }, [observability]);
-
-  // Cleanup timeouts on unmount
+  // ---- initialise project on mount ----
   useEffect(() => {
-    return () => {
-      if (llmFlushTimeoutRef.current) clearTimeout(llmFlushTimeoutRef.current);
-      if (toolFlushTimeoutRef.current) clearTimeout(toolFlushTimeoutRef.current);
-      if (refreshFindingsTimeoutRef.current) clearTimeout(refreshFindingsTimeoutRef.current);
-      Object.values(progressFlushTimeoutRef.current).forEach(clearTimeout);
-    };
-  }, []);
-
-  // WebSocket - only connect after auth is ready (JWT or legacy session token)
-  const { isConnected } = useWebSocket({
-    enabled: isAuthenticated,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onFinding: useCallback((finding: any) => {
-      const projectId = currentProject?.id;
-      if (!projectId) return;
-
-      // Only add finding if it belongs to the current project.
-      // (The backend broadcasts all events to all clients.)
-      findingsMgmt.setFindings((prev) => {
-        if (finding?.repo_id !== projectId) return prev;
-
-        // Deduplicate by (agent_id, id) to avoid duplicates when we also refresh from the API.
-        const alreadyPresent = prev.some(
-          (f) => f.id === finding.id && f.agent_id === finding.agent_id
-        );
-        if (alreadyPresent) return prev;
-
-        return [finding, ...prev];
-      });
-    }, [currentProject?.id, findingsMgmt.setFindings]),
-    // Throttled progress handler - max 5 updates per second (200ms interval) per agent
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onProgress: useCallback((agentId: string, progress: any) => {
-      const now = Date.now();
-      const lastUpdate = lastProgressUpdateRef.current[agentId] || 0;
-      const timeSinceLastUpdate = now - lastUpdate;
-      const THROTTLE_INTERVAL = 200; // 5 updates/sec max
-
-      // Always store the latest progress for this agent
-      pendingProgressRef.current[agentId] = progress;
-
-      // If enough time has passed, update immediately
-      if (timeSinceLastUpdate >= THROTTLE_INTERVAL) {
-        lastProgressUpdateRef.current[agentId] = now;
-        agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: progress }));
-
-        // Check for flow updates in progress data
-        if (progress && (progress as any).type === 'flow_update' && (progress as any).flow) {
-          if (agentId === agentMgmt.selectedAgentId) {
-            agentMgmt.setAgentFlow((progress as any).flow);
-          }
-        }
-      } else {
-        // Schedule a flush for the pending progress if not already scheduled
-        if (!progressFlushTimeoutRef.current[agentId]) {
-          progressFlushTimeoutRef.current[agentId] = setTimeout(() => {
-            const pendingProgress = pendingProgressRef.current[agentId];
-            if (pendingProgress) {
-              lastProgressUpdateRef.current[agentId] = Date.now();
-              agentMgmt.setAgentProgress((prev) => ({ ...prev, [agentId]: pendingProgress }));
-
-              // Check for flow updates
-              if (pendingProgress && (pendingProgress as any).type === 'flow_update' && (pendingProgress as any).flow) {
-                if (agentId === agentMgmt.selectedAgentId) {
-                  agentMgmt.setAgentFlow((pendingProgress as any).flow);
-                }
-              }
-              delete pendingProgressRef.current[agentId];
-            }
-            delete progressFlushTimeoutRef.current[agentId];
-          }, THROTTLE_INTERVAL - timeSinceLastUpdate);
-        }
-      }
-    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentProgress, agentMgmt.setAgentFlow]),
-    // Agent status handler - only update if status actually changed
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onAgentStatus: useCallback((agentId: string, status: string) => {
-      const isKnownAgent = agentMgmt.agents.some((a) => a.id === agentId);
-      if (!isKnownAgent) return;
-
-      // Only update if status actually changed
-      if (lastAgentStatusRef.current[agentId] === status) {
-        return;
-      }
-      lastAgentStatusRef.current[agentId] = status;
-
-      agentMgmt.setAgents((prev) =>
-        prev.map((a) =>
-          a.id === agentId ? { ...a, status: status as any } : a
-        )
-      );
-      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-        // Debounced refresh - ensures findings are fresh even if we missed WS messages
-        debouncedRefreshFindings();
-      }
-    }, [agentMgmt.agents, agentMgmt.setAgents, debouncedRefreshFindings]),
-    // Batched LLM request handler - collect for 150ms then flush
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onLLMRequest: useCallback((agentId: string, interaction: any) => {
-      if (agentId !== agentMgmt.selectedAgentId) return;
-
-      // Add to batch
-      llmInteractionBatchRef.current.push(interaction);
-
-      // Schedule flush if not already scheduled
-      if (!llmFlushTimeoutRef.current) {
-        llmFlushTimeoutRef.current = setTimeout(() => {
-          flushLlmInteractions();
-          llmFlushTimeoutRef.current = null;
-        }, 150);
-      }
-    }, [agentMgmt.selectedAgentId, flushLlmInteractions]),
-    // Batched LLM response handler - collect for 150ms then flush
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onLLMResponse: useCallback((agentId: string, interaction: any) => {
-      if (agentId !== agentMgmt.selectedAgentId) return;
-
-      // Add to batch
-      llmInteractionBatchRef.current.push(interaction);
-
-      // Schedule flush if not already scheduled
-      if (!llmFlushTimeoutRef.current) {
-        llmFlushTimeoutRef.current = setTimeout(() => {
-          flushLlmInteractions();
-          llmFlushTimeoutRef.current = null;
-        }, 150);
-      }
-    }, [agentMgmt.selectedAgentId, flushLlmInteractions]),
-    // Batched tool detail handler - collect for 150ms then flush
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onToolDetail: useCallback((agentId: string, detail: any) => {
-      if (agentId !== agentMgmt.selectedAgentId) return;
-
-      // Add to batch
-      toolDetailBatchRef.current.push(detail);
-
-      // Schedule flush if not already scheduled
-      if (!toolFlushTimeoutRef.current) {
-        toolFlushTimeoutRef.current = setTimeout(() => {
-          flushToolDetails();
-          toolFlushTimeoutRef.current = null;
-        }, 150);
-      }
-    }, [agentMgmt.selectedAgentId, flushToolDetails]),
-    // Flow update handler - receives real-time flow updates via WebSocket
-    // This is the primary flow update mechanism when WebSocket is connected
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onFlowUpdate: useCallback((agentId: string, flow: any) => {
-      if (agentId === agentMgmt.selectedAgentId) {
-        agentMgmt.setAgentFlow(flow);
-      }
-    }, [agentMgmt.selectedAgentId, agentMgmt.setAgentFlow]),
-    // Behavior Tree handlers — filter by selected agent (same pattern as LLM interactions)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onBTNodeAdd: useCallback((agentId: string, node: any) => {
-      if (agentId !== agentMgmt.selectedAgentId) return;
-      behaviorTree.addNode(node);
-    }, [agentMgmt.selectedAgentId, behaviorTree.addNode]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onBTNodeUpdate: useCallback((agentId: string, update: any) => {
-      if (agentId !== agentMgmt.selectedAgentId) return;
-      behaviorTree.updateNode(update);
-    }, [agentMgmt.selectedAgentId, behaviorTree.updateNode]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    onBTNodeBatch: useCallback((agentId: string, nodes: any[]) => {
-      if (agentId !== agentMgmt.selectedAgentId) return;
-      behaviorTree.addNodes(nodes);
-    }, [agentMgmt.selectedAgentId, behaviorTree.addNodes]),
-    onReportReady: useCallback(async (agentId: string, reportId: string) => {
-      // Auto-fetch and show report when ready
-      try {
-        const report = await agentsApi.getReport(agentId, reportId);
-        setCurrentReport(report);
-        setShowReportModal(true);
-      } catch (err) {
-        console.error('Failed to load report:', err);
-      }
-    }, []),
-  });
-
-  // Load flow and observability data - now handled by useAgentManagement and useObservability hooks
-  // Load call-tree routes and build call tree - now handled by useCallTree hook
-
-  // Sync WebSocket connection state to local state for useAgentManagement
-  // This allows polling to be disabled when WebSocket is connected
-  useEffect(() => {
-    setWsConnectedState(isConnected);
-  }, [isConnected]);
-
-  // Initialize auth and check project status on mount
-  useEffect(() => {
-    if (isAuthLoading || !isAuthenticated) {
-      return;
-    }
-
+    if (isAuthLoading || !isAuthenticated) return;
     setIsProjectLoading(true);
     let cancelled = false;
-    const initialize = async () => {
+    const init = async () => {
       try {
         const status = await projectsApi.getStatus();
         if (cancelled) return;
         if (status.current_project) {
           setCurrentProject(status.current_project);
-          // Load project data when restoring from a previous session
           await loadProjectData(status.current_project);
         }
       } catch (err) {
-        console.error('Failed to initialize:', err);
+        console.error('Failed to initialise:', err);
       } finally {
         if (!cancelled) setIsProjectLoading(false);
       }
     };
-    initialize();
-    return () => {
-      cancelled = true;
-    };
+    init();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthLoading, isAuthenticated]);
 
-  // Check for existing snapshot - now handled by useSessionManagement hook
-
-  // Load project data when entering a project
+  // ---- load project data ----
   const loadProjectData = async (project: Project) => {
     const loadToken = ++projectLoadTokenRef.current;
-
-    // Load critical UI state first (agents + findings) so refresh doesn't look "empty" if file-tree is slow.
-    try {
-      const [agents, findings] = await Promise.all([
-        agentsApi.list(project.id),
-        agentsApi.getAllFindings(project.id),
-      ]);
-      if (projectLoadTokenRef.current !== loadToken) return;
-      agentMgmt.setAgents(agents);
-      findingsMgmt.setFindings(findings);
-    } catch (err) {
-      console.error('Failed to load agents/findings:', err);
-    }
-
-    // Load file tree after (don’t block the main UI on it).
+    // Load file tree (non-blocking).
     const needsFileTree = project.repo_name || project.is_cloned;
     if (!needsFileTree) {
       if (projectLoadTokenRef.current !== loadToken) return;
       workspace.setFileTree(null);
       return;
     }
-
     filesApi.getTree(project.id, 1, '', { maxChildren: 200, maxNodes: 5000 })
       .then((tree) => {
         if (projectLoadTokenRef.current !== loadToken) return;
         workspace.setFileTree(tree);
       })
-      .catch((err) => {
-        console.error('Failed to load file tree:', err);
-      });
+      .catch((err) => console.error('Failed to load file tree:', err));
   };
 
-  // Handle entering a project
+  // ---- project enter / exit ----
   const handleProjectEnter = async (project: Project) => {
     setCurrentProject(project);
     workspace.clearFile();
-    agentMgmt.setAgents([]);
-    findingsMgmt.setFindings([]);
     workspace.setFileTree(null);
-    findingsMgmt.setSelectedFindingsAgentId(null);
-    findingsMgmt.setUserSelectedFindingsAgentId(false);
     await loadProjectData(project);
   };
 
-  // Handle exiting a project
   const handleProjectExit = async () => {
-    try {
-      await projectsApi.exit();
-    } catch (err) {
-      console.error('Failed to exit project:', err);
-    }
+    try { await projectsApi.exit(); } catch (err) { console.error('Failed to exit project:', err); }
     setCurrentProject(null);
     workspace.clearFile();
-    agentMgmt.setAgents([]);
-    findingsMgmt.setFindings([]);
     workspace.setFileTree(null);
-    findingsMgmt.setSelectedFindingsAgentId(null);
-    findingsMgmt.setUserSelectedFindingsAgentId(false);
   };
 
-  const openThreatModelModal = (preset?: ThreatModel) => {
-    if (!currentProject) return;
-    setThreatModelPresetPreview(preset || (currentProject.threat_model || 'AB'));
-    setShowThreatModelModal(true);
-  };
-
-  const handleThreatModelProfileUpdated = async () => {
-    if (!currentProject) return;
-    try {
-      const refreshed = await projectsApi.get(currentProject.id);
-      setCurrentProject(refreshed);
-    } catch (err) {
-      console.error('Failed to refresh project after threat model update:', err);
-    }
-  };
-
-  // Select file
+  // ---- file selection ----
   const handleFileSelect = async (path: string) => {
     await workspace.selectFile(path);
   };
 
-  // Finding click - open drawer
-  const handleFindingClick = (finding: any) => {
-    findingsMgmt.setSelectedFindingForDrawer(finding);
-  };
-
-  // Navigate to file from drawer
-  const handleNavigateToFile = async (filePath: string) => {
-    await handleFileSelect(filePath);
-    panels.setActiveView('explorer');
-  };
-
-  const handleClearChatFlowContext = useCallback(() => {
-    setChatFlowContextPack(null);
-  }, []);
-
-  const handleOpenChatFromFlow = useCallback(
-    async (payload: { contextPack: unknown; filePath?: string; seedText?: string }) => {
-      setChatFlowContextPack(payload.contextPack);
-
-      if (typeof payload.filePath === 'string' && payload.filePath.trim()) {
-        try {
-          await workspace.selectFile(payload.filePath.trim());
-        } catch (err) {
-          console.error('Failed to load file for chat context:', err);
-        }
-      }
-
-      panels.setShowChat(true);
-      if (typeof payload.seedText === 'string' && payload.seedText.trim()) {
-        setChatSeedMessage({ id: String(Date.now()), text: payload.seedText });
-      }
-    },
-    [panels, workspace]
-  );
-
-  // Agent callbacks
-  const handleAgentCreated = (agent: any) => {
-    agentMgmt.setAgents((prev) => [agent, ...prev]);
-  };
-
-  const handleAgentUpdated = (agent: any) => {
-    agentMgmt.setAgents((prev) => prev.map((a) => (a.id === agent.id ? agent : a)));
-  };
-
-  const handleAgentDeleted = (agentId: string) => {
-    agentMgmt.setAgents((prev) => prev.filter((a) => a.id !== agentId));
-    findingsMgmt.setFindings((prev) => prev.filter((f) => f.agent_id !== agentId));
-  };
-
-  // View report for an agent
-  const handleViewReport = async (agentId: string) => {
-    const report = await agentMgmt.loadReport(agentId);
-    if (report) {
-      setCurrentReport(report);
-      setShowReportModal(true);
-    }
-  };
-
-  // Download report
-  const handleDownloadReport = async (format: 'md' | 'json' | 'svg') => {
-    if (!currentReport) return;
-
-    try {
-      const blob = await agentsApi.downloadReport(currentReport.agent_id, format);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `report_${currentReport.agent_id}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Failed to download report:', err);
-    }
-  };
-
-  // Session restore handler
+  // ---- session restore ----
   const handleRestoreSession = useCallback(async () => {
     await sessionMgmt.restoreSession({
-      onFindingsRestore: (findings) => findingsMgmt.setFindings(findings),
-      onActiveViewRestore: (view) => panels.setActiveView(view),
-      onSelectedFileRestore: (path) => workspace.setSelectedPath(path),
-      onSelectedAgentRestore: (agentId) => agentMgmt.selectAgent(agentId),
+      onFindingsRestore: () => { /* no-op: campaign model doesn't use findings array */ },
+      onActiveViewRestore: (view: any) => panels.setActiveView(view),
+      onSelectedFileRestore: (path: string) => workspace.setSelectedPath(path),
+      onSelectedAgentRestore: (id: string) => campaignMgmt.setSelectedCampaignId(id),
     });
-  }, [sessionMgmt, findingsMgmt, panels, workspace, agentMgmt]);
+  }, [sessionMgmt, panels, workspace, campaignMgmt]);
 
-  // Handle showing dialog or auto-restore when snapshotInfo changes
   useEffect(() => {
     if (!sessionMgmt.snapshotInfo) return;
-
-    // Check if we have running agents (conflict)
-    const hasRunning = agentMgmt.agents.some(a => a.status === 'running');
-
-    if (!hasRunning) {
-      // Auto-restore if no conflict
-      handleRestoreSession();
-    }
-  }, [sessionMgmt.snapshotInfo, agentMgmt.agents, handleRestoreSession]);
+    handleRestoreSession();
+  }, [sessionMgmt.snapshotInfo, handleRestoreSession]);
 
   const handleKeepCurrent = useCallback(async () => {
     await sessionMgmt.keepCurrentSession();
   }, [sessionMgmt]);
 
-  const handleSessionPaused = useCallback(() => {
-    // Could show a toast notification here
-    console.log('Session paused successfully');
-  }, []);
+  // ---- derived ----
+  const isFullWidthView = FULL_WIDTH_VIEWS.includes(panels.activeView);
+  const showEditorArea = !isFullWidthView;
 
-  const handleSessionError = useCallback((error: string) => {
-    console.error('Session error:', error);
-    // Could show error toast here
-  }, []);
-
-  // Count running agents and findings
-  const runningAgents = agentMgmt.agents.filter((a) => a.status === 'running').length;
-  const criticalFindings = findingsMgmt.findings.filter((f) => f.severity === 'critical').length;
-  const highFindings = findingsMgmt.findings.filter((f) => f.severity === 'high').length;
-  const selectedAgent = agentMgmt.selectedAgentId ? agentMgmt.agents.find((a) => a.id === agentMgmt.selectedAgentId) : null;
-  const canQueueInvestigations = Boolean(
-    selectedAgent &&
-      ['deep_audit', 'custom'].includes(selectedAgent.agent_type)
-  );
-
-  // Show loading while checking project status
-  // Auth gate: Show loading while checking authentication
+  // ---- loading / auth gates ----
   if (isAuthLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-bg-primary">
@@ -601,7 +239,6 @@ export default function Home() {
     );
   }
 
-  // Auth gate: Show login screen if not authenticated
   if (!isAuthenticated) {
     return <AuthScreen />;
   }
@@ -614,7 +251,6 @@ export default function Home() {
     );
   }
 
-  // Show project selector if not in a project
   if (!currentProject) {
     return (
       <ProjectSelector
@@ -624,9 +260,12 @@ export default function Home() {
     );
   }
 
+  // =========================================================================
+  // MAIN IDE LAYOUT
+  // =========================================================================
   return (
     <div className="h-screen flex flex-col bg-bg-primary scanlines">
-      {/* Project header bar */}
+      {/* ---- HEADER ---- */}
       <header className="h-9 bg-bg-secondary flex items-center justify-between px-3 border-b border-border-subtle select-none">
         <div className="flex items-center gap-3">
           <span className="text-text-muted text-xs">quick_hack</span>
@@ -634,59 +273,25 @@ export default function Home() {
             <FolderGit2 className="w-4 h-4 text-accent" />
             <span className="text-sm font-medium">{currentProject.name}</span>
             {currentProject.repo_name && (
-              <span className="text-xs text-text-muted">
-                ({currentProject.repo_name})
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted">Threat model</span>
-            <select
-              value={(currentProject.threat_model || 'AB') as ThreatModel}
-              onChange={(e) => openThreatModelModal(e.target.value as ThreatModel)}
-              className="px-2 py-1 bg-bg-tertiary border border-border-default rounded text-xs"
-              title="Opens the Project Threat Model editor (changes require explicit reset/save)"
-            >
-              <option value="A">Internet (A)</option>
-              <option value="AB">Internet + Auth (A+B)</option>
-              <option value="ABC">Internet + Auth + Insider (A+B+C)</option>
-            </select>
-            {currentProject.profile_review_status === 'unreviewed' && (
-              <button
-                onClick={() => openThreatModelModal()}
-                className="px-2 py-0.5 rounded text-xs bg-yellow-900/40 text-yellow-200 border border-yellow-800 hover:bg-yellow-900/60"
-                title="Preset-derived profile; review to confirm attacker capabilities + repo_checkout semantics"
-              >
-                Unreviewed
-              </button>
+              <span className="text-xs text-text-muted">({currentProject.repo_name})</span>
             )}
           </div>
         </div>
+
         <div className="flex items-center gap-3">
           {isAuthenticated ? (
             <div className="flex items-center gap-4">
-              <span className="text-gray-400">
-                {user?.username}
-              </span>
-              <button
-                onClick={logout}
-                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded"
-              >
+              <span className="text-gray-400">{user?.username}</span>
+              <button onClick={logout} className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded">
                 Logout
               </button>
             </div>
-          ) : (
-            <button
-              onClick={() => setShowAuthModal(true)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium"
-            >
-              Login
-            </button>
-          )}
+          ) : null}
+
           <SessionControls
             sessionStatus={sessionMgmt.sessionStatus}
             onStatusChange={sessionMgmt.setSessionStatus}
-            hasRunningAgents={agentMgmt.agents.some(a => a.status === 'running')}
+            hasRunningAgents={false}
             activeView={panels.activeView}
             selectedFile={workspace.selectedPath}
             openPanels={[
@@ -694,10 +299,11 @@ export default function Home() {
               panels.showPanel ? 'panel' : '',
               panels.showChat ? 'chat' : '',
             ].filter(Boolean)}
-            selectedAgentId={agentMgmt.selectedAgentId}
-            onPaused={handleSessionPaused}
-            onError={handleSessionError}
+            selectedAgentId={campaignMgmt.selectedCampaignId}
+            onPaused={() => console.log('Session paused')}
+            onError={(err: string) => console.error('Session error:', err)}
           />
+
           <button
             onClick={handleProjectExit}
             className="btn btn-secondary btn-sm flex items-center gap-1"
@@ -709,101 +315,102 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Main layout */}
+      {/* ---- BODY ---- */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Activity bar */}
+        {/* ==== ACTIVITY BAR ==== */}
         <aside className="w-12 bg-bg-secondary flex flex-col items-center py-1 border-r border-border-subtle">
+          {/* Explorer */}
           <button
-            onClick={() => {
-              panels.setActiveView('explorer');
-              panels.setShowSidebar(true);
-            }}
+            onClick={() => { panels.setActiveView('explorer'); panels.setShowSidebar(true); }}
             className={`activity-icon ${panels.activeView === 'explorer' && panels.showSidebar ? 'active' : ''}`}
             title="Explorer"
           >
             <Files className="w-6 h-6" />
           </button>
+
+          {/* Targets */}
           <button
-            onClick={() => {
-              panels.setActiveView('agents');
-              panels.setShowSidebar(true);
-            }}
-            className={`activity-icon ${panels.activeView === 'agents' && panels.showSidebar ? 'active' : ''}`}
-            title="Agents"
+            onClick={() => { panels.setActiveView('targets'); panels.setShowSidebar(true); }}
+            className={`activity-icon ${panels.activeView === 'targets' && panels.showSidebar ? 'active' : ''}`}
+            title="Targets"
           >
-            <Bug className="w-6 h-6" />
-            {runningAgents > 0 && (
-              <span
-                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-accent scan-indicator"
-              />
-            )}
-            {runningAgents === 0 && agentMgmt.agents.some(a => a.status === 'paused') && (
-              <span
-                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-accent scan-indicator-paused"
-              />
-            )}
-            {runningAgents === 0 && agentMgmt.agents.some(a => a.status === 'completed' && a.findings_count > 0) &&
-             !agentMgmt.agents.some(a => a.status === 'running' || a.status === 'paused') && (
-              <span
-                className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${
-                  findingsMgmt.findings.some(f => f.severity === 'critical') ? 'bg-sev-critical' :
-                  findingsMgmt.findings.some(f => f.severity === 'high') ? 'bg-sev-high' : 'bg-accent'
-                }`}
-              />
-            )}
-          </button>
-          <button
-            onClick={() => {
-              if (panels.activeView === 'findings' && panels.showSidebar) {
-                // Already in sidebar mode - switch to full-screen
-                panels.setShowSidebar(false);
-              } else if (panels.activeView === 'findings' && !panels.showSidebar) {
-                // Already in full-screen - switch to sidebar
-                panels.setShowSidebar(true);
-              } else {
-                // Not in findings view - go to full-screen findings
-                panels.setActiveView('findings');
-                panels.setShowSidebar(false);
-              }
-            }}
-            className={`activity-icon ${panels.activeView === 'findings' ? 'active' : ''}`}
-            title="Findings (click again to toggle view)"
-          >
-            <Search className="w-6 h-6" />
-            {(criticalFindings > 0 || highFindings > 0) && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-sev-critical rounded-full" />
-            )}
-          </button>
-          <button
-            onClick={() => {
-              panels.setActiveView('flow');
-              panels.setShowSidebar(false);
-            }}
-            className={`activity-icon ${panels.activeView === 'flow' ? 'active' : ''}`}
-            title="Investigation Flow"
-          >
-            <Network className="w-6 h-6" />
-          </button>
-          <button
-            onClick={() => {
-              panels.setActiveView('llm');
-              panels.setShowSidebar(false);
-            }}
-            className={`activity-icon ${panels.activeView === 'llm' ? 'active' : ''}`}
-            title="LLM Interactions"
-          >
-            <Brain className="w-6 h-6" />
-            {observability.llmInteractions.length > 0 && (
+            <Crosshair className="w-6 h-6" />
+            {targetData.targets.length > 0 && (
               <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full" />
             )}
           </button>
+
+          {/* Campaigns */}
           <button
-            onClick={() => {
-              panels.setActiveView('behavior');
-              panels.setShowSidebar(false);
-            }}
+            onClick={() => { panels.setActiveView('campaigns'); panels.setShowSidebar(true); }}
+            className={`activity-icon ${panels.activeView === 'campaigns' && panels.showSidebar ? 'active' : ''}`}
+            title="Campaigns"
+          >
+            <Rocket className="w-6 h-6" />
+            {campaignMgmt.campaigns.some(c => (c as any).status === 'running') && (
+              <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-accent scan-indicator" />
+            )}
+          </button>
+
+          {/* Coverage */}
+          <button
+            onClick={() => { panels.setActiveView('coverage'); panels.setShowSidebar(true); }}
+            className={`activity-icon ${panels.activeView === 'coverage' && panels.showSidebar ? 'active' : ''}`}
+            title="Coverage"
+          >
+            <BarChart3 className="w-6 h-6" />
+          </button>
+
+          {/* Failures */}
+          <button
+            onClick={() => { panels.setActiveView('failures'); panels.setShowSidebar(true); }}
+            className={`activity-icon ${panels.activeView === 'failures' && panels.showSidebar ? 'active' : ''}`}
+            title="Failures"
+          >
+            <AlertTriangle className="w-6 h-6" />
+            {artifactData.artifacts.length > 0 && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-sev-critical rounded-full" />
+            )}
+          </button>
+
+          {/* Issues (Findings) */}
+          <button
+            onClick={() => { panels.setActiveView('findings'); panels.setShowSidebar(true); }}
+            className={`activity-icon ${panels.activeView === 'findings' ? 'active' : ''}`}
+            title="Issues"
+          >
+            <Shield className="w-6 h-6" />
+            {issueData.issues.length > 0 && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-sev-critical rounded-full" />
+            )}
+          </button>
+
+          {/* Campaign Graph */}
+          <button
+            onClick={() => { panels.setActiveView('graph'); panels.setShowSidebar(false); }}
+            className={`activity-icon ${panels.activeView === 'graph' ? 'active' : ''}`}
+            title="Campaign Graph"
+          >
+            <Network className="w-6 h-6" />
+          </button>
+
+          {/* Steering */}
+          <button
+            onClick={() => { panels.setActiveView('steering'); panels.setShowSidebar(true); }}
+            className={`activity-icon ${panels.activeView === 'steering' && panels.showSidebar ? 'active' : ''}`}
+            title="Steering"
+          >
+            <Compass className="w-6 h-6" />
+            {steeringData.decisions.length > 0 && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full" />
+            )}
+          </button>
+
+          {/* Behavior Tree */}
+          <button
+            onClick={() => { panels.setActiveView('behavior'); panels.setShowSidebar(false); }}
             className={`activity-icon ${panels.activeView === 'behavior' ? 'active' : ''}`}
-            title="LLM Behavior Tree"
+            title="Behavior Tree"
           >
             <GitBranch className="w-6 h-6" />
             {behaviorTree.nodes.size > 0 && (
@@ -813,6 +420,7 @@ export default function Home() {
 
           <div className="flex-1" />
 
+          {/* Chat toggle */}
           <button
             onClick={panels.toggleChat}
             className={`activity-icon ${panels.showChat ? 'active' : ''}`}
@@ -821,6 +429,7 @@ export default function Home() {
             <MessageSquare className="w-5 h-5" />
           </button>
 
+          {/* Settings */}
           <button
             onClick={() => setShowSettings(true)}
             className="activity-icon"
@@ -830,26 +439,18 @@ export default function Home() {
           </button>
         </aside>
 
-        {/* Sidebar */}
-        {panels.showSidebar && (
+        {/* ==== SIDEBAR ==== */}
+        {panels.showSidebar && SIDEBAR_VIEWS.includes(panels.activeView) && (
           <aside className="w-64 bg-bg-secondary flex flex-col border-r border-border-subtle">
-            {/* Sidebar header with view title */}
+            {/* Sidebar header */}
             <div className="panel-header">
-              <span>
-                {panels.activeView === 'explorer' && 'EXPLORER'}
-                {panels.activeView === 'agents' && 'AGENTS'}
-                {panels.activeView === 'findings' && 'FINDINGS'}
-              </span>
-              <button
-                onClick={() => panels.setShowSidebar(false)}
-                className="btn-icon"
-              >
+              <span>{SIDEBAR_TITLES[panels.activeView] ?? panels.activeView.toUpperCase()}</span>
+              <button onClick={() => panels.setShowSidebar(false)} className="btn-icon">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-
-            {/* Sidebar content based on active view */}
+            {/* Sidebar content */}
             <div className="flex-1 overflow-hidden">
               {panels.activeView === 'explorer' && (
                 <FileTree
@@ -860,161 +461,84 @@ export default function Home() {
                 />
               )}
 
-              {panels.activeView === 'agents' && (
-                <AgentManager
+              {panels.activeView === 'targets' && (
+                <TargetList targets={targetData.targets} />
+              )}
+
+              {panels.activeView === 'campaigns' && (
+                <CampaignManager
+                  campaigns={campaignMgmt.campaigns}
+                  selectedCampaignId={campaignMgmt.selectedCampaignId}
+                  onSelectCampaign={campaignMgmt.setSelectedCampaignId}
+                  onCreateCampaign={campaignMgmt.createCampaign as any}
+                  onStartCampaign={campaignMgmt.startCampaign as any}
+                  onPauseCampaign={campaignMgmt.pauseCampaign as any}
+                  onCancelCampaign={campaignMgmt.cancelCampaign as any}
                   repoId={currentProject.id}
-                  agents={agentMgmt.agents}
-                  progress={agentMgmt.agentProgress}
-                  onAgentCreated={handleAgentCreated}
-                  onAgentUpdated={handleAgentUpdated}
-                  onAgentDeleted={handleAgentDeleted}
-                  onViewReport={handleViewReport}
                 />
               )}
 
+              {panels.activeView === 'coverage' && (
+                <CoveragePanel coverage={coverageData.coverage} />
+              )}
+
+              {panels.activeView === 'failures' && (
+                <FailuresPanel artifacts={artifactData.artifacts} buckets={artifactData.buckets} />
+              )}
+
               {panels.activeView === 'findings' && (
-                <div className="h-full flex flex-col overflow-hidden">
-                  {/* Agent selector for findings */}
-                  <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2 flex-shrink-0">
-                    <Bug className="w-4 h-4 text-text-muted" />
-	                    <select
-	                      value={findingsMgmt.selectedFindingsAgentId || ''}
-	                      onChange={(e) => {
-	                        findingsMgmt.setUserSelectedFindingsAgentId(true);
-	                        findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
-	                      }}
-	                      className="flex-1 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
-	                    >
-	                      <option value="">
-	                        All agents ({findingsMgmt.findings.length} findings)
-	                      </option>
-	                      {agentMgmt.agents.map((agent) => (
-	                        <option key={agent.id} value={agent.id}>
-	                          {agent.name} ({findingsMgmt.findings.filter(f => f.agent_id === agent.id).length} findings)
-	                        </option>
-	                      ))}
-	                    </select>
-	                  </div>
-	                  <div className="flex-1 overflow-hidden">
-	                    <FindingsList
-	                      key={findingsMgmt.selectedFindingsAgentId || 'all'}
-	                      agentId={findingsMgmt.selectedFindingsAgentId}
-	                      repoId={currentProject?.id}
-	                      allAgents={agentMgmt.agents}
-	                      findings={
-	                        findingsMgmt.selectedFindingsAgentId
-	                          ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
-	                          : findingsMgmt.findings
-	                      }
-	                      onFindingClick={handleFindingClick}
-	                      onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
-	                      onFindingsUpdated={(triaged) => {
-	                        // Replace findings for this agent with triaged results
-	                        findingsMgmt.setFindings((prev) => {
-	                          const otherFindings = prev.filter(f => f.agent_id !== findingsMgmt.selectedFindingsAgentId);
-	                          return [...otherFindings, ...triaged];
-	                        });
-	                      }}
-	                    />
-	                  </div>
-	                </div>
-	              )}
+                <IssuesList issues={issueData.issues} />
+              )}
+
+              {panels.activeView === 'steering' && (
+                <SteeringPanel decisions={steeringData.decisions} />
+              )}
             </div>
           </aside>
         )}
 
-        {/* Main content area */}
+        {/* ==== MAIN CONTENT ==== */}
         <main className="flex-1 flex flex-col overflow-hidden bg-bg-primary">
-	          {/* Flow visualization view */}
-	          {panels.activeView === 'flow' && (
-	            <div className="flex-1 flex flex-col overflow-hidden">
-	              <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
-	                <Network className="w-4 h-4 text-text-muted" />
-	                <span className="text-sm text-text-muted">Structured Trace</span>
-	                <select
-	                  value={agentMgmt.selectedAgentId || ''}
-	                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
-	                  className="ml-2 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
-	                >
-	                  <option value="">Select agent...</option>
-	                  {agentMgmt.agents.map((agent) => (
-	                    <option key={agent.id} value={agent.id}>
-	                      {agent.name} ({agent.status})
-	                    </option>
-	                  ))}
-	                </select>
-	              </div>
-	              <div className="flex-1">
-	                <FlowVisualization
-	                  agentId={agentMgmt.selectedAgentId}
-	                  flow={agentMgmt.agentFlow}
-	                  findings={findingsMgmt.findings}
-	                  onOpenChat={handleOpenChatFromFlow}
-	                  onOpenFile={handleNavigateToFile}
-	                  onQueueInvestigation={
-	                    canQueueInvestigations
-	                      ? async (nodeId) => {
-	                        if (!agentMgmt.selectedAgentId) return;
-	                        const res = await agentsApi.queueInvestigation(agentMgmt.selectedAgentId, nodeId);
-	                        if (!res.queued) {
-	                          throw new Error(res.reason || 'Not queued');
-	                        }
-	                        const updated = await agentsApi.getFlow(agentMgmt.selectedAgentId);
-	                        agentMgmt.setAgentFlow(updated);
-	                      }
-	                      : undefined
-	                  }
-	                />
-	              </div>
-	            </div>
-	          )}
-
-          {/* LLM Interactions view */}
-          {panels.activeView === 'llm' && (
+          {/* ---- Campaign Graph (full width) ---- */}
+          {panels.activeView === 'graph' && (
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Agent selector for LLM view */}
               <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
-                <Brain className="w-4 h-4 text-text-muted" />
-                <span className="text-sm text-text-muted">LLM Interactions</span>
+                <Network className="w-4 h-4 text-text-muted" />
+                <span className="text-sm text-text-muted">Campaign Graph</span>
                 <select
-                  value={agentMgmt.selectedAgentId || ''}
-                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
+                  value={campaignMgmt.selectedCampaignId || ''}
+                  onChange={(e) => campaignMgmt.setSelectedCampaignId(e.target.value || null)}
                   className="ml-2 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
                 >
-                  <option value="">Select agent...</option>
-                  {agentMgmt.agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name} ({agent.status})
+                  <option value="">Select campaign...</option>
+                  {campaignMgmt.campaigns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {(c as any).name || c.id} ({(c as any).status || 'unknown'})
                     </option>
                   ))}
                 </select>
               </div>
-              <div className="flex-1 overflow-hidden min-h-0">
-                <LLMInteractionPanel
-                  agentId={agentMgmt.selectedAgentId}
-                  interactions={observability.llmInteractions}
-                  toolDetails={observability.toolDetails}
-                  isConnected={isConnected}
-                />
+              <div className="flex-1">
+                <CampaignGraph campaignId={campaignMgmt.selectedCampaignId} />
               </div>
             </div>
           )}
 
-          {/* LLM Behavior Tree view */}
+          {/* ---- Behavior Tree (full width) ---- */}
           {panels.activeView === 'behavior' && (
             <div className="flex-1 flex flex-col overflow-hidden">
               <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
                 <GitBranch className="w-4 h-4 text-text-muted" />
-                <span className="text-sm text-text-muted">LLM Behavior Tree</span>
+                <span className="text-sm text-text-muted">Behavior Tree</span>
                 <select
-                  value={agentMgmt.selectedAgentId || ''}
-                  onChange={(e) => agentMgmt.selectAgent(e.target.value || null)}
+                  value={campaignMgmt.selectedCampaignId || ''}
+                  onChange={(e) => campaignMgmt.setSelectedCampaignId(e.target.value || null)}
                   className="ml-2 px-2 py-1 bg-bg-tertiary border border-border-default rounded text-sm"
                 >
-                  <option value="">Select agent...</option>
-                  {agentMgmt.agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name} ({agent.status})
+                  <option value="">Select campaign...</option>
+                  {campaignMgmt.campaigns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {(c as any).name || c.id} ({(c as any).status || 'unknown'})
                     </option>
                   ))}
                 </select>
@@ -1058,75 +582,8 @@ export default function Home() {
             </div>
           )}
 
-          {/* Full-screen Findings view */}
-          {panels.activeView === 'findings' && panels.showSidebar === false && (
-            <div className="flex-1 flex overflow-hidden">
-              {/* Findings list on left */}
-              <div className="w-80 border-r border-border-subtle flex flex-col bg-bg-secondary">
-                <div className="h-10 bg-bg-secondary border-b border-border-subtle flex items-center px-3 gap-2">
-                  <Shield className="w-4 h-4 text-text-muted" />
-                  <span className="text-sm text-text-muted">Findings</span>
-                  <select
-                    value={findingsMgmt.selectedFindingsAgentId || ''}
-                    onChange={(e) => {
-                      findingsMgmt.setUserSelectedFindingsAgentId(true);
-                      findingsMgmt.setSelectedFindingsAgentId(e.target.value || null);
-                    }}
-                    className="ml-auto px-2 py-1 bg-bg-tertiary border border-border-default rounded text-xs"
-                  >
-                    <option value="">All agents ({findingsMgmt.findings.length})</option>
-                    {agentMgmt.agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name} ({findingsMgmt.findings.filter(f => f.agent_id === agent.id).length})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex-1 overflow-auto">
-                  <FindingsList
-                    key={findingsMgmt.selectedFindingsAgentId || 'all'}
-                    agentId={findingsMgmt.selectedFindingsAgentId}
-                    repoId={currentProject?.id}
-                    allAgents={agentMgmt.agents}
-                    findings={
-                      findingsMgmt.selectedFindingsAgentId
-                        ? findingsMgmt.findings.filter(f => f.agent_id === findingsMgmt.selectedFindingsAgentId)
-                        : findingsMgmt.findings
-                    }
-                    onFindingClick={(finding) => findingsMgmt.setSelectedFindingForDrawer(finding)}
-                    onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
-                    onFindingsUpdated={(triaged) => {
-                      findingsMgmt.setFindings((prev) => {
-                        const otherFindings = prev.filter(f => f.agent_id !== findingsMgmt.selectedFindingsAgentId);
-                        return [...otherFindings, ...triaged];
-                      });
-                    }}
-                  />
-                </div>
-              </div>
-              {/* Finding details on right */}
-              <div className="flex-1 bg-bg-primary overflow-auto">
-                {findingsMgmt.selectedFindingForDrawer ? (
-                  <div className="p-6 max-w-4xl mx-auto">
-                    <FindingFullView
-                      finding={findingsMgmt.selectedFindingForDrawer}
-                      onNavigateToFile={handleNavigateToFile}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full text-text-muted">
-                    <div className="text-center">
-                      <Shield className="w-12 h-12 mx-auto mb-4 opacity-30" />
-                      <p>Select a finding to view details</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Tab bar */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && panels.activeView !== 'behavior' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
+          {/* ---- Tab bar + Breadcrumb + Editor (when not in a full-width view) ---- */}
+          {showEditorArea && workspace.currentFile && (
             <div className="h-9 bg-bg-secondary flex items-end border-b border-border-subtle">
               <div className="tab active">
                 <span className="truncate max-w-[200px]">
@@ -1142,8 +599,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* Breadcrumb */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && panels.activeView !== 'behavior' && (panels.activeView !== 'findings' || panels.showSidebar) && workspace.currentFile && (
+          {showEditorArea && workspace.currentFile && (
             <div className="breadcrumb border-b border-border-subtle">
               {workspace.currentFile.path.split('/').map((part, idx, arr) => (
                 <span key={idx} className="flex items-center">
@@ -1156,51 +612,24 @@ export default function Home() {
             </div>
           )}
 
-          {/* Editor */}
-          {panels.activeView !== 'flow' && panels.activeView !== 'llm' && panels.activeView !== 'behavior' && (panels.activeView !== 'findings' || panels.showSidebar) && (
+          {showEditorArea && (
             <div className="flex-1 overflow-hidden">
               <MonacoEditor
                 file={workspace.currentFile}
-                findings={findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path)}
+                findings={[]}
               />
             </div>
           )}
         </main>
-
-        {/* Right panel - can show agents or findings in split view */}
-        {panels.showPanel && workspace.currentFile && findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path).length > 0 && (
-          <aside className="w-80 bg-bg-secondary border-l border-border-subtle flex flex-col">
-            <div className="panel-header">
-              <span>FILE FINDINGS</span>
-              <button
-                onClick={() => panels.setShowPanel(false)}
-                className="btn-icon"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-auto">
-              <FindingsList
-                findings={findingsMgmt.findings.filter((f) => f.file_path === workspace.currentFile?.path)}
-                repoId={currentProject?.id}
-                onFindingClick={handleFindingClick}
-                onNavigateToFile={(finding) => handleNavigateToFile(finding.file_path)}
-              />
-            </div>
-          </aside>
-        )}
       </div>
 
-      {/* Status bar */}
+      {/* ---- STATUS BAR ---- */}
       <footer className="h-6 bg-bg-primary border-t border-border-default flex items-center px-3 text-xs text-text-secondary select-none">
         <div className="flex items-center gap-3">
-          {/* Connection status */}
           <span className="flex items-center gap-1" data-testid="ws-connection-status">
             <Circle className={`w-2 h-2 ${isConnected ? 'fill-status-confirmed text-status-confirmed' : 'fill-sev-critical text-sev-critical'}`} />
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>
-
-          {/* Branch */}
           {currentProject.repo_branch && (
             <span className="flex items-center gap-1">
               <GitBranch className="w-3 h-3" />
@@ -1212,95 +641,43 @@ export default function Home() {
         <div className="flex-1" />
 
         <div className="flex items-center gap-3">
-          {/* File info */}
           {currentProject.file_count > 0 && (
             <span>{currentProject.file_count} files</span>
           )}
-
-          {/* Running agents */}
-          {runningAgents > 0 && (
+          {campaignMgmt.campaigns.filter(c => (c as any).status === 'running').length > 0 && (
             <span className="flex items-center gap-1">
               <RefreshCw className="w-3 h-3 animate-spin" />
-              {runningAgents} scanning
+              {campaignMgmt.campaigns.filter(c => (c as any).status === 'running').length} running
             </span>
           )}
-
-          {/* Findings count */}
           <span className="flex items-center gap-1">
-            {findingsMgmt.findings.length} findings
-            {criticalFindings > 0 && (
-              <span className="text-sev-critical">({criticalFindings} critical)</span>
-            )}
+            {issueData.issues.length} issues
           </span>
         </div>
       </footer>
 
-      {/* Chat Panel (left pop-out) */}
+      {/* ---- CHAT PANEL ---- */}
       <ChatPanel
         isOpen={panels.showChat}
         onToggle={panels.toggleChat}
         currentFile={workspace.currentFile}
-        findings={findingsMgmt.findings}
+        findings={[]}
         onRequestSettings={() => setShowSettings(true)}
-        provider={selectedAgent?.provider_config?.provider}
-        model={selectedAgent?.provider_config?.model}
-        flowContextPack={chatFlowContextPack}
-        seedMessage={chatSeedMessage}
-        onClearFlowContext={handleClearChatFlowContext}
       />
 
-      {/* Settings Modal */}
+      {/* ---- SETTINGS MODAL ---- */}
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
       />
 
-      <ThreatModelModal
-        isOpen={showThreatModelModal}
-        onClose={() => {
-          setShowThreatModelModal(false);
-          setThreatModelPresetPreview(null);
-        }}
-        projectId={currentProject.id}
-        presetPreview={threatModelPresetPreview}
-        onProfileUpdated={handleThreatModelProfileUpdated}
-      />
-
-      {/* Report Modal */}
-      {currentReport && (
-        <ReportModal
-          report={currentReport}
-          isOpen={showReportModal}
-          onClose={() => {
-            setShowReportModal(false);
-            setCurrentReport(null);
-          }}
-          onDownload={handleDownloadReport}
-        />
-      )}
-
-      {/* Auth Modal */}
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-      />
-
-      {/* Resume Dialog */}
+      {/* ---- RESUME DIALOG ---- */}
       {sessionMgmt.showResumeDialog && sessionMgmt.snapshotInfo && (
         <ResumeDialog
           snapshotInfo={sessionMgmt.snapshotInfo}
           onRestore={handleRestoreSession}
           onKeepCurrent={handleKeepCurrent}
           onClose={() => sessionMgmt.setShowResumeDialog(false)}
-        />
-      )}
-
-      {/* Finding Drawer - only show when NOT in full-screen findings mode */}
-      {findingsMgmt.selectedFindingForDrawer && !(panels.activeView === 'findings' && !panels.showSidebar) && (
-        <FindingDrawer
-          finding={findingsMgmt.selectedFindingForDrawer}
-          onClose={() => findingsMgmt.setSelectedFindingForDrawer(null)}
-          onNavigateToFile={handleNavigateToFile}
         />
       )}
     </div>

@@ -7,7 +7,9 @@ Docker target lifecycle, engine execution, and result recording.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import tempfile
 from datetime import datetime, timezone
 
@@ -83,6 +85,7 @@ async def execute_run_lane(
 
     network_name: str | None = None
     target_launched = False
+    harness_path: str | None = None
 
     try:
         # 1. Update run status to RUNNING
@@ -93,14 +96,14 @@ async def execute_run_lane(
         )
 
         # 2. Create campaign Docker network
-        network_name = dm.create_campaign_network(campaign_id)
+        network_name = await asyncio.to_thread(dm.create_campaign_network, campaign_id)
 
         # 3. Launch target from Compose
-        stack_info = dm.launch_target_stack(campaign_id, compose_path)
+        stack_info = await asyncio.to_thread(dm.launch_target_stack, campaign_id, compose_path)
         target_launched = True
 
         # 4. Wait for healthy
-        healthy = dm.wait_for_healthy(stack_info.base_url)
+        healthy = await asyncio.to_thread(dm.wait_for_healthy, stack_info.base_url)
         if not healthy:
             error_msg = (
                 f"Target at {stack_info.base_url} did not become healthy"
@@ -120,7 +123,7 @@ async def execute_run_lane(
             }
 
         # 5. Download harness code from artifact store
-        harness_bytes = store.get(harness_code_ref)
+        harness_bytes = await asyncio.to_thread(store.get, harness_code_ref)
         if harness_bytes is None:
             error_msg = f"Harness code not found: {harness_code_ref}"
             logger.error(error_msg)
@@ -138,14 +141,18 @@ async def execute_run_lane(
             }
 
         # 6. Write harness to temp file
-        with tempfile.NamedTemporaryFile(
-            suffix=".py", delete=False, mode="wb"
-        ) as tmp:
-            tmp.write(harness_bytes)
-            harness_path = tmp.name
+        def _write_temp(data: bytes) -> str:
+            with tempfile.NamedTemporaryFile(
+                suffix=".py", delete=False, mode="wb"
+            ) as tmp:
+                tmp.write(data)
+                return tmp.name
+
+        harness_path = await asyncio.to_thread(_write_temp, harness_bytes)
 
         # 7. Run Schemathesis engine
-        result = eng.run(
+        result = await asyncio.to_thread(
+            eng.run,
             harness_path=harness_path,
             base_url=stack_info.base_url,
             timeout_seconds=timeout_seconds,
@@ -208,15 +215,22 @@ async def execute_run_lane(
         }
 
     finally:
+        # Clean up temp harness file
+        if harness_path and os.path.exists(harness_path):
+            try:
+                os.unlink(harness_path)
+            except OSError:
+                pass
+
         # 11. Teardown target stack (always)
         try:
             if target_launched:
-                dm.teardown_target_stack(campaign_id, compose_path)
+                await asyncio.to_thread(dm.teardown_target_stack, campaign_id, compose_path)
         except Exception:
             logger.exception("Failed to teardown target stack")
 
         try:
             if network_name:
-                dm.teardown_network(campaign_id)
+                await asyncio.to_thread(dm.teardown_network, campaign_id)
         except Exception:
             logger.exception("Failed to teardown Docker network")

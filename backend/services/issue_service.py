@@ -12,8 +12,11 @@ from typing import Optional
 from sqlalchemy import select
 
 from database.campaign_models import (
+    Artifact as DBArtifact,
+    ExecutionBundle as DBExecBundle,
     Issue as DBIssue,
     RegressionTest as DBRegressionTest,
+    RunLane as DBRunLane,
 )
 from database.connection import get_session
 from models.campaign_enums import IssueDisposition, IssueSeverity
@@ -109,13 +112,16 @@ class IssueService:
     ) -> list[IssueResponse]:
         """List all issues for a campaign.
 
-        v1: fetches all issues and returns them.  A future version will
-        filter by artifact -> run_lane -> lane_spec -> target -> campaign
-        chain, or use a denormalized campaign_id column.
+        Joins through the artifact -> run_lane -> execution_bundle chain
+        to ensure issues are scoped to the correct campaign.
         """
         async with get_session() as session:
             stmt = (
                 select(DBIssue)
+                .join(DBArtifact, DBIssue.artifact_id == DBArtifact.id)
+                .join(DBRunLane, DBArtifact.run_lane_id == DBRunLane.id)
+                .join(DBExecBundle, DBRunLane.execution_bundle_id == DBExecBundle.id)
+                .where(DBExecBundle.campaign_id == campaign_id)
                 .order_by(DBIssue.created_at.desc())
             )
             result = await session.execute(stmt)

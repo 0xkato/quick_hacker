@@ -142,7 +142,11 @@ class CampaignController:
         # Resolve repo path for capability profile (openapi_url)
         repo_path = project_service.get_project_repo_path(campaign.repo_id)
         profile = detect_capability_profile(repo_path) if repo_path else None
-        openapi_url = (profile.openapi_path if profile else None) or "openapi.json"
+        openapi_filename = (
+            os.path.basename(profile.openapi_path)
+            if profile and profile.openapi_path
+            else "openapi.json"
+        )
 
         # Set up artifact store under a campaign-specific directory
         artifact_root = os.environ.get(
@@ -177,7 +181,7 @@ class CampaignController:
                     "entrypoint": target.entrypoint,
                     "stateful": target.stateful,
                 },
-                openapi_url=openapi_url,
+                openapi_url=openapi_filename,
             )
 
             # 4d. Validate harness

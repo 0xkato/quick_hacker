@@ -75,7 +75,7 @@ async def process_raw_artifact(
     evidence_data = candidate.get("evidence")
     if evidence_data is not None and object_store is not None:
         store_key = f"artifacts/{campaign_id}/{artifact.id}/evidence"
-        await object_store.put(store_key, evidence_data)
+        object_store.put(store_key, evidence_data)
 
     # 5. Return artifact dict if should_replay, else None
     if should_replay(bucket_key, bucket):

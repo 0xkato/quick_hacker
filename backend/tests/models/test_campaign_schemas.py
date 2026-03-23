@@ -318,9 +318,6 @@ class TestCampaignResponse:
         assert resp.started_at == now
         assert resp.completed_at is None
         assert resp.error_message is None
-        assert resp.target_count == 0
-        assert resp.lane_count == 0
-        assert resp.issue_count == 0
 
 
 class TestTargetResponse:

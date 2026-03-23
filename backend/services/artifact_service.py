@@ -16,6 +16,8 @@ from sqlalchemy import select, func as sa_func
 from database.campaign_models import (
     Artifact as DBArtifact,
     ArtifactBucket as DBArtifactBucket,
+    ExecutionBundle as DBExecBundle,
+    RunLane as DBRunLane,
 )
 from database.connection import get_session
 from models.campaign_enums import ArtifactClassification, ArtifactType, AnalysisOutcome
@@ -116,26 +118,16 @@ class ArtifactService:
     ) -> list[ArtifactResponse]:
         """List all artifacts for a campaign.
 
-        v1: fetches all artifacts and filters in memory by joining through
-        the bucket table (artifacts share bucket_key with campaign-scoped
-        buckets).  This is simple and correct for moderate artifact counts.
+        Joins through the run_lanes -> execution_bundles chain to
+        ensure artifacts are scoped to the correct campaign, avoiding
+        cross-campaign data leakage via bucket_key collisions.
         """
         async with get_session() as session:
-            # Get all bucket_keys for this campaign
-            bucket_stmt = (
-                select(DBArtifactBucket.bucket_key)
-                .where(DBArtifactBucket.campaign_id == campaign_id)
-            )
-            bucket_result = await session.execute(bucket_stmt)
-            bucket_keys = {row[0] for row in bucket_result.fetchall()}
-
-            if not bucket_keys:
-                return []
-
-            # Get all artifacts matching those bucket keys
             stmt = (
                 select(DBArtifact)
-                .where(DBArtifact.bucket_key.in_(bucket_keys))
+                .join(DBRunLane, DBArtifact.run_lane_id == DBRunLane.id)
+                .join(DBExecBundle, DBRunLane.execution_bundle_id == DBExecBundle.id)
+                .where(DBExecBundle.campaign_id == campaign_id)
                 .order_by(DBArtifact.created_at.desc())
             )
             result = await session.execute(stmt)

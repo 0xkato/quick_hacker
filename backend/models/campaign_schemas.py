@@ -152,9 +152,6 @@ class CampaignResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_message: str | None = None
-    target_count: int = 0
-    lane_count: int = 0
-    issue_count: int = 0
 
 
 class TargetResponse(BaseModel):
@@ -195,13 +192,13 @@ class ExecutionBundleResponse(BaseModel):
 
     id: str
     campaign_id: str
-    campaign_plan_revision: int
+    campaign_plan_revision: int | None = None
     lane_spec_id: str
     lane_spec_revision: int
-    harness_id: str
-    harness_revision: int
-    oracle_pack_id: str
-    oracle_pack_revision: int
+    harness_id: str | None = None
+    harness_revision: int | None = None
+    oracle_pack_id: str | None = None
+    oracle_pack_revision: int | None = None
     seed_set_id: str | None = None
     dictionary_id: str | None = None
     mutator_id: str | None = None
@@ -232,7 +229,7 @@ class ArtifactResponse(BaseModel):
     id: str
     run_lane_id: str
     type: ArtifactType
-    bucket_key: str
+    bucket_key: str | None = None
     artifact_classification: ArtifactClassification | None = None
     analysis_outcome: AnalysisOutcome | None = None
     reproducible: bool | None = None

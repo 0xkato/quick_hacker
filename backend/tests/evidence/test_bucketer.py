@@ -101,8 +101,8 @@ class TestProcessRawArtifact:
 
     @pytest.fixture()
     def object_store(self):
-        store = AsyncMock()
-        store.put = AsyncMock()
+        store = MagicMock()
+        store.put = MagicMock()
         return store
 
     @pytest.mark.asyncio
@@ -186,7 +186,7 @@ class TestProcessRawArtifact:
             object_store=object_store,
         )
 
-        object_store.put.assert_awaited_once()
+        object_store.put.assert_called_once()
         call_args = object_store.put.call_args
         assert "artifacts/camp0001/art00001/evidence" == call_args[0][0]
         assert call_args[0][1] == {"trace": "stack trace here"}

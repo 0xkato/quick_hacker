@@ -39,7 +39,9 @@ def plan_lanes_for_targets(
     lanes: list[dict] = []
 
     for target in targets:
-        if _get(target, "kind") != "api_route":
+        kind = _get(target, "kind")
+        kind_str = kind.value if hasattr(kind, "value") else str(kind)
+        if kind_str != "api_route":
             continue
 
         feedback_models = ["api_surface"]

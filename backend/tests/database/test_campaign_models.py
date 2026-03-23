@@ -242,8 +242,12 @@ def test_fk_artifact_bucket(campaign_models):
 
 
 def test_fk_regression_test(campaign_models):
+    """RegressionTest.issue_id is a plain column (no FK) to avoid circular FK
+    with Issue.regression_test_id -> regression_tests.id."""
     table = campaign_models.RegressionTest.__table__
-    assert "issues.id" in _fk_targets(table)
+    assert "issue_id" in [c.name for c in table.columns]
+    # No FK on this column -- the relationship is one-way via Issue.regression_test_id
+    assert "issues.id" not in _fk_targets(table)
 
 
 def test_fk_campaign_plan(campaign_models):

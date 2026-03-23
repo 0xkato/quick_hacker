@@ -108,6 +108,7 @@ app.include_router(
     settings_router.router,
     prefix="/api",
     tags=["Settings"],
+    dependencies=[Depends(require_auth)],
 )
 app.include_router(
     chat_router.router,

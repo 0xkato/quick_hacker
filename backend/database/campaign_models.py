@@ -65,7 +65,7 @@ class Target(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     kind = Column(String(32), nullable=False)
     entrypoint = Column(Text, nullable=False)
@@ -89,7 +89,7 @@ class LaneSpec(Base):
 
     id = Column(String(64), primary_key=True)
     target_id = Column(
-        String(64), ForeignKey("targets.id"), nullable=False, index=True
+        String(64), ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     revision = Column(Integer, default=1, nullable=False)
     structure_model = Column(String(32), nullable=True)
@@ -114,33 +114,33 @@ class ExecutionBundle(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     campaign_plan_revision = Column(Integer, nullable=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=False
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False
     )
     lane_spec_revision = Column(Integer, nullable=True)
     harness_id = Column(
-        String(64), ForeignKey("harnesses.id"), nullable=True
+        String(64), ForeignKey("harnesses.id", ondelete="CASCADE"), nullable=True
     )
     harness_revision = Column(Integer, nullable=True)
     oracle_pack_id = Column(
-        String(64), ForeignKey("oracle_packs.id"), nullable=True
+        String(64), ForeignKey("oracle_packs.id", ondelete="CASCADE"), nullable=True
     )
     oracle_pack_revision = Column(Integer, nullable=True)
     seed_set_id = Column(
-        String(64), ForeignKey("seed_sets.id"), nullable=True
+        String(64), ForeignKey("seed_sets.id", ondelete="CASCADE"), nullable=True
     )
     dictionary_id = Column(
-        String(64), ForeignKey("dictionaries.id"), nullable=True
+        String(64), ForeignKey("dictionaries.id", ondelete="CASCADE"), nullable=True
     )
     mutator_id = Column(
-        String(64), ForeignKey("mutators.id"), nullable=True
+        String(64), ForeignKey("mutators.id", ondelete="CASCADE"), nullable=True
     )
     build_artifact_ref = Column(Text, nullable=True)
     env_snapshot_id = Column(
-        String(64), ForeignKey("env_snapshots.id"), nullable=True
+        String(64), ForeignKey("env_snapshots.id", ondelete="CASCADE"), nullable=True
     )
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -152,10 +152,10 @@ class RunLane(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=False, index=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     execution_bundle_id = Column(
-        String(64), ForeignKey("execution_bundles.id"), nullable=False
+        String(64), ForeignKey("execution_bundles.id", ondelete="CASCADE"), nullable=False
     )
     status = Column(String(32), nullable=False, default="queued")
     started_at = Column(DateTime, nullable=True)
@@ -178,7 +178,7 @@ class Artifact(Base):
 
     id = Column(String(64), primary_key=True)
     run_lane_id = Column(
-        String(64), ForeignKey("run_lanes.id"), nullable=False, index=True
+        String(64), ForeignKey("run_lanes.id", ondelete="CASCADE"), nullable=False, index=True
     )
     type = Column(String(32), nullable=False)
     bucket_key = Column(String(128), nullable=True, index=True)
@@ -203,7 +203,7 @@ class Issue(Base):
 
     id = Column(String(64), primary_key=True)
     artifact_id = Column(
-        String(64), ForeignKey("artifacts.id"), nullable=False, index=True
+        String(64), ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     severity = Column(String(32), nullable=False)
     title = Column(Text, nullable=False)
@@ -215,7 +215,7 @@ class Issue(Base):
     root_cause = Column(Text, nullable=True)
     recommended_fix = Column(Text, nullable=True)
     regression_test_id = Column(
-        String(64), ForeignKey("regression_tests.id"), nullable=True
+        String(64), ForeignKey("regression_tests.id", ondelete="SET NULL"), nullable=True
     )
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -232,7 +232,7 @@ class ArtifactBucket(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     bucket_key = Column(String(128), nullable=False, index=True)
     artifact_count = Column(Integer, default=0, nullable=False)
@@ -250,9 +250,7 @@ class RegressionTest(Base):
     __tablename__ = "regression_tests"
 
     id = Column(String(64), primary_key=True)
-    issue_id = Column(
-        String(64), ForeignKey("issues.id"), nullable=False, index=True
-    )
+    issue_id = Column(String(64), nullable=False, index=True)
     file_ref = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -264,7 +262,7 @@ class CampaignPlan(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     revision = Column(Integer, default=1, nullable=False)
     plan_data = Column(JSON, nullable=False)
@@ -282,7 +280,7 @@ class SteeringDecision(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     triggering_metrics = Column(JSON, nullable=True)
     decision = Column(JSON, nullable=True)
@@ -298,7 +296,7 @@ class Harness(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=False, index=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     revision = Column(Integer, default=1, nullable=False)
     code_ref = Column(Text, nullable=True)
@@ -313,7 +311,7 @@ class OraclePack(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=False, index=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     revision = Column(Integer, default=1, nullable=False)
     config = Column(JSON, nullable=True)
@@ -327,7 +325,7 @@ class SeedSet(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=False, index=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     sources = Column(JSON, nullable=True)
     item_count = Column(Integer, default=0, nullable=False)
@@ -341,7 +339,7 @@ class Dictionary(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=True
     )
     content_ref = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -354,7 +352,7 @@ class Mutator(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=True
     )
     config = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -367,10 +365,10 @@ class RunnerJob(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     run_lane_id = Column(
-        String(64), ForeignKey("run_lanes.id"), nullable=True
+        String(64), ForeignKey("run_lanes.id", ondelete="CASCADE"), nullable=True
     )
     job_type = Column(String(32), nullable=False)
     status = Column(String(32), nullable=False, default="queued")
@@ -392,7 +390,7 @@ class EnvSnapshot(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     target_base_url = Column(Text, nullable=True)
     network_name = Column(String(128), nullable=True)
@@ -408,7 +406,7 @@ class CoverageSnapshot(Base):
 
     id = Column(String(64), primary_key=True)
     run_lane_id = Column(
-        String(64), ForeignKey("run_lanes.id"), nullable=False, index=True
+        String(64), ForeignKey("run_lanes.id", ondelete="CASCADE"), nullable=False, index=True
     )
     snapshot_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -425,10 +423,10 @@ class CoverageRollup(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     target_id = Column(
-        String(64), ForeignKey("targets.id"), nullable=True
+        String(64), ForeignKey("targets.id", ondelete="CASCADE"), nullable=True
     )
     rollup_data = Column(JSON, nullable=True)
     updated_at = Column(
@@ -443,7 +441,7 @@ class Corpus(Base):
 
     id = Column(String(64), primary_key=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id"), nullable=False, index=True
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     item_count = Column(Integer, default=0, nullable=False)
     total_bytes = Column(Integer, default=0, nullable=False)
@@ -460,7 +458,7 @@ class CorpusItem(Base):
 
     id = Column(String(64), primary_key=True)
     corpus_id = Column(
-        String(64), ForeignKey("corpora.id"), nullable=False, index=True
+        String(64), ForeignKey("corpora.id", ondelete="CASCADE"), nullable=False, index=True
     )
     content_ref = Column(Text, nullable=True)
     size_bytes = Column(Integer, nullable=True)
@@ -474,7 +472,7 @@ class ReplayRun(Base):
 
     id = Column(String(64), primary_key=True)
     artifact_id = Column(
-        String(64), ForeignKey("artifacts.id"), nullable=False, index=True
+        String(64), ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status = Column(String(32), nullable=False, default="queued")
     stability_score = Column(Float, nullable=True)
@@ -490,10 +488,10 @@ class ResearchLead(Base):
 
     id = Column(String(64), primary_key=True)
     campaign_id = Column(
-        String(64), ForeignKey("campaigns.id"), nullable=False, index=True
+        String(64), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     artifact_id = Column(
-        String(64), ForeignKey("artifacts.id"), nullable=True
+        String(64), ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=True
     )
     title = Column(Text, nullable=False)
     description = Column(Text, nullable=True)

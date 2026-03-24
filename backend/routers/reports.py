@@ -188,25 +188,84 @@ async def preview_findings_report(
 @router.get("/campaigns/export")
 async def export_campaign_report(
     campaign_id: str = Query(..., description="Campaign ID to generate report for"),
-    format: str = Query("md", description="Report format (md or json)"),
+    format: str = Query("md", description="Report format (md, json, html)"),
 ):
-    """Export a campaign report (stub for v1)."""
-    return Response(
-        content=f"# Campaign Report\n\nCampaign: {campaign_id}\n\nReport placeholder.",
-        media_type="text/markdown" if format == "md" else "application/json",
+    """Export a comprehensive campaign report."""
+    from issues.reporting import generate_campaign_report
+    from services.campaign_service import campaign_service
+    from services.target_service import target_service
+    from services.issue_service import issue_service
+    from services.coverage_service import coverage_service
+    from services.steering_service import steering_service
+    from services.lane_service import lane_service
+
+    campaign = await campaign_service.get_campaign(campaign_id)
+    targets = await target_service.list_targets(campaign_id)
+    issues_list = await issue_service.list_issues(campaign_id)
+    coverage = await coverage_service.get_campaign_coverage_summary(campaign_id)
+    steering = await steering_service.list_decisions(campaign_id)
+    lanes = await lane_service.list_lane_specs(campaign_id=campaign_id)
+
+    # Convert to dicts for the report generator
+    campaign_dict = campaign.model_dump() if hasattr(campaign, 'model_dump') else campaign.__dict__ if campaign else {}
+    target_dicts = [t.model_dump() if hasattr(t, 'model_dump') else t for t in targets] if targets else []
+    issue_dicts = [i.model_dump() if hasattr(i, 'model_dump') else i for i in issues_list] if issues_list else []
+    lane_dicts = [l.model_dump() if hasattr(l, 'model_dump') else l for l in lanes] if lanes else []
+
+    report = await generate_campaign_report(
+        campaign_id=campaign_id,
+        format=format,
+        campaign_data=campaign_dict,
+        issues=issue_dicts,
+        coverage=coverage,
+        steering_decisions=steering,
+        targets=target_dicts,
+        lanes=lane_dicts,
     )
+
+    content_type = "application/json" if format == "json" else "text/html" if format == "html" else "text/markdown"
+    return Response(content=report, media_type=content_type)
 
 
 @router.get("/issues/export")
 async def export_issues_report(
     campaign_id: str = Query(..., description="Campaign ID to export issues for"),
-    format: str = Query("md", description="Report format (md or json)"),
+    issue_id: Optional[str] = Query(None, description="Single issue ID to export"),
+    format: str = Query("md", description="Report format (md, json, html)"),
 ):
-    """Export an issues report (stub for v1)."""
-    return Response(
-        content=f"# Issues Report\n\nCampaign: {campaign_id}\n\nIssue report placeholder.",
-        media_type="text/markdown" if format == "md" else "application/json",
-    )
+    """Export an issues report -- single issue or all issues for a campaign."""
+    from issues.reporting import generate_campaign_report, generate_issue_report
+    from services.issue_service import issue_service
+
+    if issue_id:
+        # Single issue export
+        issues_list = await issue_service.list_issues(campaign_id)
+        issue_data = None
+        for iss in (issues_list or []):
+            iss_dict = iss.model_dump() if hasattr(iss, 'model_dump') else iss
+            iss_id = iss_dict.get("issue_id") or iss_dict.get("id")
+            if str(iss_id) == str(issue_id):
+                issue_data = iss_dict
+                break
+
+        report = await generate_issue_report(
+            issue_id=issue_id,
+            format=format,
+            issue_data=issue_data,
+        )
+    else:
+        # All issues for campaign
+        issues_list = await issue_service.list_issues(campaign_id)
+        issue_dicts = [i.model_dump() if hasattr(i, 'model_dump') else i for i in issues_list] if issues_list else []
+
+        report = await generate_campaign_report(
+            campaign_id=campaign_id,
+            format=format,
+            issues=issue_dicts,
+        )
+
+    content_type = "application/json" if format == "json" else "text/html" if format == "html" else "text/markdown"
+    return Response(content=report, media_type=content_type)
 
 
 @router.get("/findings/stats")

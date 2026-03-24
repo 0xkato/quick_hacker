@@ -25,7 +25,7 @@ from services.run_lane_service import run_lane_service
 from services.seed_set_service import seed_set_service
 from services.target_service import target_service
 from storage.object_store import LocalFileStore
-from targets.extractors.openapi_extractor import extract_targets_from_file
+from targets.extractors.multi_extractor import extract_all_targets
 
 
 class CampaignController:
@@ -70,14 +70,13 @@ class CampaignController:
         # 4. Detect capability profile
         profile = detect_capability_profile(repo_path)
 
-        # 5. Extract targets from OpenAPI spec
-        targets: list[dict] = []
-        if profile.openapi_path:
-            language = profile.languages[0] if profile.languages else None
-            targets = extract_targets_from_file(
-                profile.openapi_path,
-                language=language,
-            )
+        # 5. Extract targets (multi-language + OpenAPI)
+        full_openapi_path = profile.openapi_path if profile.openapi_path else None
+        targets = extract_all_targets(
+            repo_path=repo_path,
+            openapi_path=full_openapi_path,
+            languages=profile.languages,
+        )
 
         # 6. Persist targets
         if targets:

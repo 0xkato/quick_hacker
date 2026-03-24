@@ -147,7 +147,7 @@ class CampaignController:
             )
             raise ValueError("No lanes planned from targets")
 
-        # 4. Compile each lane
+        # 4. Compile each lane (with retry loop)
         # Resolve repo path for capability profile (openapi_url)
         repo_path = project_service.get_project_repo_path(campaign.repo_id)
         profile = detect_capability_profile(repo_path) if repo_path else None
@@ -163,6 +163,10 @@ class CampaignController:
             os.path.join(os.getcwd(), ".artifacts"),
         )
         store = LocalFileStore(artifact_root)
+
+        # Get campaign config for retry limit
+        campaign_config = await campaign_service.get_campaign_config(campaign_id) or {}
+        max_failures = campaign_config.get("max_compilation_failures_per_lane", 3)
 
         total_lanes = len(planned_lanes)
         retired_count = 0
@@ -183,63 +187,77 @@ class CampaignController:
             # 4b. Get target info
             target = await target_service.get_target(lane_dict["target_id"])
 
-            # 4c. Compile harness
-            harness_code = compile_schemathesis_config(
-                lane_spec=lane_dict,
-                target={
-                    "entrypoint": target.entrypoint,
-                    "stateful": target.stateful,
-                },
-                openapi_url=openapi_filename,
-            )
+            # 4c-d. Compile and validate harness with retry loop
+            attempt = 0
+            compiled = False
+            while attempt < max_failures and not compiled:
+                attempt += 1
 
-            # 4d. Validate harness
-            validation = validate_harness(harness_code)
-
-            if validation.passed:
-                # 4e. Store harness code in artifact store
-                harness_ref = f"campaigns/{campaign_id}/harnesses/{lane_spec.id}.py"
-                store.put(harness_ref, harness_code.encode("utf-8"))
-
-                # Create harness record
-                harness = await harness_service.create_harness(
-                    lane_spec_id=lane_spec.id,
-                    code_ref=harness_ref,
-                    validation_results=validation.gates,
+                harness_code = compile_schemathesis_config(
+                    lane_spec=lane_dict,
+                    target={
+                        "entrypoint": target.entrypoint,
+                        "stateful": target.stateful,
+                    },
+                    openapi_url=openapi_filename,
                 )
 
-                # Create oracle pack
-                oracle_pack = await oracle_pack_service.create_oracle_pack(
-                    lane_spec_id=lane_spec.id,
-                    config={"packs": lane_dict.get("oracle_packs", [])},
-                )
+                validation = validate_harness(harness_code)
 
-                # Create seed set
-                seed_set = await seed_set_service.create_seed_set(
-                    lane_spec_id=lane_spec.id,
-                    sources=lane_dict.get("seed_sources", []),
-                )
+                if validation.passed:
+                    compiled = True
 
-                # Create execution bundle
-                await execution_bundle_service.create_bundle(
-                    campaign_id=campaign_id,
-                    campaign_plan_revision=1,
-                    lane_spec_id=lane_spec.id,
-                    lane_spec_revision=lane_spec.revision,
-                    harness_id=harness["id"],
-                    harness_revision=harness.get("revision", 1),
-                    oracle_pack_id=oracle_pack["id"],
-                    oracle_pack_revision=oracle_pack.get("revision", 1),
-                    seed_set_id=seed_set["id"],
-                )
+                    # 4e. Store harness code in artifact store
+                    harness_ref = f"campaigns/{campaign_id}/harnesses/{lane_spec.id}.py"
+                    store.put(harness_ref, harness_code.encode("utf-8"))
 
-                # Mark lane as validated
-                await lane_service.update_lane_spec_status(
-                    lane_spec.id, "validated"
-                )
-            else:
-                # 4f. Per-lane failure: v1 has no retry loop, so a single
-                # compilation failure immediately retires the lane.
+                    # Create harness record
+                    harness = await harness_service.create_harness(
+                        lane_spec_id=lane_spec.id,
+                        code_ref=harness_ref,
+                        validation_results=validation.gates,
+                    )
+
+                    # Create oracle pack
+                    oracle_pack = await oracle_pack_service.create_oracle_pack(
+                        lane_spec_id=lane_spec.id,
+                        config={"packs": lane_dict.get("oracle_packs", [])},
+                    )
+
+                    # Create seed set
+                    seed_set = await seed_set_service.create_seed_set(
+                        lane_spec_id=lane_spec.id,
+                        sources=lane_dict.get("seed_sources", []),
+                    )
+
+                    # Create execution bundle
+                    await execution_bundle_service.create_bundle(
+                        campaign_id=campaign_id,
+                        campaign_plan_revision=1,
+                        lane_spec_id=lane_spec.id,
+                        lane_spec_revision=lane_spec.revision,
+                        harness_id=harness["id"],
+                        harness_revision=harness.get("revision", 1),
+                        oracle_pack_id=oracle_pack["id"],
+                        oracle_pack_revision=oracle_pack.get("revision", 1),
+                        seed_set_id=seed_set["id"],
+                    )
+
+                    # Mark lane as validated
+                    await lane_service.update_lane_spec_status(
+                        lane_spec.id, "validated"
+                    )
+                else:
+                    if attempt < max_failures:
+                        # Log and retry (v1: same code, future: adjust based on diagnostics)
+                        import logging as _logging
+                        _logging.getLogger(__name__).warning(
+                            "[compile] Lane %s attempt %d failed: %s",
+                            lane_spec.id, attempt, getattr(validation, "errors", "unknown"),
+                        )
+
+            if not compiled:
+                # All attempts exhausted -- retire the lane
                 await lane_service.update_lane_spec_status(
                     lane_spec.id, "retired"
                 )
@@ -248,7 +266,8 @@ class CampaignController:
                 # Emit lane retired event
                 from observability.campaign_events import campaign_broadcaster
                 campaign_broadcaster.emit_lane_retired(
-                    campaign_id, lane_spec.id, "validation_failed"
+                    campaign_id, lane_spec.id,
+                    f"Failed after {max_failures} attempts",
                 )
 
         # 5. Update campaign status
@@ -308,6 +327,40 @@ class CampaignController:
         # Resolve repo path for compose file discovery
         repo_path = project_service.get_project_repo_path(campaign.repo_id)
 
+        # Resolve compose_path and openapi_url for env snapshot
+        compose_path = ""
+        openapi_url = "openapi.json"
+        if repo_path:
+            for name in [
+                "docker-compose.yml",
+                "compose.yaml",
+                "docker-compose.yaml",
+                "compose.yml",
+            ]:
+                candidate_path = os.path.join(repo_path, name)
+                if os.path.exists(candidate_path):
+                    compose_path = candidate_path
+                    break
+
+        # 2b. Create env snapshot
+        import uuid as _uuid
+
+        from database.campaign_models import EnvSnapshot as DBEnvSnapshot
+        from database.connection import get_session
+
+        env_snap_id = _uuid.uuid4().hex[:8]
+        async with get_session() as session:
+            snap = DBEnvSnapshot(
+                id=env_snap_id,
+                campaign_id=campaign_id,
+                target_base_url=None,  # Will be set when target launches
+                network_name=f"qh_{campaign_id}",
+                reset_command=None,
+                config={"compose_path": compose_path, "openapi_url": openapi_url},
+            )
+            session.add(snap)
+            await session.flush()
+
         # Initialize scheduler tracker with campaign parallelism limit
         max_parallel = campaign.max_parallel_lanes or 2
         campaign_scheduler.get_tracker(campaign_id, max_parallel=max_parallel)
@@ -331,23 +384,12 @@ class CampaignController:
                 "execution_bundle_id": bundle.id,
                 "campaign_id": campaign_id,
                 "harness_code_ref": f"campaigns/{campaign_id}/harnesses/{bundle.lane_spec_id}.py",
-                "compose_path": "",
-                "openapi_url": "openapi.json",
+                "compose_path": compose_path,
+                "openapi_url": openapi_url,
                 "timeout_seconds": run.timeout_seconds or 1800,
+                "lane_spec_id": bundle.lane_spec_id,
+                "env_snapshot_id": env_snap_id,
             }
-
-            # Resolve compose_path from project repo
-            if repo_path:
-                for name in [
-                    "docker-compose.yml",
-                    "compose.yaml",
-                    "docker-compose.yaml",
-                    "compose.yml",
-                ]:
-                    candidate = os.path.join(repo_path, name)
-                    if os.path.exists(candidate):
-                        job_data["compose_path"] = candidate
-                        break
 
             run_lane.send(job_data)
             campaign_scheduler.record_lane_start(campaign_id)

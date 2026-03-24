@@ -653,6 +653,17 @@ class TestExecuteCampaign:
 
         controller = CampaignController()
 
+        # Mock get_session for env snapshot creation
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _mock_get_session():
+            yield mock_session
+
         with (
             patch(
                 "campaigns.controller.campaign_service.get_campaign",
@@ -667,6 +678,10 @@ class TestExecuteCampaign:
             patch(
                 "campaigns.controller.project_service.get_project_repo_path",
                 return_value=None,
+            ),
+            patch(
+                "database.connection.get_session",
+                _mock_get_session,
             ),
             patch(
                 "campaigns.controller.run_lane_service.create_run",
@@ -717,6 +732,17 @@ class TestExecuteCampaign:
 
         controller = CampaignController()
 
+        # Mock get_session for env snapshot creation
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _mock_get_session():
+            yield mock_session
+
         with (
             patch(
                 "campaigns.controller.campaign_service.get_campaign",
@@ -731,6 +757,10 @@ class TestExecuteCampaign:
             patch(
                 "campaigns.controller.project_service.get_project_repo_path",
                 return_value=None,
+            ),
+            patch(
+                "database.connection.get_session",
+                _mock_get_session,
             ),
             patch(
                 "campaigns.controller.run_lane_service.create_run",

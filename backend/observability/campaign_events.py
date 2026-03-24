@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine
@@ -81,6 +82,7 @@ class CampaignEventBroadcaster:
 
     def __init__(self):
         self._broadcast_fn: Callable[[dict], Coroutine] | None = None
+        self._last_emit: dict[str, float] = {}  # event_type -> last emit timestamp
 
     def set_broadcast_fn(self, fn: Callable[[dict], Coroutine]):
         """Set the WebSocket broadcast function. Called during app startup."""
@@ -89,9 +91,22 @@ class CampaignEventBroadcaster:
     def emit(self, event: CampaignEvent) -> dict:
         """Format event as WebSocket message and broadcast if wired.
 
+        Applies throttling rules from THROTTLE_RULES before broadcasting.
         Returns the message dict regardless of broadcast success.
         """
         msg = event.to_ws_message()
+
+        # Check throttle
+        rule = THROTTLE_RULES.get(event.event_type, {})
+        throttle_ms = rule.get("throttle_ms", 0)
+
+        if throttle_ms > 0:
+            now = time.monotonic()
+            last = self._last_emit.get(event.event_type.value, 0)
+            if (now - last) * 1000 < throttle_ms:
+                return msg  # Throttled, skip broadcast
+            self._last_emit[event.event_type.value] = now
+
         if self._broadcast_fn:
             try:
                 loop = asyncio.get_running_loop()

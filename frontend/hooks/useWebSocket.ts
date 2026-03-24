@@ -12,7 +12,6 @@ const MAX_AUTH_RETRIES = 3;
 interface UseWebSocketOptions {
   onMessage?: (message: WSMessage) => void;
   onFinding?: (finding: Finding) => void;
-  onAgentStatus?: (agentId: string, status: string) => void;
   onLog?: (agentId: string, message: string) => void;
   onError?: (agentId: string, error: string) => void;
   // Observability callbacks
@@ -202,12 +201,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
           switch (message.type) {
             case 'finding':
               opts.onFinding?.(message.data as unknown as Finding);
-              break;
-            case 'agent_status':
-              opts.onAgentStatus?.(
-                message.agent_id,
-                message.data.status as string
-              );
               break;
             case 'log':
               opts.onLog?.(

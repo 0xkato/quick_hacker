@@ -164,6 +164,22 @@ async def execute_run_lane(
             snapshot_data=result.metrics,
         )
 
+        # 8b. Save corpus reference
+        if result.corpus_path:
+            from database.connection import get_session
+            from database.campaign_models import Corpus as DBCorpus
+            import uuid as _uuid
+
+            async with get_session() as session:
+                corpus = DBCorpus(
+                    id=_uuid.uuid4().hex[:8],
+                    lane_spec_id=job_data.get("lane_spec_id", "") if isinstance(job_data, dict) else "",
+                    item_count=0,  # v1: not counting individual items
+                    total_bytes=0,
+                )
+                session.add(corpus)
+                await session.flush()
+
         # 9. Build artifact candidate dicts
         artifact_candidates = []
         for failure in result.artifact_candidates:
@@ -208,11 +224,22 @@ async def execute_run_lane(
                 attempts=3,
             )
 
+            # Extract artifact_id early for minimization + analysis
+            artifact_id = artifact["artifact_id"]
+
+            # Step 2b: Minimize artifact before classification
+            from evidence.minimization import minimize_artifact as minimize_fn
+
+            minimization_result = await minimize_fn(
+                artifact_id=artifact_id,
+                budget_seconds=60,
+            )
+            minimized = minimization_result.get("minimized", False)
+
             # Step 3: Classify based on replay
             classification = classify_after_replay(replay_result, candidate)
 
             # Update artifact classification
-            artifact_id = artifact["artifact_id"]
             await artifact_service.update_classification(
                 artifact_id,
                 classification=classification,
@@ -227,7 +254,7 @@ async def execute_run_lane(
                     external_input_controlled=True,
                     oracle_triggered_or_sanitizer_hit=True,
                     reproduced_cleanly=replay_result.reproduced,
-                    artifact_minimization_attempted=False,
+                    artifact_minimization_attempted=True,
                     not_harness_artifact=True,
                     not_test_only=True,
                     security_impact_confirmed=False,
@@ -236,17 +263,25 @@ async def execute_run_lane(
                 gating_result = evaluate_proof(checklist)
 
                 if gating_result.is_issue:
+                    # Step 4b: Run analysis LM job before issue creation
+                    from issues.analysis import analyze_artifact as analyze_fn
+
+                    analysis = await analyze_fn(
+                        artifact_id=artifact_id,
+                        evidence_refs=candidate.get("evidence_refs", []),
+                    )
+
                     issue = await issue_service.create_issue(
                         artifact_id=artifact_id,
-                        severity="medium",
+                        severity=analysis.get("severity_recommendation") or "medium",
                         title=f"Failure in {candidate.get('method', '?')} {candidate.get('path', '?')}",
                         description=f"Status {candidate.get('status_code', '?')} - {gating_result.disposition}",
                         category=candidate.get("type", "unknown"),
                         cwe_id=None,
                         disposition=gating_result.disposition,
                         proof=checklist.model_dump(),
-                        root_cause=None,
-                        recommended_fix=None,
+                        root_cause=analysis.get("root_cause"),
+                        recommended_fix=analysis.get("recommended_fix"),
                     )
 
                     campaign_broadcaster.emit_issue_upsert(

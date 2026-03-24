@@ -11,11 +11,12 @@ interface CampaignManagerProps {
   onPauseCampaign: (id: string) => Promise<void>;
   onResumeCampaign: (id: string) => Promise<void>;
   onCancelCampaign: (id: string) => Promise<void>;
+  onDeleteCampaign?: (id: string) => Promise<void>;
   repoId: string | null;
   lanes?: LaneSpec[];
 }
 
-export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaign, onCreateCampaign, onStartCampaign, onPauseCampaign, onResumeCampaign, onCancelCampaign, repoId, lanes }: CampaignManagerProps) {
+export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaign, onCreateCampaign, onStartCampaign, onPauseCampaign, onResumeCampaign, onCancelCampaign, onDeleteCampaign, repoId, lanes }: CampaignManagerProps) {
   const [preset, setPreset] = useState<CampaignPreset>('quick');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -104,6 +105,11 @@ export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaig
             {(c.status === 'created' || c.status === 'failed') && (
               <div className="mt-1 flex gap-1">
                 <button onClick={e => { e.stopPropagation(); onStartCampaign(c.id); }} className="text-[10px] text-green-400 hover:underline">Start</button>
+              </div>
+            )}
+            {onDeleteCampaign && (c.status === 'completed' || c.status === 'failed' || c.status === 'cancelled') && (
+              <div className="mt-1">
+                <button onClick={e => { e.stopPropagation(); onDeleteCampaign(c.id); }} className="text-[10px] text-red-400 hover:underline">Delete</button>
               </div>
             )}
           </div>

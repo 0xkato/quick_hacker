@@ -65,6 +65,19 @@ export function useCampaignManagement({ projectId, isAuthenticated }: UseCampaig
     return result;
   }, []);
 
+  const deleteCampaign = useCallback(async (id: string) => {
+    // No dedicated delete endpoint yet, but we can cancel + remove from list
+    try {
+      await campaignsApi.cancel(id);
+    } catch {
+      // May already be cancelled/completed
+    }
+    setCampaignList(prev => prev.filter(c => c.id !== id));
+    if (selectedCampaignId === id) {
+      setSelectedCampaignId(null);
+    }
+  }, [selectedCampaignId]);
+
   return {
     campaigns: campaignList,
     selectedCampaign,
@@ -78,5 +91,6 @@ export function useCampaignManagement({ projectId, isAuthenticated }: UseCampaig
     pauseCampaign,
     resumeCampaign,
     cancelCampaign,
+    deleteCampaign,
   };
 }

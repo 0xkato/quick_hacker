@@ -204,30 +204,25 @@ export interface Finding {
 // === WebSocket ===
 
 export type WSMessageType =
-  | 'agent_status'
-  | 'finding'
-  | 'progress'
-  | 'error'
-  | 'log'
-  | 'llm_request'
-  | 'llm_response'
-  | 'tool_detail'
-  | 'state_sync'
-  | 'report_ready'
-  | 'phase_handoff'
-  | 'session_pausing'
-  | 'session_paused'
-  | 'session_resumed'
-  | 'flow_update'
-  | 'bt_node_add'
-  | 'bt_node_update'
-  | 'bt_node_batch'
-  | 'auth_required'
-  | 'auth_ok';
+  // Legacy (keep for BT)
+  | 'finding' | 'agent_status' | 'log' | 'error'
+  | 'llm_request' | 'llm_response' | 'tool_detail'
+  | 'state_sync' | 'report_ready' | 'phase_handoff'
+  | 'session_pausing' | 'session_paused' | 'session_resumed'
+  | 'flow_update' | 'bt_node_add' | 'bt_node_update' | 'bt_node_batch'
+  | 'auth_required' | 'auth_ok'
+  // Campaign events
+  | 'campaign_status' | 'target_upsert' | 'lane_upsert' | 'run_upsert'
+  | 'lane_metrics' | 'coverage_update' | 'corpus_update'
+  | 'artifact_bucket_opened' | 'artifact_bucket_updated' | 'artifact_classified'
+  | 'replay_update' | 'issue_upsert' | 'steering_decision'
+  | 'harness_validation_result' | 'lane_retired'
+  | 'llm_job_update' | 'runner_log' | 'graph_update';
 
 export interface WSMessage {
   type: WSMessageType;
   agent_id: string;
+  campaign_id?: string;
   data: Record<string, unknown>;
   timestamp: string;
 }

@@ -24,6 +24,15 @@ interface UseWebSocketOptions {
   onBTNodeAdd?: (agentId: string, node: BTNode) => void;
   onBTNodeUpdate?: (agentId: string, update: BTNodeUpdate) => void;
   onBTNodeBatch?: (agentId: string, nodes: BTNode[]) => void;
+  // Campaign callbacks
+  onCampaignStatus?: (campaignId: string, data: any) => void;
+  onTargetUpsert?: (campaignId: string, data: any) => void;
+  onIssueUpsert?: (campaignId: string, data: any) => void;
+  onArtifactBucketOpened?: (campaignId: string, data: any) => void;
+  onSteeringDecision?: (campaignId: string, data: any) => void;
+  onLaneRetired?: (campaignId: string, data: any) => void;
+  onCoverageUpdate?: (campaignId: string, data: any) => void;
+  onRunUpsert?: (campaignId: string, data: any) => void;
   autoReconnect?: boolean;
   enabled?: boolean; // Only connect when true (default: true)
 }
@@ -251,6 +260,32 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
               break;
             case 'bt_node_batch':
               opts.onBTNodeBatch?.(message.agent_id, (message.data as Record<string, unknown>).nodes as BTNode[]);
+              break;
+            // Campaign events
+            case 'campaign_status':
+              opts.onCampaignStatus?.(message.campaign_id!, message.data);
+              break;
+            case 'target_upsert':
+              opts.onTargetUpsert?.(message.campaign_id!, message.data);
+              break;
+            case 'issue_upsert':
+              opts.onIssueUpsert?.(message.campaign_id!, message.data);
+              break;
+            case 'artifact_bucket_opened':
+            case 'artifact_bucket_updated':
+              opts.onArtifactBucketOpened?.(message.campaign_id!, message.data);
+              break;
+            case 'steering_decision':
+              opts.onSteeringDecision?.(message.campaign_id!, message.data);
+              break;
+            case 'lane_retired':
+              opts.onLaneRetired?.(message.campaign_id!, message.data);
+              break;
+            case 'coverage_update':
+              opts.onCoverageUpdate?.(message.campaign_id!, message.data);
+              break;
+            case 'run_upsert':
+              opts.onRunUpsert?.(message.campaign_id!, message.data);
               break;
           }
         } catch (e) {

@@ -120,6 +120,7 @@ export default function Home() {
   // ---- websocket ----
   const { isConnected } = useWebSocket({
     enabled: isAuthenticated,
+    // BT callbacks
     onBTNodeAdd: useCallback((agentId: string, node: any) => {
       if (agentId !== campaignMgmt.selectedCampaignId) return;
       behaviorTree.addNode(node);
@@ -135,6 +136,33 @@ export default function Home() {
       behaviorTree.addNodes(nodes);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [campaignMgmt.selectedCampaignId, behaviorTree.addNodes]),
+    // Campaign callbacks
+    onCampaignStatus: useCallback((campaignId: string, data: any) => {
+      campaignMgmt.setCampaignList(prev =>
+        prev.map(c => c.id === campaignId ? { ...c, status: data.status } : c)
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [campaignMgmt.setCampaignList]),
+    onIssueUpsert: useCallback((_campaignId: string, _data: any) => {
+      issueData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [issueData.refresh]),
+    onArtifactBucketOpened: useCallback((_campaignId: string, _data: any) => {
+      artifactData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [artifactData.refresh]),
+    onCoverageUpdate: useCallback((_campaignId: string, _data: any) => {
+      coverageData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [coverageData.refresh]),
+    onSteeringDecision: useCallback((_campaignId: string, _data: any) => {
+      steeringData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [steeringData.refresh]),
+    onRunUpsert: useCallback((_campaignId: string, _data: any) => {
+      laneData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [laneData.refresh]),
   });
 
   const projectLoadTokenRef = useRef(0);
@@ -474,6 +502,7 @@ export default function Home() {
                   onPauseCampaign={campaignMgmt.pauseCampaign as any}
                   onResumeCampaign={campaignMgmt.resumeCampaign as any}
                   onCancelCampaign={campaignMgmt.cancelCampaign as any}
+                  onDeleteCampaign={campaignMgmt.deleteCampaign as any}
                   repoId={currentProject.id}
                   lanes={laneData.lanes}
                 />

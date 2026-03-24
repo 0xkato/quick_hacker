@@ -13,15 +13,43 @@ fallback to templates when LM is unavailable.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
 from lanes.compiler import compile_schemathesis_config
 
+logger = logging.getLogger(__name__)
+
 
 # Engine-specific harness templates for when LM is unavailable
 HARNESS_TEMPLATES: dict[str, str] = {}
+
+
+def _try_lm_enhancement(engine: str, target: dict, repo_path: str, result: dict) -> dict:
+    """Try LM-driven generation to replace TODOs with real code.
+
+    Mutates *result* in-place: on success sets ``code`` to the LM output and
+    adds ``lm_generated = True``; on failure adds ``lm_generated = False``.
+    """
+    from lanes.lm_harness_generator import generate_harness_with_lm
+
+    lm_code = generate_harness_with_lm(
+        engine=engine,
+        target=target,
+        repo_path=repo_path,
+        template_code=result["code"],
+    )
+
+    if lm_code:
+        result["code"] = lm_code
+        result["lm_generated"] = True
+        logger.info("LM-generated harness for engine=%s target=%s", engine, target.get("entrypoint"))
+    else:
+        result["lm_generated"] = False
+
+    return result
 
 
 def compile_harness(
@@ -70,7 +98,7 @@ def compile_harness(
     elif engine == "grammarinator":
         return _compile_grammarinator(target, repo_path)
     elif engine == "sqlsmith":
-        return _compile_sqlsmith(target, base_url)
+        return _compile_sqlsmith(target, repo_path, base_url)
     elif engine == "radamsa":
         return _compile_radamsa(target, repo_path)
     else:
@@ -137,7 +165,7 @@ int main(int argc, char **argv) {{
 }}
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "c",
         "build_cmd": f"afl-clang-fast -o {{harness_bin}} {{harness_path}} -I{repo_path}/include",
@@ -148,6 +176,8 @@ int main(int argc, char **argv) {{
             "RUN apt-get update && apt-get install -y afl++ clang",
         ],
     }
+
+    return _try_lm_enhancement("aflpp", target, repo_path, result)
 
 
 def _compile_atheris(target: dict, repo_path: str) -> dict:
@@ -195,7 +225,7 @@ if __name__ == "__main__":
     main()
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "python",
         "build_cmd": None,
@@ -206,6 +236,8 @@ if __name__ == "__main__":
             "RUN pip install atheris",
         ],
     }
+
+    return _try_lm_enhancement("atheris", target, repo_path, result)
 
 
 def _compile_hypothesis(target: dict, repo_path: str) -> dict:
@@ -232,7 +264,7 @@ def test_fuzz_{_safe_name(entrypoint)}(data, text, number):
     pass
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "python",
         "build_cmd": None,
@@ -241,6 +273,8 @@ def test_fuzz_{_safe_name(entrypoint)}(data, text, number):
         "env_vars": {"PYTHONPATH": repo_path},
         "dockerfile_additions": [],
     }
+
+    return _try_lm_enhancement("hypothesis", target, repo_path, result)
 
 
 def _compile_jazzer(target: dict, repo_path: str) -> dict:
@@ -271,7 +305,7 @@ public class {class_name}Fuzz {{
 }}
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "java",
         "build_cmd": f"javac -cp jazzer_standalone.jar {{harness_path}}",
@@ -282,6 +316,8 @@ public class {class_name}Fuzz {{
             "RUN apt-get update && apt-get install -y default-jdk",
         ],
     }
+
+    return _try_lm_enhancement("jazzer", target, repo_path, result)
 
 
 def _compile_go_fuzz(target: dict, repo_path: str) -> dict:
@@ -314,7 +350,7 @@ func Fuzz{func_name}(f *testing.F) {{
 }}
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "go",
         "build_cmd": None,
@@ -325,6 +361,8 @@ func Fuzz{func_name}(f *testing.F) {{
             "RUN apt-get update && apt-get install -y golang",
         ],
     }
+
+    return _try_lm_enhancement("go_fuzz", target, repo_path, result)
 
 
 def _compile_cargo_fuzz(target: dict, repo_path: str) -> dict:
@@ -347,7 +385,7 @@ fuzz_target!(|data: &[u8]| {{
 }});
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "rust",
         "build_cmd": f"cd {repo_path} && cargo fuzz build",
@@ -359,6 +397,8 @@ fuzz_target!(|data: &[u8]| {{
             "RUN cargo install cargo-fuzz",
         ],
     }
+
+    return _try_lm_enhancement("cargo_fuzz", target, repo_path, result)
 
 
 def _compile_echidna(target: dict, repo_path: str) -> dict:
@@ -391,7 +431,7 @@ contract {contract_name}Test {{
 }}
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "solidity",
         "build_cmd": None,
@@ -402,6 +442,8 @@ contract {contract_name}Test {{
             "RUN pip install slither-analyzer",
         ],
     }
+
+    return _try_lm_enhancement("echidna", target, repo_path, result)
 
 
 def _compile_foundry(target: dict, repo_path: str) -> dict:
@@ -437,7 +479,7 @@ contract {contract_name}FuzzTest is Test {{
 }}
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "solidity",
         "build_cmd": f"cd {repo_path} && forge build",
@@ -448,6 +490,8 @@ contract {contract_name}FuzzTest is Test {{
             "RUN curl -L https://foundry.paradigm.xyz | bash && foundryup",
         ],
     }
+
+    return _try_lm_enhancement("foundry", target, repo_path, result)
 
 
 def _compile_boofuzz(target: dict, repo_path: str, base_url: str) -> dict:
@@ -486,7 +530,7 @@ if __name__ == "__main__":
     main()
 '''
 
-    return {
+    result = {
         "code": harness_code,
         "language": "python",
         "build_cmd": None,
@@ -497,6 +541,8 @@ if __name__ == "__main__":
             "RUN pip install boofuzz",
         ],
     }
+
+    return _try_lm_enhancement("boofuzz", target, repo_path, result)
 
 
 def _compile_restler(target: dict, repo_path: str, openapi_url: str, base_url: str) -> dict:
@@ -512,7 +558,7 @@ def _compile_restler(target: dict, repo_path: str, openapi_url: str, base_url: s
     }
 
     import json
-    return {
+    result = {
         "code": json.dumps(config, indent=2),
         "language": "json",
         "build_cmd": "dotnet restler compile --api_spec {openapi_url}",
@@ -524,10 +570,12 @@ def _compile_restler(target: dict, repo_path: str, openapi_url: str, base_url: s
         ],
     }
 
+    return _try_lm_enhancement("restler", target, repo_path, result)
+
 
 def _compile_grammarinator(target: dict, repo_path: str) -> dict:
     """Generate Grammarinator config for grammar-based fuzzing."""
-    return {
+    result = {
         "code": "# Grammarinator requires an ANTLR grammar (.g4 file)\n# TODO: Locate or generate the grammar",
         "language": "config",
         "build_cmd": "grammarinator-process {grammar_file} -o {output_dir}",
@@ -539,10 +587,12 @@ def _compile_grammarinator(target: dict, repo_path: str) -> dict:
         ],
     }
 
+    return _try_lm_enhancement("grammarinator", target, repo_path, result)
 
-def _compile_sqlsmith(target: dict, base_url: str) -> dict:
+
+def _compile_sqlsmith(target: dict, repo_path: str, base_url: str) -> dict:
     """Generate SQLsmith configuration for database fuzzing."""
-    return {
+    result = {
         "code": f"-- SQLsmith target: {base_url}\n-- Connects directly to the database",
         "language": "sql",
         "build_cmd": None,
@@ -554,10 +604,12 @@ def _compile_sqlsmith(target: dict, base_url: str) -> dict:
         ],
     }
 
+    return _try_lm_enhancement("sqlsmith", target, repo_path, result)
+
 
 def _compile_radamsa(target: dict, repo_path: str) -> dict:
     """Generate Radamsa configuration for generic mutation fuzzing."""
-    return {
+    result = {
         "code": "# Radamsa mutation fuzzer\n# Requires seed files in the seed directory",
         "language": "config",
         "build_cmd": None,
@@ -568,6 +620,8 @@ def _compile_radamsa(target: dict, repo_path: str) -> dict:
             "RUN apt-get update && apt-get install -y radamsa",
         ],
     }
+
+    return _try_lm_enhancement("radamsa", target, repo_path, result)
 
 
 def _detect_build_system(repo_path: str, language: str) -> str:

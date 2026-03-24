@@ -164,6 +164,64 @@ class Settings(BaseSettings):
 
         return [part.strip() for part in raw.split(",") if part.strip()]
 
+    # Campaign platform settings
+    max_concurrent_campaigns: int = Field(
+        default=5,
+        description="Maximum number of campaigns running simultaneously",
+    )
+    max_concurrent_runner_jobs: int = Field(
+        default=4,
+        description="Maximum concurrent runner (fuzz) jobs across all campaigns",
+    )
+    max_concurrent_lm_jobs: int = Field(
+        default=2,
+        description="Maximum concurrent LM (language model) jobs",
+    )
+    artifact_store_backend: str = Field(
+        default="filesystem",
+        description="Artifact store backend: 'filesystem' or 'minio'",
+    )
+    build_cache_ttl_seconds: int = Field(
+        default=3600,
+        description="TTL for build cache entries in seconds",
+    )
+    default_repro_attempts: int = Field(
+        default=5,
+        description="Default number of reproduction attempts per artifact",
+    )
+    default_minimization_budget_seconds: int = Field(
+        default=60,
+        description="Default time budget for artifact minimization in seconds",
+    )
+    state_reset_timeout_seconds: int = Field(
+        default=30,
+        description="Timeout for resetting target state between runs",
+    )
+    max_corpus_bytes_per_lane: int = Field(
+        default=100 * 1024 * 1024,
+        description="Maximum corpus size per lane in bytes (default 100MB)",
+    )
+    internet_egress_policy: str = Field(
+        default="blocked",
+        description="Internet egress policy for runner containers: 'blocked' or 'allowed'",
+    )
+    internal_service_network: bool = Field(
+        default=True,
+        description="Whether runners can reach internal services (e.g. target under test)",
+    )
+    runner_cpu_limit: str = Field(
+        default="2",
+        description="CPU limit for runner containers (Docker CPU quota)",
+    )
+    runner_memory_limit: str = Field(
+        default="2048",
+        description="Memory limit for runner containers in MB",
+    )
+    runner_disk_limit: str = Field(
+        default="4096",
+        description="Disk limit for runner containers in MB",
+    )
+
     # Auth bootstrap (development convenience)
     # By default, the token minting endpoints (/api/auth/*) are localhost-only.
     auth_bootstrap_allow_remote: bool = False

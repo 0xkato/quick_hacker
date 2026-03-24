@@ -275,7 +275,8 @@ class CampaignController:
 
         1. Get campaign.
         2. Get all validated execution bundles.
-        3. For each bundle: create RunLane record (status=queued) and enqueue job.
+        3. For each bundle (respecting scheduler limits): create RunLane
+           record (status=queued) and enqueue job.
         4. Update campaign status to RUNNING with started_at timestamp.
         5. Emit WebSocket event.
         6. Return campaign.
@@ -285,6 +286,7 @@ class CampaignController:
         """
         from datetime import datetime, timezone
 
+        from campaigns.scheduler import campaign_scheduler
         from execution.workers.fuzz_worker_actor import run_lane
         from observability.campaign_events import campaign_broadcaster
 
@@ -306,9 +308,18 @@ class CampaignController:
         # Resolve repo path for compose file discovery
         repo_path = project_service.get_project_repo_path(campaign.repo_id)
 
+        # Initialize scheduler tracker with campaign parallelism limit
+        max_parallel = campaign.max_parallel_lanes or 2
+        campaign_scheduler.get_tracker(campaign_id, max_parallel=max_parallel)
+
         # 3. For each bundle: create RunLane record and enqueue Dramatiq job
         created_runs = []
         for bundle in bundles:
+            if not campaign_scheduler.can_enqueue_lane(campaign_id):
+                # Scheduler limit reached; remaining bundles will be
+                # picked up when a running lane completes.
+                break
+
             run = await run_lane_service.create_run(
                 lane_spec_id=bundle.lane_spec_id,
                 execution_bundle_id=bundle.id,
@@ -339,6 +350,7 @@ class CampaignController:
                         break
 
             run_lane.send(job_data)
+            campaign_scheduler.record_lane_start(campaign_id)
             created_runs.append(run)
 
         # 4. Update campaign status to RUNNING with started_at
@@ -352,6 +364,67 @@ class CampaignController:
         campaign_broadcaster.emit_campaign_status(campaign_id, "running")
 
         return updated
+
+    async def check_campaign_completion(
+        self, campaign_id: str
+    ) -> CampaignResponse | None:
+        """Check if all runs are done and transition campaign accordingly.
+
+        Gets all RunLane records for the campaign (through bundles).
+        If ALL runs are in a terminal state (completed/failed/cancelled/
+        superseded): transitions campaign to COMPLETED (or FAILED if every
+        run failed).  Sets ``completed_at`` timestamp.
+
+        Returns the updated campaign, or ``None`` if the campaign is not
+        yet ready for completion.
+        """
+        from datetime import datetime, timezone
+
+        from observability.campaign_events import campaign_broadcaster
+
+        campaign = await campaign_service.get_campaign(campaign_id)
+        if not campaign or campaign.status != CampaignStatus.RUNNING:
+            return None
+
+        bundles = await execution_bundle_service.list_bundles(campaign_id)
+        if not bundles:
+            return None
+
+        all_runs = []
+        for bundle in bundles:
+            bundle_id = bundle.id if hasattr(bundle, "id") else bundle.get("id")
+            runs = await run_lane_service.list_runs(bundle_id)
+            all_runs.extend(runs)
+
+        if not all_runs:
+            return None
+
+        terminal = {"completed", "failed", "cancelled", "superseded"}
+        statuses = []
+        for r in all_runs:
+            s = r.status if hasattr(r, "status") else r.get("status", "")
+            statuses.append(s)
+
+        if not all(s in terminal for s in statuses):
+            return None  # Still running
+
+        # All done -- determine final status
+        completed_count = sum(1 for s in statuses if s == "completed")
+
+        if completed_count > 0:
+            final_status = CampaignStatus.COMPLETED.value
+        else:
+            final_status = CampaignStatus.FAILED.value
+
+        result = await campaign_service.update_campaign_status(
+            campaign_id,
+            final_status,
+            completed_at=datetime.now(timezone.utc),
+        )
+
+        campaign_broadcaster.emit_campaign_status(campaign_id, final_status)
+
+        return result
 
     async def check_steering(self, campaign_id: str) -> dict | None:
         """Check if steering action needed. Returns decision or None.

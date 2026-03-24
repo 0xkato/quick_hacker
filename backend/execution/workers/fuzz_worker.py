@@ -264,6 +264,9 @@ async def execute_run_lane(
             completed_at=datetime.now(timezone.utc),
         )
 
+        # 10b. Post-run lifecycle: scheduler + completion + steering
+        await _post_run_lifecycle(campaign_id)
+
         return {
             "run_lane_id": run_lane_id,
             "status": final_status,
@@ -284,6 +287,12 @@ async def execute_run_lane(
             )
         except Exception:
             logger.exception("Failed to update run status after error")
+
+        # Post-run lifecycle even on failure
+        try:
+            await _post_run_lifecycle(campaign_id)
+        except Exception:
+            logger.exception("Post-run lifecycle failed after error")
 
         return {
             "run_lane_id": run_lane_id,
@@ -313,3 +322,36 @@ async def execute_run_lane(
                 await asyncio.to_thread(dm.teardown_network, campaign_id)
         except Exception:
             logger.exception("Failed to teardown Docker network")
+
+
+async def _post_run_lifecycle(campaign_id: str) -> None:
+    """Handle post-run lifecycle: scheduler bookkeeping, completion check,
+    and periodic steering.
+
+    Called after every run lane finishes (success or failure).
+    """
+    from campaigns.controller import campaign_controller
+    from campaigns.scheduler import campaign_scheduler
+
+    # 1. Record lane completion in scheduler
+    try:
+        campaign_scheduler.record_lane_complete(campaign_id)
+    except Exception:
+        logger.exception("[fuzz_worker] Error recording lane complete")
+
+    # 2. Check if campaign is complete
+    try:
+        await campaign_controller.check_campaign_completion(campaign_id)
+    except Exception:
+        logger.exception("[fuzz_worker] Error checking campaign completion")
+
+    # 3. Periodic steering check
+    try:
+        if campaign_scheduler.can_steer(campaign_id):
+            campaign_scheduler.record_steering_start(campaign_id)
+            try:
+                await campaign_controller.check_steering(campaign_id)
+            finally:
+                campaign_scheduler.record_steering_complete(campaign_id)
+    except Exception:
+        logger.exception("[fuzz_worker] Steering error")

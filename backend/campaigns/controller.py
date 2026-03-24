@@ -11,7 +11,7 @@ import os
 
 from campaigns.intake import detect_capability_profile, validate_support_contract
 from campaigns.planner import plan_lanes_for_targets
-from lanes.compiler import compile_schemathesis_config
+from lanes.harness_compiler import compile_harness
 from lanes.validators import validate_harness
 from models.campaign_enums import CampaignStatus
 from models.campaign_schemas import CampaignResponse
@@ -193,14 +193,23 @@ class CampaignController:
             while attempt < max_failures and not compiled:
                 attempt += 1
 
-                harness_code = compile_schemathesis_config(
-                    lane_spec=lane_dict,
+                # Get the engine for this lane
+                engine = lane_dict.get("engine", "schemathesis")
+
+                # Compile harness using the multi-engine compiler
+                harness_result = compile_harness(
+                    engine=engine,
                     target={
                         "entrypoint": target.entrypoint,
                         "stateful": target.stateful,
                     },
+                    repo_path=repo_path or "",
                     openapi_url=openapi_filename,
+                    base_url="http://target:8080",
+                    lane_spec=lane_dict,
                 )
+
+                harness_code = harness_result["code"]
 
                 validation = validate_harness(harness_code)
 

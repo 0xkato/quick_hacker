@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+RUN pip install slither-analyzer
+RUN curl -L https://foundry.paradigm.xyz | bash && /root/.foundry/bin/foundryup
+ENV PATH="/root/.foundry/bin:${PATH}"
+RUN apt-get update && apt-get install -y curl && \
+    curl -L https://github.com/crytic/echidna/releases/latest/download/echidna-linux -o /usr/local/bin/echidna && \
+    chmod +x /usr/local/bin/echidna
+WORKDIR /app

@@ -449,8 +449,8 @@ class TestCompileCampaign:
             ),
             # Force invalid harness by making compiler return bad code
             patch(
-                "campaigns.controller.compile_schemathesis_config",
-                return_value="invalid python code }{}{",
+                "campaigns.controller.compile_harness",
+                return_value={"code": "invalid python code }{}{", "language": "python", "build_cmd": None, "run_cmd": "", "deps": [], "env_vars": {}, "dockerfile_additions": []},
             ),
             patch(
                 "campaigns.controller.validate_harness",
@@ -521,8 +521,8 @@ class TestCompileCampaign:
                 return_value=mock_lane_spec,
             ),
             patch(
-                "campaigns.controller.compile_schemathesis_config",
-                return_value="bad code",
+                "campaigns.controller.compile_harness",
+                return_value={"code": "bad code", "language": "python", "build_cmd": None, "run_cmd": "", "deps": [], "env_vars": {}, "dockerfile_additions": []},
             ),
             patch(
                 "campaigns.controller.validate_harness",

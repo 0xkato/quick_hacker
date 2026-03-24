@@ -1,0 +1,5 @@
+FROM eclipse-temurin:21-jdk
+RUN apt-get update && apt-get install -y python3 python3-pip curl
+RUN curl -L -o jazzer.tar.gz https://github.com/CodeIntelligenceTesting/jazzer/releases/latest/download/jazzer-linux.tar.gz && \
+    tar xzf jazzer.tar.gz -C /usr/local/bin && rm jazzer.tar.gz
+WORKDIR /app

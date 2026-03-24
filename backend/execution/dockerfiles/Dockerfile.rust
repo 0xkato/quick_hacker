@@ -1,0 +1,3 @@
+FROM rust:latest
+RUN rustup default nightly && cargo install cargo-fuzz
+WORKDIR /app

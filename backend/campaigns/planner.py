@@ -23,14 +23,51 @@ def _get(target, key, default=None):
     return getattr(target, key, default)
 
 
+def _select_engine(target: object, campaign_preset: str) -> str:
+    """Select the best engine for a target based on its kind and language."""
+    kind = str(_get(target, "kind", ""))
+    # Normalise enum values
+    if hasattr(kind, "value"):
+        kind = kind.value  # type: ignore[union-attr]
+    language = str(_get(target, "language", "")).lower()
+
+    if kind == "api_route":
+        return "schemathesis"
+    elif kind == "native_function":
+        if language == "python":
+            return "atheris"
+        elif language in ("c", "cpp", "c++"):
+            return "aflpp"
+        elif language == "java":
+            return "jazzer"
+        elif language == "go":
+            return "go_fuzz"
+        elif language == "rust":
+            return "cargo_fuzz"
+        elif language == "solidity":
+            return "echidna"
+        else:
+            return "radamsa"
+    elif kind == "parser":
+        return "grammarinator"
+    elif kind == "workflow":
+        return "restler"
+    elif kind == "message_consumer":
+        return "boofuzz"
+    else:
+        return "schemathesis"  # default
+
+
 def plan_lanes_for_targets(
     targets: list,
     campaign_preset: str = "quick",
 ) -> list[dict]:
-    """Generate lane spec definitions for each API route target.
+    """Generate lane spec definitions for each target.
 
-    v1: One schema-property Schemathesis lane per ``api_route`` target.
-    Non-``api_route`` targets are silently skipped.
+    Selects the best fuzzing engine for each target based on its kind
+    and language.  API routes use Schemathesis; native functions are
+    dispatched to language-specific coverage-guided fuzzers; parsers
+    use grammar-based generation; etc.
 
     Returns a list of lane spec dicts ready for
     ``lane_service.create_lane_specs_batch``.
@@ -39,10 +76,7 @@ def plan_lanes_for_targets(
     lanes: list[dict] = []
 
     for target in targets:
-        kind = _get(target, "kind")
-        kind_str = kind.value if hasattr(kind, "value") else str(kind)
-        if kind_str != "api_route":
-            continue
+        engine = _select_engine(target, campaign_preset)
 
         feedback_models = ["api_surface"]
         oracle_packs = ["status_code", "schema_conformance"]
@@ -54,7 +88,7 @@ def plan_lanes_for_targets(
         lanes.append(
             {
                 "target_id": _get(target, "id"),
-                "engine": "schemathesis",
+                "engine": engine,
                 "structure_model": "schema",
                 "input_producer": "generation",
                 "feedback_models": feedback_models,

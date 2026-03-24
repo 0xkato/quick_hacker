@@ -14,6 +14,7 @@ import tempfile
 from datetime import datetime, timezone
 
 from execution.docker_manager import DockerNetworkManager
+from execution.engines.registry import get_engine
 from execution.engines.schemathesis_engine import SchemathesisEngine
 from services.coverage_service import coverage_service
 from services.run_lane_service import run_lane_service
@@ -80,7 +81,7 @@ async def execute_run_lane(
     dict with keys: run_lane_id, status, metrics, artifact_candidates, errors.
     """
     dm = docker_manager or DockerNetworkManager()
-    eng = engine or SchemathesisEngine()
+    eng = engine or get_engine("schemathesis")
     store = object_store or LocalFileStore(".artifacts")
 
     network_name: str | None = None

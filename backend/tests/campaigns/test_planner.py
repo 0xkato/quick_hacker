@@ -29,14 +29,17 @@ class TestLanePlanner:
         assert quick[0]["budget_seconds"] == 60
         assert pro[0]["budget_seconds"] == 1800
 
-    def test_non_api_targets_skipped(self):
+    def test_non_api_targets_get_appropriate_engines(self):
         targets = [
             {"id": "t1", "kind": "parser", "entrypoint": "parse_xml", "stateful": False},
             {"id": "t2", "kind": "api_route", "entrypoint": "GET /x", "stateful": False},
         ]
         lanes = plan_lanes_for_targets(targets, "quick")
-        assert len(lanes) == 1
-        assert lanes[0]["target_id"] == "t2"
+        assert len(lanes) == 2
+        assert lanes[0]["target_id"] == "t1"
+        assert lanes[0]["engine"] == "grammarinator"
+        assert lanes[1]["target_id"] == "t2"
+        assert lanes[1]["engine"] == "schemathesis"
 
     def test_empty_targets_returns_empty(self):
         assert plan_lanes_for_targets([], "quick") == []

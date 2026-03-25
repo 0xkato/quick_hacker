@@ -71,11 +71,20 @@ class CampaignController:
         profile = detect_capability_profile(repo_path)
 
         # 5. Extract targets (multi-language + OpenAPI)
+        # Get scope from campaign config
+        config = await campaign_service.get_campaign_config(campaign_id) or {}
+        target_scope = config.get("target_scope")
+        target_filters = config.get("target_filters")
+        directed_targets = config.get("directed_targets")
+
         full_openapi_path = profile.openapi_path if profile.openapi_path else None
         targets = extract_all_targets(
             repo_path=repo_path,
             openapi_path=full_openapi_path,
             languages=profile.languages,
+            target_scope=target_scope,
+            target_filters=target_filters,
+            directed_targets=directed_targets,
         )
 
         # 6. Persist targets

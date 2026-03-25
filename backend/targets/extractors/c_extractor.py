@@ -9,25 +9,27 @@ import re
 from pathlib import Path
 
 
-def extract_c_targets(repo_path: str, language: str = "c") -> list[dict]:
+def extract_c_targets(repo_path: str | list[str], language: str = "c") -> list[dict]:
     """Extract fuzzable C/C++ function targets from a repository."""
+    paths = [repo_path] if isinstance(repo_path, str) else repo_path
     targets = []
-    p = Path(repo_path)
 
     extensions = {"c": [".c", ".h"], "cpp": [".cpp", ".cc", ".cxx", ".hpp", ".h"], "c++": [".cpp", ".cc", ".hpp", ".h"]}
     exts = extensions.get(language, [".c", ".cpp", ".h"])
 
-    for ext in exts:
-        for f in p.rglob(f"*{ext}"):
-            rel = f.relative_to(p)
-            if _should_skip(rel):
-                continue
-            try:
-                content = f.read_text(errors="ignore")
-                funcs = _extract_functions(content, str(rel))
-                targets.extend(funcs)
-            except Exception:
-                continue
+    for base_path in paths:
+        p = Path(base_path)
+        for ext in exts:
+            for f in p.rglob(f"*{ext}"):
+                rel = f.relative_to(p)
+                if _should_skip(rel):
+                    continue
+                try:
+                    content = f.read_text(errors="ignore")
+                    funcs = _extract_functions(content, str(rel))
+                    targets.extend(funcs)
+                except Exception:
+                    continue
 
     return targets
 

@@ -6,22 +6,24 @@ import re
 from pathlib import Path
 
 
-def extract_python_targets(repo_path: str) -> list[dict]:
+def extract_python_targets(repo_path: str | list[str]) -> list[dict]:
     """Extract fuzzable Python function targets."""
+    paths = [repo_path] if isinstance(repo_path, str) else repo_path
     targets = []
-    p = Path(repo_path)
 
-    for f in p.rglob("*.py"):
-        rel = f.relative_to(p)
-        if _should_skip(rel):
-            continue
-        try:
-            content = f.read_text(errors="ignore")
-            tree = ast.parse(content)
-            funcs = _extract_functions(tree, content, str(rel))
-            targets.extend(funcs)
-        except (SyntaxError, Exception):
-            continue
+    for base_path in paths:
+        p = Path(base_path)
+        for f in p.rglob("*.py"):
+            rel = f.relative_to(p)
+            if _should_skip(rel):
+                continue
+            try:
+                content = f.read_text(errors="ignore")
+                tree = ast.parse(content)
+                funcs = _extract_functions(tree, content, str(rel))
+                targets.extend(funcs)
+            except (SyntaxError, Exception):
+                continue
 
     return targets
 

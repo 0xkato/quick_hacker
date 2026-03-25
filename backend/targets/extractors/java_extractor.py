@@ -5,20 +5,22 @@ import re
 from pathlib import Path
 
 
-def extract_java_targets(repo_path: str) -> list[dict]:
+def extract_java_targets(repo_path: str | list[str]) -> list[dict]:
+    paths = [repo_path] if isinstance(repo_path, str) else repo_path
     targets = []
-    p = Path(repo_path)
 
-    for f in p.rglob("*.java"):
-        rel = f.relative_to(p)
-        if _should_skip(rel):
-            continue
-        try:
-            content = f.read_text(errors="ignore")
-            methods = _extract_methods(content, str(rel))
-            targets.extend(methods)
-        except Exception:
-            continue
+    for base_path in paths:
+        p = Path(base_path)
+        for f in p.rglob("*.java"):
+            rel = f.relative_to(p)
+            if _should_skip(rel):
+                continue
+            try:
+                content = f.read_text(errors="ignore")
+                methods = _extract_methods(content, str(rel))
+                targets.extend(methods)
+            except Exception:
+                continue
 
     return targets
 

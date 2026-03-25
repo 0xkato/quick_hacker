@@ -142,6 +142,11 @@ class TestCampaignController:
                 return_value=mock_campaign,
             ),
             patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
                 "campaigns.controller.project_service.get_project_repo_path",
                 return_value=str(tmp_path),
             ),
@@ -267,6 +272,11 @@ class TestCampaignController:
                 "campaigns.controller.campaign_service.get_campaign",
                 new_callable=AsyncMock,
                 return_value=mock_campaign,
+            ),
+            patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={},
             ),
             patch(
                 "campaigns.controller.project_service.get_project_repo_path",

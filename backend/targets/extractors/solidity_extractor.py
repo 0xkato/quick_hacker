@@ -5,21 +5,23 @@ import re
 from pathlib import Path
 
 
-def extract_solidity_targets(repo_path: str) -> list[dict]:
+def extract_solidity_targets(repo_path: str | list[str]) -> list[dict]:
     """Extract fuzzable Solidity contract targets."""
+    paths = [repo_path] if isinstance(repo_path, str) else repo_path
     targets = []
-    p = Path(repo_path)
 
-    for f in p.rglob("*.sol"):
-        rel = f.relative_to(p)
-        if _should_skip(rel):
-            continue
-        try:
-            content = f.read_text(errors="ignore")
-            contracts = _extract_contracts(content, str(rel))
-            targets.extend(contracts)
-        except Exception:
-            continue
+    for base_path in paths:
+        p = Path(base_path)
+        for f in p.rglob("*.sol"):
+            rel = f.relative_to(p)
+            if _should_skip(rel):
+                continue
+            try:
+                content = f.read_text(errors="ignore")
+                contracts = _extract_contracts(content, str(rel))
+                targets.extend(contracts)
+            except Exception:
+                continue
 
     return targets
 

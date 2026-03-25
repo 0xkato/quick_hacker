@@ -18,13 +18,20 @@ interface CampaignManagerProps {
 
 export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaign, onCreateCampaign, onStartCampaign, onPauseCampaign, onResumeCampaign, onCancelCampaign, onDeleteCampaign, repoId, lanes }: CampaignManagerProps) {
   const [preset, setPreset] = useState<CampaignPreset>('quick');
+  const [targetScope, setTargetScope] = useState('');
+  const [directedTargets, setDirectedTargets] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
   const handleCreate = async () => {
     if (!repoId) return;
     setIsCreating(true);
     try {
-      const campaign = await onCreateCampaign({ repo_id: repoId, campaign_preset: preset });
+      const campaign = await onCreateCampaign({
+        repo_id: repoId,
+        campaign_preset: preset,
+        target_scope: targetScope || undefined,
+        directed_targets: directedTargets ? directedTargets.split(',').map(s => s.trim()) : undefined,
+      });
       await onStartCampaign(campaign.id);
     } catch (e) {
       console.error('Failed to create campaign:', e);
@@ -64,6 +71,26 @@ export function CampaignManager({ campaigns, selectedCampaignId, onSelectCampaig
             <option value="ultra">Ultra (~24 hrs)</option>
             <option value="evil">Evil (~72 hrs)</option>
           </select>
+        </div>
+        <div className="mb-2">
+          <label className="text-[10px] text-[var(--text-muted)] block mb-1">Target Scope (optional)</label>
+          <input
+            type="text"
+            value={targetScope}
+            onChange={e => setTargetScope(e.target.value)}
+            placeholder="e.g., drivers/usb,net/bluetooth"
+            className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs rounded px-2 py-1.5 border border-[var(--border-primary)]"
+          />
+        </div>
+        <div className="mb-2">
+          <label className="text-[10px] text-[var(--text-muted)] block mb-1">Directed Targets (optional)</label>
+          <input
+            type="text"
+            value={directedTargets}
+            onChange={e => setDirectedTargets(e.target.value)}
+            placeholder="e.g., drivers/usb/core/hub.c:hub_port_init"
+            className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs rounded px-2 py-1.5 border border-[var(--border-primary)]"
+          />
         </div>
         <button
           onClick={handleCreate}

@@ -55,17 +55,13 @@ class CampaignController:
         if repo_path is None:
             raise ValueError("Project repo not found")
 
-        # 3. Validate v1 support contract
+        # 3. Validate repo capabilities (advisory, not blocking)
         contract = validate_support_contract(repo_path)
-        if not contract.valid:
-            await campaign_service.update_campaign_status(
-                campaign_id,
-                CampaignStatus.FAILED.value,
-                error_message="; ".join(contract.reasons),
-            )
-            raise ValueError(
-                f"Support contract invalid: {'; '.join(contract.reasons)}"
-            )
+        if contract.reasons:
+            import logging as _logging
+            _log = _logging.getLogger(__name__)
+            for reason in contract.reasons:
+                _log.warning("[plan_campaign] %s", reason)
 
         # 4. Detect capability profile
         profile = detect_capability_profile(repo_path)
@@ -401,11 +397,13 @@ class CampaignController:
                 "execution_bundle_id": bundle.id,
                 "campaign_id": campaign_id,
                 "harness_code_ref": f"campaigns/{campaign_id}/harnesses/{bundle.lane_spec_id}.py",
-                "compose_path": compose_path,
+                "compose_path": compose_path or "",  # Empty = no Docker target
+                "needs_docker_target": bool(compose_path),
                 "openapi_url": openapi_url,
                 "timeout_seconds": run.timeout_seconds or 1800,
                 "lane_spec_id": bundle.lane_spec_id,
                 "env_snapshot_id": env_snap_id,
+                "repo_path": repo_path or "",
             }
 
             run_lane.send(job_data)

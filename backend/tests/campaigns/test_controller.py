@@ -181,8 +181,8 @@ class TestCampaignController:
         assert "POST /api/users" in entrypoints
 
     @pytest.mark.asyncio
-    async def test_plan_invalid_repo_fails(self, tmp_path):
-        """Missing compose: plan fails, status set to FAILED."""
+    async def test_plan_repo_without_compose_logs_warning_and_continues(self, tmp_path):
+        """Missing compose: logs warning but continues planning (no longer fails)."""
         # Only openapi, no compose
         (tmp_path / "openapi.json").write_text(
             json.dumps({"openapi": "3.0.0", "paths": {}})
@@ -203,20 +203,31 @@ class TestCampaignController:
                 return_value=str(tmp_path),
             ),
             patch(
+                "campaigns.controller.campaign_service.get_campaign_config",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "campaigns.controller.extract_all_targets",
+                return_value=[],
+            ),
+            patch(
                 "campaigns.controller.campaign_service.update_campaign_status",
                 new_callable=AsyncMock,
-                return_value=_make_campaign(status=CampaignStatus.FAILED),
+                return_value=_make_campaign(status=CampaignStatus.EXTRACTING),
             ) as mock_update,
+            patch(
+                "observability.campaign_events.campaign_broadcaster",
+                MagicMock(),
+            ),
         ):
-            with pytest.raises(ValueError, match="Support contract invalid"):
-                await controller.plan_campaign("c1")
+            # No longer raises -- contract is advisory
+            result = await controller.plan_campaign("c1")
 
-        # Assert status set to FAILED with an error message
+        # Status should transition to EXTRACTING, not FAILED
         mock_update.assert_called_once()
         call_args = mock_update.call_args
-        assert call_args[0][1] == CampaignStatus.FAILED.value
-        assert "error_message" in call_args[1]
-        assert "compose" in call_args[1]["error_message"].lower()
+        assert call_args[0][1] == CampaignStatus.EXTRACTING.value
 
     @pytest.mark.asyncio
     async def test_plan_missing_campaign_fails(self):

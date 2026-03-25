@@ -47,7 +47,8 @@ class TestValidateSupportContract:
         assert result.compose_path is not None
         assert result.openapi_path is not None
 
-    def test_missing_compose(self, tmp_path):
+    def test_missing_compose_still_valid(self, tmp_path):
+        """Repo without docker-compose is still valid -- just warns."""
         _write(
             str(tmp_path / "openapi.yaml"),
             "openapi: '3.0.0'\ninfo:\n  title: API",
@@ -55,17 +56,18 @@ class TestValidateSupportContract:
 
         result = validate_support_contract(str(tmp_path))
 
-        assert result.valid is False
-        assert any("docker-compose" in r.lower() or "compose" in r.lower() for r in result.reasons)
+        assert result.valid is True
+        assert any("docker-compose" in r.lower() for r in result.reasons)
         assert result.compose_path is None
 
-    def test_missing_openapi(self, tmp_path):
+    def test_missing_openapi_still_valid(self, tmp_path):
+        """Repo without OpenAPI is still valid -- just warns."""
         _write(str(tmp_path / "docker-compose.yml"), "version: '3'")
 
         result = validate_support_contract(str(tmp_path))
 
-        assert result.valid is False
-        assert any("openapi" in r.lower() or "swagger" in r.lower() for r in result.reasons)
+        assert result.valid is True
+        assert any("openapi" in r.lower() for r in result.reasons)
         assert result.openapi_path is None
 
     def test_compose_yaml_variant_accepted(self, tmp_path):
@@ -105,13 +107,21 @@ class TestValidateSupportContract:
         assert result.valid is True
         assert result.openapi_path is not None
 
-    def test_empty_repo(self, tmp_path):
+    def test_empty_repo_still_valid(self, tmp_path):
+        """Even an empty repo is valid -- we can still scan source."""
         result = validate_support_contract(str(tmp_path))
 
-        assert result.valid is False
+        assert result.valid is True
         assert len(result.reasons) >= 2
         assert result.compose_path is None
         assert result.openapi_path is None
+
+    def test_repo_with_only_c_code_still_valid(self, tmp_path):
+        """Pure C repo without docker-compose is still valid."""
+        _write(str(tmp_path / "main.c"), "int main() { return 0; }")
+        result = validate_support_contract(str(tmp_path))
+        assert result.valid is True
+        assert any("docker-compose" in r.lower() for r in result.reasons)
 
 
 # ===========================================================================
@@ -214,3 +224,45 @@ class TestDetectCapabilityProfile:
         result = detect_capability_profile(str(tmp_path))
 
         assert result.has_health_check is True
+
+    def test_detects_cmake_build_system(self, tmp_path):
+        _write(str(tmp_path / "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.10)")
+        _write(str(tmp_path / "main.c"), "int main() { return 0; }")
+
+        result = detect_capability_profile(str(tmp_path))
+
+        assert "cmake" in result.build_systems
+
+    def test_detects_cargo_build_system(self, tmp_path):
+        _write(str(tmp_path / "Cargo.toml"), '[package]\nname = "mylib"')
+        _write(str(tmp_path / "src" / "lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }")
+
+        result = detect_capability_profile(str(tmp_path))
+
+        assert "cargo" in result.build_systems
+        assert "rust" in result.languages
+
+    def test_detects_go_mod_build_system(self, tmp_path):
+        _write(str(tmp_path / "go.mod"), "module example.com/mymod\ngo 1.21")
+        _write(str(tmp_path / "main.go"), "package main")
+
+        result = detect_capability_profile(str(tmp_path))
+
+        assert "go_mod" in result.build_systems
+        assert "go" in result.languages
+
+    def test_detects_foundry_build_system(self, tmp_path):
+        _write(str(tmp_path / "foundry.toml"), "[profile.default]\nsrc = 'src'")
+
+        result = detect_capability_profile(str(tmp_path))
+
+        assert "foundry" in result.build_systems
+
+    def test_detects_multiple_build_systems(self, tmp_path):
+        _write(str(tmp_path / "Makefile"), "all:\n\tgcc main.c")
+        _write(str(tmp_path / "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.10)")
+
+        result = detect_capability_profile(str(tmp_path))
+
+        assert "make" in result.build_systems
+        assert "cmake" in result.build_systems

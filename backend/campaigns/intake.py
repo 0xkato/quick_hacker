@@ -39,6 +39,7 @@ class CapabilityProfile:
     compose_path: str | None = None
     languages: list[str] = field(default_factory=list)
     framework: str | None = None
+    build_systems: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +65,22 @@ _EXTENSION_LANG_MAP: dict[str, str] = {
 
 _PYTHON_FRAMEWORKS = {"fastapi": "fastapi", "django": "django", "flask": "flask"}
 _NODE_FRAMEWORKS = {"express": "express", "next": "next", "fastify": "fastify"}
+
+# Build-system markers: filename -> build system label
+_BUILD_SYSTEM_FILES: dict[str, str] = {
+    "Makefile": "make",
+    "CMakeLists.txt": "cmake",
+    "meson.build": "meson",
+    "Cargo.toml": "cargo",
+    "go.mod": "go_mod",
+    "foundry.toml": "foundry",
+    "hardhat.config.js": "hardhat",
+    "hardhat.config.ts": "hardhat",
+    "pyproject.toml": "pyproject",
+    "setup.py": "setuptools",
+    "build.gradle": "gradle",
+    "pom.xml": "maven",
+}
 
 
 def _find_compose(repo_path: str) -> str | None:
@@ -142,25 +159,26 @@ def _iter_dirs(directory: str):
 # ---------------------------------------------------------------------------
 
 def validate_support_contract(repo_path: str) -> ContractValidation:
-    """Check whether *repo_path* satisfies the v1 support contract.
+    """Validate repo capabilities. Always passes — missing items are warnings, not blockers.
 
-    The v1 contract requires:
-    * A ``docker-compose.yml`` or ``compose.yaml`` in the repo root.
-    * An OpenAPI or Swagger spec reachable in the root or up to 2 levels deep.
+    The system can fuzz any repo:
+    - With docker-compose + OpenAPI: full API fuzzing via Schemathesis
+    - With source code only: native fuzzing via AFL++, Atheris, Jazzer, etc.
+    - With directed targets: user specifies exact entry points
     """
     reasons: list[str] = []
 
     compose_path = _find_compose(repo_path)
-    if compose_path is None:
-        reasons.append("No docker-compose.yml or compose.yaml found")
-
     openapi_path = _find_openapi(repo_path)
-    if openapi_path is None:
-        reasons.append("No OpenAPI or Swagger spec found")
+
+    if not compose_path:
+        reasons.append("No docker-compose.yml found — API fuzzing lanes unavailable, native fuzzing still works")
+    if not openapi_path:
+        reasons.append("No OpenAPI spec found — schema-based fuzzing unavailable, source-based extraction still works")
 
     return ContractValidation(
-        valid=len(reasons) == 0,
-        reasons=reasons,
+        valid=True,  # Always valid — we can fuzz anything
+        reasons=reasons,  # Warnings, not errors
         compose_path=compose_path,
         openapi_path=openapi_path,
     )
@@ -177,6 +195,7 @@ def detect_capability_profile(repo_path: str) -> CapabilityProfile:
     has_tests = _detect_tests(repo_path)
     has_graphql = _detect_graphql(repo_path)
     has_health = _detect_health_check(compose_path, openapi_path)
+    build_systems = _detect_build_systems(repo_path)
 
     return CapabilityProfile(
         has_openapi_spec=openapi_path is not None,
@@ -188,6 +207,7 @@ def detect_capability_profile(repo_path: str) -> CapabilityProfile:
         compose_path=compose_path,
         languages=sorted(set(languages)),
         framework=framework,
+        build_systems=build_systems,
     )
 
 
@@ -270,6 +290,16 @@ def _detect_graphql(repo_path: str) -> bool:
 def _is_graphql_file(path: str) -> bool:
     ext = os.path.splitext(path)[1].lower()
     return ext in (".graphql", ".gql")
+
+
+def _detect_build_systems(repo_path: str) -> list[str]:
+    """Detect build systems from marker files in the repo root."""
+    found: list[str] = []
+    for filename, label in _BUILD_SYSTEM_FILES.items():
+        if os.path.isfile(os.path.join(repo_path, filename)):
+            if label not in found:
+                found.append(label)
+    return sorted(found)
 
 
 def _detect_health_check(

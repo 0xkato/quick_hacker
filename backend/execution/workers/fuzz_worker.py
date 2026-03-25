@@ -32,26 +32,26 @@ async def execute_run_lane(
     openapi_url: str,
     timeout_seconds: int = 1800,
     *,
+    needs_docker_target: bool | None = None,
+    repo_path: str = "",
     docker_manager: DockerNetworkManager | None = None,
     engine: SchemathesisEngine | None = None,
     object_store: LocalFileStore | None = None,
 ) -> dict:
-    """Execute a fuzz lane against a live target.
+    """Execute a fuzz lane against a live or native target.
 
     Steps
     -----
     1.  Update run status to RUNNING.
-    2.  Create campaign Docker network.
-    3.  Launch target from Compose.
-    4.  Wait for healthy.
-    5.  Download harness code from artifact store.
-    6.  Write harness to temp file.
-    7.  Run Schemathesis engine.
-    8.  Record coverage snapshots.
-    9.  For each failure: create raw artifact candidate dict.
-    10. Update run status to COMPLETED / FAILED.
-    11. Teardown target stack.
-    12. Return results dict with metrics + artifact_candidates.
+    2.  If Docker target needed: create network, launch compose, wait healthy.
+    3.  Download harness code from artifact store.
+    4.  Write harness to temp file.
+    5.  Run engine.
+    6.  Record coverage snapshots.
+    7.  For each failure: create raw artifact candidate dict.
+    8.  Update run status to COMPLETED / FAILED.
+    9.  Teardown Docker (if used).
+    10. Return results dict with metrics + artifact_candidates.
 
     Parameters
     ----------
@@ -64,11 +64,15 @@ async def execute_run_lane(
     harness_code_ref:
         Key in the object store for the harness source code.
     compose_path:
-        Path to the docker-compose file for the target.
+        Path to the docker-compose file for the target (empty = no Docker).
     openapi_url:
         URL or path to the OpenAPI spec for the target.
     timeout_seconds:
         Maximum wall-clock time for the engine run.
+    needs_docker_target:
+        Whether to launch a Docker target. Defaults to bool(compose_path).
+    repo_path:
+        Path to the cloned repo (used as base_url for native fuzzers).
     docker_manager:
         Optional injected DockerNetworkManager (for testing).
     engine:
@@ -80,12 +84,16 @@ async def execute_run_lane(
     -------
     dict with keys: run_lane_id, status, metrics, artifact_candidates, errors.
     """
+    # Determine whether Docker is needed
+    needs_docker = needs_docker_target if needs_docker_target is not None else bool(compose_path)
+
     dm = docker_manager or DockerNetworkManager()
     eng = engine or get_engine("schemathesis")
     store = object_store or LocalFileStore(".artifacts")
 
     network_name: str | None = None
     target_launched = False
+    stack_info = None
     harness_path: str | None = None
 
     try:
@@ -96,34 +104,42 @@ async def execute_run_lane(
             started_at=datetime.now(timezone.utc),
         )
 
-        # 2. Create campaign Docker network
-        network_name = await asyncio.to_thread(dm.create_campaign_network, campaign_id)
+        # 2. Docker target lifecycle (only if compose_path provided)
+        if needs_docker:
+            network_name = await asyncio.to_thread(dm.create_campaign_network, campaign_id)
 
-        # 3. Launch target from Compose
-        stack_info = await asyncio.to_thread(dm.launch_target_stack, campaign_id, compose_path)
-        target_launched = True
+            stack_info = await asyncio.to_thread(dm.launch_target_stack, campaign_id, compose_path)
+            target_launched = True
 
-        # 4. Wait for healthy
-        healthy = await asyncio.to_thread(dm.wait_for_healthy, stack_info.base_url)
-        if not healthy:
-            error_msg = (
-                f"Target at {stack_info.base_url} did not become healthy"
+            healthy = await asyncio.to_thread(dm.wait_for_healthy, stack_info.base_url)
+            if not healthy:
+                error_msg = (
+                    f"Target at {stack_info.base_url} did not become healthy"
+                )
+                logger.error(error_msg)
+                await run_lane_service.update_run_status(
+                    run_lane_id,
+                    "failed",
+                    completed_at=datetime.now(timezone.utc),
+                )
+                return {
+                    "run_lane_id": run_lane_id,
+                    "status": "failed",
+                    "metrics": {},
+                    "artifact_candidates": [],
+                    "errors": [error_msg],
+                }
+
+            base_url = stack_info.base_url
+        else:
+            # Native fuzzing — no Docker target needed
+            base_url = repo_path
+            logger.info(
+                "[execute_run_lane] No Docker target — native fuzzing against %s",
+                repo_path,
             )
-            logger.error(error_msg)
-            await run_lane_service.update_run_status(
-                run_lane_id,
-                "failed",
-                completed_at=datetime.now(timezone.utc),
-            )
-            return {
-                "run_lane_id": run_lane_id,
-                "status": "failed",
-                "metrics": {},
-                "artifact_candidates": [],
-                "errors": [error_msg],
-            }
 
-        # 5. Download harness code from artifact store
+        # 3. Download harness code from artifact store
         harness_bytes = await asyncio.to_thread(store.get, harness_code_ref)
         if harness_bytes is None:
             error_msg = f"Harness code not found: {harness_code_ref}"
@@ -151,11 +167,11 @@ async def execute_run_lane(
 
         harness_path = await asyncio.to_thread(_write_temp, harness_bytes)
 
-        # 7. Run Schemathesis engine
+        # 5. Run engine
         result = await asyncio.to_thread(
             eng.run,
             harness_path=harness_path,
-            base_url=stack_info.base_url,
+            base_url=base_url,
             timeout_seconds=timeout_seconds,
         )
 
@@ -221,7 +237,7 @@ async def execute_run_lane(
             replay_result = await asyncio.to_thread(
                 replay_fn,
                 artifact_candidate=candidate,
-                base_url=stack_info.base_url,
+                base_url=base_url,
                 attempts=3,
             )
 
@@ -346,18 +362,19 @@ async def execute_run_lane(
             except OSError:
                 pass
 
-        # 11. Teardown target stack (always)
-        try:
-            if target_launched:
-                await asyncio.to_thread(dm.teardown_target_stack, campaign_id, compose_path)
-        except Exception:
-            logger.exception("Failed to teardown target stack")
+        # Teardown Docker target (only if we launched one)
+        if needs_docker:
+            try:
+                if target_launched:
+                    await asyncio.to_thread(dm.teardown_target_stack, campaign_id, compose_path)
+            except Exception:
+                logger.exception("Failed to teardown target stack")
 
-        try:
-            if network_name:
-                await asyncio.to_thread(dm.teardown_network, campaign_id)
-        except Exception:
-            logger.exception("Failed to teardown Docker network")
+            try:
+                if network_name:
+                    await asyncio.to_thread(dm.teardown_network, campaign_id)
+            except Exception:
+                logger.exception("Failed to teardown Docker network")
 
 
 async def _post_run_lifecycle(campaign_id: str) -> None:

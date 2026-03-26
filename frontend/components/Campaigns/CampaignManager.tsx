@@ -219,26 +219,13 @@ export function CampaignManager({
           {/* LM Model */}
           <div>
             <label className="text-[10px] text-[var(--text-muted)] block mb-1">Model</label>
-            <select
+            <input
+              type="text"
               value={lmModel}
               onChange={e => setLmModel(e.target.value)}
+              placeholder="e.g., claude-opus-4-6, gpt-5.4-codex"
               className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs rounded px-2 py-1.5 border border-[var(--border-primary)]"
-            >
-              {lmProvider === 'codex_cli' ? (
-                <>
-                  <option value="gpt-5.4-codex">GPT-5.4 Codex</option>
-                  <option value="gpt-5.2-codex">GPT-5.2 Codex</option>
-                  <option value="o4-mini">o4-mini</option>
-                </>
-              ) : (
-                <>
-                  <option value="claude-opus-4-6">Claude Opus 4.6</option>
-                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-                  <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
-                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-                </>
-              )}
-            </select>
+            />
           </div>
 
           {/* Advanced toggle */}
@@ -376,7 +363,7 @@ export function CampaignManager({
               {(c.status === 'created' || c.status === 'failed') && (
                 <button onClick={e => { e.stopPropagation(); onStartCampaign(c.id); }} className="text-[10px] text-green-400 hover:underline">Start</button>
               )}
-              {(c.status === 'completed' || c.status === 'failed' || c.status === 'cancelled') && onDeleteCampaign && (
+              {onDeleteCampaign && (
                 <button onClick={e => { e.stopPropagation(); onDeleteCampaign(c.id); }} className="text-[10px] text-red-400 hover:underline">Delete</button>
               )}
             </div>

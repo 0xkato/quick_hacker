@@ -26,6 +26,10 @@ def run_lane(job_data: dict):
             compose_path=job_data.get("compose_path", ""),
             openapi_url=job_data.get("openapi_url", "openapi.json"),
             timeout_seconds=job_data.get("timeout_seconds", 1800),
+            needs_docker_target=job_data.get("needs_docker_target"),
+            repo_path=job_data.get("repo_path", ""),
+            lane_spec_id=job_data.get("lane_spec_id", ""),
+            engine_name=job_data.get("engine_name", ""),
         ))
     finally:
         loop.close()

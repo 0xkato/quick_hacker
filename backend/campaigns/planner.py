@@ -61,6 +61,7 @@ def _select_engine(target: object, campaign_preset: str) -> str:
 def plan_lanes_for_targets(
     targets: list,
     campaign_preset: str = "quick",
+    enabled_engines: list[str] | None = None,
 ) -> list[dict]:
     """Generate lane spec definitions for each target.
 
@@ -68,6 +69,9 @@ def plan_lanes_for_targets(
     and language.  API routes use Schemathesis; native functions are
     dispatched to language-specific coverage-guided fuzzers; parsers
     use grammar-based generation; etc.
+
+    If ``enabled_engines`` is provided, only engines in the list are
+    used.  Targets that would require a non-enabled engine are skipped.
 
     Returns a list of lane spec dicts ready for
     ``lane_service.create_lane_specs_batch``.
@@ -77,6 +81,10 @@ def plan_lanes_for_targets(
 
     for target in targets:
         engine = _select_engine(target, campaign_preset)
+
+        # Respect enabled_engines filter: skip targets whose engine is not enabled
+        if enabled_engines and engine not in enabled_engines:
+            continue
 
         feedback_models = ["api_surface"]
         oracle_packs = ["status_code", "schema_conformance"]

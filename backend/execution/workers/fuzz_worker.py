@@ -14,8 +14,8 @@ import tempfile
 from datetime import datetime, timezone
 
 from execution.docker_manager import DockerNetworkManager
+from execution.engines.engine_interface import EngineInterface
 from execution.engines.registry import get_engine
-from execution.engines.schemathesis_engine import SchemathesisEngine
 from services.coverage_service import coverage_service
 from services.run_lane_service import run_lane_service
 from storage.object_store import LocalFileStore
@@ -34,8 +34,10 @@ async def execute_run_lane(
     *,
     needs_docker_target: bool | None = None,
     repo_path: str = "",
+    lane_spec_id: str = "",
+    engine_name: str = "",
     docker_manager: DockerNetworkManager | None = None,
-    engine: SchemathesisEngine | None = None,
+    engine: EngineInterface | None = None,
     object_store: LocalFileStore | None = None,
 ) -> dict:
     """Execute a fuzz lane against a live or native target.
@@ -88,7 +90,27 @@ async def execute_run_lane(
     needs_docker = needs_docker_target if needs_docker_target is not None else bool(compose_path)
 
     dm = docker_manager or DockerNetworkManager()
-    eng = engine or get_engine("schemathesis")
+    # Resolve engine: explicit param > engine_name param > fallback to schemathesis
+    if engine is not None:
+        eng = engine
+    elif engine_name:
+        eng = get_engine(engine_name)
+    else:
+        # Infer from harness file extension
+        if harness_code_ref.endswith(".c") or harness_code_ref.endswith(".cpp"):
+            eng = get_engine("aflpp")
+        elif harness_code_ref.endswith(".java"):
+            eng = get_engine("jazzer")
+        elif harness_code_ref.endswith("_test.go"):
+            eng = get_engine("go_fuzz")
+        elif harness_code_ref.endswith(".rs"):
+            eng = get_engine("cargo_fuzz")
+        elif harness_code_ref.endswith(".sol"):
+            eng = get_engine("echidna")
+        elif harness_code_ref.endswith(".json"):
+            eng = get_engine("restler")
+        else:
+            eng = get_engine("schemathesis")
     store = object_store or LocalFileStore(".artifacts")
 
     network_name: str | None = None
@@ -157,10 +179,12 @@ async def execute_run_lane(
                 "errors": [error_msg],
             }
 
-        # 6. Write harness to temp file
+        # 6. Write harness to temp file (use correct extension)
+        ext_from_ref = os.path.splitext(harness_code_ref)[1] or ".py"
+
         def _write_temp(data: bytes) -> str:
             with tempfile.NamedTemporaryFile(
-                suffix=".py", delete=False, mode="wb"
+                suffix=ext_from_ref, delete=False, mode="wb"
             ) as tmp:
                 tmp.write(data)
                 return tmp.name
@@ -190,7 +214,7 @@ async def execute_run_lane(
             async with get_session() as session:
                 corpus = DBCorpus(
                     id=_uuid.uuid4().hex[:8],
-                    lane_spec_id=job_data.get("lane_spec_id", "") if isinstance(job_data, dict) else "",
+                    lane_spec_id=lane_spec_id,
                     item_count=0,  # v1: not counting individual items
                     total_bytes=0,
                 )

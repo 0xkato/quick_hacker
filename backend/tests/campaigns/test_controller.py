@@ -685,6 +685,10 @@ class TestExecuteCampaign:
         async def _mock_get_session():
             yield mock_session
 
+        # Mock lane_spec lookup for engine resolution
+        mock_lane_spec = MagicMock()
+        mock_lane_spec.engine = "schemathesis"
+
         with (
             patch(
                 "campaigns.controller.campaign_service.get_campaign",
@@ -703,6 +707,11 @@ class TestExecuteCampaign:
             patch(
                 "database.connection.get_session",
                 _mock_get_session,
+            ),
+            patch(
+                "campaigns.controller.lane_service.get_lane_spec",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
             ),
             patch(
                 "campaigns.controller.run_lane_service.create_run",
@@ -764,6 +773,10 @@ class TestExecuteCampaign:
         async def _mock_get_session():
             yield mock_session
 
+        # Mock lane_spec lookup for engine resolution
+        mock_lane_spec = MagicMock()
+        mock_lane_spec.engine = "schemathesis"
+
         with (
             patch(
                 "campaigns.controller.campaign_service.get_campaign",
@@ -782,6 +795,11 @@ class TestExecuteCampaign:
             patch(
                 "database.connection.get_session",
                 _mock_get_session,
+            ),
+            patch(
+                "campaigns.controller.lane_service.get_lane_spec",
+                new_callable=AsyncMock,
+                return_value=mock_lane_spec,
             ),
             patch(
                 "campaigns.controller.run_lane_service.create_run",

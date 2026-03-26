@@ -128,7 +128,10 @@ class CampaignController:
         if campaign is None:
             raise ValueError(f"Campaign not found: {campaign_id}")
 
-        # 2. Get targets
+        # 2. Get campaign config (needed for engine filter + retry limits)
+        campaign_config = await campaign_service.get_campaign_config(campaign_id) or {}
+
+        # 3. Get targets
         targets = await target_service.list_targets(campaign_id)
         if not targets:
             await campaign_service.update_campaign_status(
@@ -138,9 +141,11 @@ class CampaignController:
             )
             raise ValueError("No targets found for compilation")
 
-        # 3. Plan lanes
+        # 4. Plan lanes
         planned_lanes = plan_lanes_for_targets(
-            targets, campaign_preset=campaign.preset.value
+            targets,
+            campaign_preset=campaign.preset.value,
+            enabled_engines=campaign_config.get("enabled_engines"),
         )
 
         if not planned_lanes:
@@ -168,8 +173,7 @@ class CampaignController:
         )
         store = LocalFileStore(artifact_root)
 
-        # Get campaign config for retry limit
-        campaign_config = await campaign_service.get_campaign_config(campaign_id) or {}
+        # Get retry limit from campaign config (fetched earlier)
         max_failures = campaign_config.get("max_compilation_failures_per_lane", 3)
 
         total_lanes = len(planned_lanes)
@@ -214,14 +218,22 @@ class CampaignController:
                 )
 
                 harness_code = harness_result["code"]
+                harness_language = harness_result.get("language", "python")
 
-                validation = validate_harness(harness_code)
+                validation = validate_harness(harness_code, language=harness_language)
 
                 if validation.passed:
                     compiled = True
 
                     # 4e. Store harness code in artifact store
-                    harness_ref = f"campaigns/{campaign_id}/harnesses/{lane_spec.id}.py"
+                    ext_map = {
+                        "python": ".py", "c": ".c", "cpp": ".cpp",
+                        "java": ".java", "go": "_test.go", "rust": ".rs",
+                        "solidity": ".sol", "json": ".json",
+                        "config": ".conf", "sql": ".sql",
+                    }
+                    ext = ext_map.get(harness_language, ".txt")
+                    harness_ref = f"campaigns/{campaign_id}/harnesses/{lane_spec.id}{ext}"
                     store.put(harness_ref, harness_code.encode("utf-8"))
 
                     # Create harness record
@@ -391,12 +403,27 @@ class CampaignController:
                 execution_bundle_id=bundle.id,
             )
 
+            # Resolve lane spec engine for correct harness ref + engine routing
+            lane_spec_info = await lane_service.get_lane_spec(bundle.lane_spec_id)
+            lane_engine = lane_spec_info.engine if lane_spec_info else "schemathesis"
+
+            # Determine harness file extension from engine
+            engine_ext_map = {
+                "schemathesis": ".py", "atheris": ".py", "hypothesis": ".py",
+                "boofuzz": ".py", "aflpp": ".c", "jazzer": ".java",
+                "go_fuzz": "_test.go", "cargo_fuzz": ".rs",
+                "echidna": ".sol", "foundry": ".sol",
+                "restler": ".json", "grammarinator": ".conf",
+                "sqlsmith": ".sql", "radamsa": ".conf",
+            }
+            harness_ext = engine_ext_map.get(lane_engine, ".py")
+
             # Build job data for the Dramatiq actor
             job_data = {
                 "run_lane_id": run.id,
                 "execution_bundle_id": bundle.id,
                 "campaign_id": campaign_id,
-                "harness_code_ref": f"campaigns/{campaign_id}/harnesses/{bundle.lane_spec_id}.py",
+                "harness_code_ref": f"campaigns/{campaign_id}/harnesses/{bundle.lane_spec_id}{harness_ext}",
                 "compose_path": compose_path or "",  # Empty = no Docker target
                 "needs_docker_target": bool(compose_path),
                 "openapi_url": openapi_url,
@@ -404,6 +431,7 @@ class CampaignController:
                 "lane_spec_id": bundle.lane_spec_id,
                 "env_snapshot_id": env_snap_id,
                 "repo_path": repo_path or "",
+                "engine_name": lane_engine,
             }
 
             run_lane.send(job_data)

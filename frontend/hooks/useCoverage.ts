@@ -10,7 +10,7 @@ export function useCoverage(campaignId: string | null) {
     if (!campaignId) { setCoverage(null); return; }
     setIsLoading(true);
     try {
-      const data = await campaignsApi.getCoverage(campaignId) as CoverageSummary;
+      const data = await campaignsApi.getCoverage(campaignId);
       setCoverage(data);
     } catch (e) {
       console.error('Failed to load coverage:', e);

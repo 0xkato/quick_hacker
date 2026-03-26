@@ -138,11 +138,16 @@ export default function Home() {
     }, [campaignMgmt.selectedCampaignId, behaviorTree.addNodes]),
     // Campaign callbacks
     onCampaignStatus: useCallback((campaignId: string, data: any) => {
+      // Spread all fields from the event (status, started_at, completed_at, error_message, etc.)
       campaignMgmt.setCampaignList(prev =>
-        prev.map(c => c.id === campaignId ? { ...c, status: data.status } : c)
+        prev.map(c => c.id === campaignId ? { ...c, ...data } : c)
       );
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [campaignMgmt.setCampaignList]),
+    onTargetUpsert: useCallback((_campaignId: string, _data: any) => {
+      targetData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [targetData.refresh]),
     onIssueUpsert: useCallback((_campaignId: string, _data: any) => {
       issueData.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -160,6 +165,10 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [steeringData.refresh]),
     onRunUpsert: useCallback((_campaignId: string, _data: any) => {
+      laneData.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [laneData.refresh]),
+    onLaneRetired: useCallback((_campaignId: string, _data: any) => {
       laneData.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [laneData.refresh]),
@@ -497,12 +506,12 @@ export default function Home() {
                   campaigns={campaignMgmt.campaigns}
                   selectedCampaignId={campaignMgmt.selectedCampaignId}
                   onSelectCampaign={campaignMgmt.setSelectedCampaignId}
-                  onCreateCampaign={campaignMgmt.createCampaign as any}
-                  onStartCampaign={campaignMgmt.startCampaign as any}
-                  onPauseCampaign={campaignMgmt.pauseCampaign as any}
-                  onResumeCampaign={campaignMgmt.resumeCampaign as any}
-                  onCancelCampaign={campaignMgmt.cancelCampaign as any}
-                  onDeleteCampaign={campaignMgmt.deleteCampaign as any}
+                  onCreateCampaign={campaignMgmt.createCampaign}
+                  onStartCampaign={campaignMgmt.startCampaign}
+                  onPauseCampaign={campaignMgmt.pauseCampaign}
+                  onResumeCampaign={campaignMgmt.resumeCampaign}
+                  onCancelCampaign={campaignMgmt.cancelCampaign}
+                  onDeleteCampaign={campaignMgmt.deleteCampaign}
                   repoId={currentProject.id}
                   lanes={laneData.lanes}
                   targets={targetData.targets}

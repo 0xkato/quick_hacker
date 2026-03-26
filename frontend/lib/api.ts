@@ -8,7 +8,15 @@ import type {
   FileNode,
   FileContent,
   Finding,
+  Campaign,
   CampaignCreateRequest,
+  Target,
+  LaneSpec,
+  Artifact,
+  ArtifactBucket,
+  CoverageSummary,
+  SteeringDecision,
+  Issue,
   SnapshotInfo,
   SessionSnapshot,
   BTNode,
@@ -221,51 +229,51 @@ export const files = {
 // === Campaign API ===
 
 export const campaigns = {
-  async create(data: CampaignCreateRequest) {
-    return request('/api/campaigns', { method: 'POST', body: JSON.stringify(data) });
+  async create(data: CampaignCreateRequest): Promise<Campaign> {
+    return request<Campaign>('/api/campaigns', { method: 'POST', body: JSON.stringify(data) });
   },
-  async list(repoId?: string) {
+  async list(repoId?: string): Promise<Campaign[]> {
     const params = repoId ? `?repo_id=${repoId}` : '';
-    return request(`/api/campaigns${params}`);
+    return request<Campaign[]>(`/api/campaigns${params}`);
   },
-  async get(id: string) {
-    return request(`/api/campaigns/${id}`);
+  async get(id: string): Promise<Campaign> {
+    return request<Campaign>(`/api/campaigns/${id}`);
   },
-  async plan(id: string) {
-    return request(`/api/campaigns/${id}/plan`, { method: 'POST' });
+  async plan(id: string): Promise<Campaign> {
+    return request<Campaign>(`/api/campaigns/${id}/plan`, { method: 'POST' });
   },
-  async start(id: string) {
-    return request(`/api/campaigns/${id}/start`, { method: 'POST' });
+  async start(id: string): Promise<Campaign> {
+    return request<Campaign>(`/api/campaigns/${id}/start`, { method: 'POST' });
   },
-  async pause(id: string) {
-    return request(`/api/campaigns/${id}/pause`, { method: 'POST' });
+  async pause(id: string): Promise<Campaign> {
+    return request<Campaign>(`/api/campaigns/${id}/pause`, { method: 'POST' });
   },
-  async resume(id: string) {
-    return request(`/api/campaigns/${id}/resume`, { method: 'POST' });
+  async resume(id: string): Promise<Campaign> {
+    return request<Campaign>(`/api/campaigns/${id}/resume`, { method: 'POST' });
   },
-  async cancel(id: string) {
-    return request(`/api/campaigns/${id}/cancel`, { method: 'POST' });
+  async cancel(id: string): Promise<Campaign> {
+    return request<Campaign>(`/api/campaigns/${id}/cancel`, { method: 'POST' });
   },
-  async getTargets(id: string) {
-    return request(`/api/campaigns/${id}/targets`);
+  async getTargets(id: string): Promise<Target[]> {
+    return request<Target[]>(`/api/campaigns/${id}/targets`);
   },
-  async getLanes(id: string) {
-    return request(`/api/campaigns/${id}/lanes`);
+  async getLanes(id: string): Promise<LaneSpec[]> {
+    return request<LaneSpec[]>(`/api/campaigns/${id}/lanes`);
   },
-  async getArtifacts(id: string) {
-    return request(`/api/campaigns/${id}/artifacts`);
+  async getArtifacts(id: string): Promise<Artifact[]> {
+    return request<Artifact[]>(`/api/campaigns/${id}/artifacts`);
   },
-  async getArtifactBuckets(id: string) {
-    return request(`/api/campaigns/${id}/artifact-buckets`);
+  async getArtifactBuckets(id: string): Promise<ArtifactBucket[]> {
+    return request<ArtifactBucket[]>(`/api/campaigns/${id}/artifact-buckets`);
   },
-  async getCoverage(id: string) {
-    return request(`/api/campaigns/${id}/coverage`);
+  async getCoverage(id: string): Promise<CoverageSummary> {
+    return request<CoverageSummary>(`/api/campaigns/${id}/coverage`);
   },
-  async getSteering(id: string) {
-    return request(`/api/campaigns/${id}/steering`);
+  async getSteering(id: string): Promise<SteeringDecision[]> {
+    return request<SteeringDecision[]>(`/api/campaigns/${id}/steering`);
   },
-  async getIssues(id: string) {
-    return request(`/api/campaigns/${id}/issues`);
+  async getIssues(id: string): Promise<Issue[]> {
+    return request<Issue[]>(`/api/campaigns/${id}/issues`);
   },
   async getGraph(id: string) {
     return request(`/api/campaigns/${id}/graph`);
@@ -276,8 +284,8 @@ export const campaigns = {
   async getPlans(id: string) {
     return request(`/api/campaigns/${id}/plans`);
   },
-  async createLane(id: string, data: any) {
-    return request(`/api/campaigns/${id}/lanes`, { method: 'POST', body: JSON.stringify(data) });
+  async createLane(id: string, data: Record<string, unknown>): Promise<LaneSpec> {
+    return request<LaneSpec>(`/api/campaigns/${id}/lanes`, { method: 'POST', body: JSON.stringify(data) });
   },
 };
 

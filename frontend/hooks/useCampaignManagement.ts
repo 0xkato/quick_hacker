@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { campaigns as campaignsApi } from '@/lib/api';
-import type { Campaign } from '@/types';
+import type { Campaign, CampaignCreateRequest } from '@/types';
 
 interface UseCampaignManagementProps {
   projectId: string | null;
@@ -34,38 +34,34 @@ export function useCampaignManagement({ projectId, isAuthenticated }: UseCampaig
     return () => clearInterval(interval);
   }, [refreshCampaigns, projectId, isAuthenticated]);
 
-  const createCampaign = useCallback(async (request: any) => {
-    const campaign = await campaignsApi.create(request) as Campaign;
+  const createCampaign = useCallback(async (request: CampaignCreateRequest): Promise<Campaign> => {
+    const campaign = await campaignsApi.create(request);
     setCampaignList(prev => [campaign, ...prev]);
     setSelectedCampaignId(campaign.id);
     return campaign;
   }, []);
 
-  const startCampaign = useCallback(async (id: string) => {
-    const result = await campaignsApi.start(id) as Partial<Campaign>;
+  const startCampaign = useCallback(async (id: string): Promise<void> => {
+    const result = await campaignsApi.start(id);
     setCampaignList(prev => prev.map(c => c.id === id ? { ...c, ...result } : c));
-    return result;
   }, []);
 
-  const pauseCampaign = useCallback(async (id: string) => {
-    const result = await campaignsApi.pause(id) as Partial<Campaign>;
+  const pauseCampaign = useCallback(async (id: string): Promise<void> => {
+    const result = await campaignsApi.pause(id);
     setCampaignList(prev => prev.map(c => c.id === id ? { ...c, ...result } : c));
-    return result;
   }, []);
 
-  const resumeCampaign = useCallback(async (id: string) => {
-    const result = await campaignsApi.resume(id) as Partial<Campaign>;
+  const resumeCampaign = useCallback(async (id: string): Promise<void> => {
+    const result = await campaignsApi.resume(id);
     setCampaignList(prev => prev.map(c => c.id === id ? { ...c, ...result } : c));
-    return result;
   }, []);
 
-  const cancelCampaign = useCallback(async (id: string) => {
-    const result = await campaignsApi.cancel(id) as Partial<Campaign>;
+  const cancelCampaign = useCallback(async (id: string): Promise<void> => {
+    const result = await campaignsApi.cancel(id);
     setCampaignList(prev => prev.map(c => c.id === id ? { ...c, ...result } : c));
-    return result;
   }, []);
 
-  const deleteCampaign = useCallback(async (id: string) => {
+  const deleteCampaign = useCallback(async (id: string): Promise<void> => {
     // No dedicated delete endpoint yet, but we can cancel + remove from list
     try {
       await campaignsApi.cancel(id);

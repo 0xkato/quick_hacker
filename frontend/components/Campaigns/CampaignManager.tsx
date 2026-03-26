@@ -64,6 +64,7 @@ export function CampaignManager({
   const [enabledEngines, setEnabledEngines] = useState<string[]>(ENGINES.map(e => e.id));
   const [maxParallelLanes, setMaxParallelLanes] = useState(2);
   const [lmProvider, setLmProvider] = useState('claude_cli');
+  const [lmModel, setLmModel] = useState('claude-opus-4-6');
   const [steeringInterval, setSteeringInterval] = useState(120);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -96,6 +97,7 @@ export function CampaignManager({
         enabled_engines: enabledEngines,
         max_parallel_lanes: maxParallelLanes,
         lm_provider: lmProvider,
+        lm_model: lmModel,
         steering_interval_seconds: steeringInterval,
       };
       const campaign = await onCreateCampaign(req);
@@ -211,6 +213,31 @@ export function CampaignManager({
               <option value="claude_cli">Claude CLI (subscription)</option>
               <option value="anthropic_sdk">Anthropic SDK (API key)</option>
               <option value="codex_cli">Codex CLI (OpenAI)</option>
+            </select>
+          </div>
+
+          {/* LM Model */}
+          <div>
+            <label className="text-[10px] text-[var(--text-muted)] block mb-1">Model</label>
+            <select
+              value={lmModel}
+              onChange={e => setLmModel(e.target.value)}
+              className="w-full bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs rounded px-2 py-1.5 border border-[var(--border-primary)]"
+            >
+              {lmProvider === 'codex_cli' ? (
+                <>
+                  <option value="gpt-5.4-codex">GPT-5.4 Codex</option>
+                  <option value="gpt-5.2-codex">GPT-5.2 Codex</option>
+                  <option value="o4-mini">o4-mini</option>
+                </>
+              ) : (
+                <>
+                  <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                  <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
+                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                </>
+              )}
             </select>
           </div>
 

@@ -16,6 +16,25 @@ const kindIcon = (kind: string) => {
   }
 };
 
+const engineForTarget = (t: Target) => {
+  const kind = t.kind;
+  const lang = (t.language || '').toLowerCase();
+  if (kind === 'api_route') return 'Schemathesis';
+  if (kind === 'native_function') {
+    if (lang === 'python') return 'Atheris';
+    if (['c', 'cpp', 'c++'].includes(lang)) return 'AFL++';
+    if (lang === 'java') return 'Jazzer';
+    if (lang === 'go') return 'Go Fuzz';
+    if (lang === 'rust') return 'Cargo Fuzz';
+    if (lang === 'solidity') return 'Echidna';
+    return 'Radamsa';
+  }
+  if (kind === 'parser') return 'Grammarinator';
+  if (kind === 'workflow') return 'RESTler';
+  if (kind === 'message_consumer') return 'Boofuzz';
+  return 'Auto';
+};
+
 export function TargetList({ targets, isLoading }: TargetListProps) {
   if (isLoading) {
     return <div className="p-4 text-xs text-[var(--text-muted)] text-center animate-pulse">Loading...</div>;
@@ -41,6 +60,7 @@ export function TargetList({ targets, isLoading }: TargetListProps) {
             {t.language && <span>&middot; {t.language}</span>}
             {t.stateful && <span className="text-yellow-400">&middot; stateful</span>}
             {t.priority_score != null && <span>&middot; priority: {t.priority_score.toFixed(2)}</span>}
+            <span className="text-[10px] px-1 py-0.5 rounded bg-[var(--bg-tertiary)] text-cyan-400">{engineForTarget(t)}</span>
           </div>
           {t.actors && t.actors.length > 0 && (
             <div className="text-[10px] text-[var(--text-muted)]">actors: {t.actors.join(', ')}</div>

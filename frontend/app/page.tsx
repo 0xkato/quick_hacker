@@ -505,6 +505,8 @@ export default function Home() {
                   onDeleteCampaign={campaignMgmt.deleteCampaign as any}
                   repoId={currentProject.id}
                   lanes={laneData.lanes}
+                  targets={targetData.targets}
+                  isLoading={campaignMgmt.isLoading}
                 />
               )}
 

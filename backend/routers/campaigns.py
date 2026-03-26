@@ -44,6 +44,18 @@ async def list_campaigns(
     return await campaign_service.list_campaigns(repo_id=repo_id)
 
 
+@router.delete("/{campaign_id}")
+async def delete_campaign(
+    campaign_id: str,
+    auth_context: AuthContext = Depends(require_auth),
+):
+    """Delete a campaign and all its data."""
+    deleted = await campaign_service.delete_campaign(campaign_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return {"status": "deleted", "id": campaign_id}
+
+
 @router.get("/{campaign_id}", response_model=CampaignResponse)
 async def get_campaign(
     campaign_id: str,

@@ -62,11 +62,10 @@ export function useCampaignManagement({ projectId, isAuthenticated }: UseCampaig
   }, []);
 
   const deleteCampaign = useCallback(async (id: string): Promise<void> => {
-    // No dedicated delete endpoint yet, but we can cancel + remove from list
     try {
-      await campaignsApi.cancel(id);
+      await campaignsApi.delete(id);
     } catch {
-      // May already be cancelled/completed
+      // May not exist anymore
     }
     setCampaignList(prev => prev.filter(c => c.id !== id));
     if (selectedCampaignId === id) {

@@ -254,6 +254,9 @@ export const campaigns = {
   async cancel(id: string): Promise<Campaign> {
     return request<Campaign>(`/api/campaigns/${id}/cancel`, { method: 'POST' });
   },
+  async delete(id: string): Promise<{ status: string; id: string }> {
+    return request(`/api/campaigns/${id}`, { method: 'DELETE' });
+  },
   async getTargets(id: string): Promise<Target[]> {
     return request<Target[]>(`/api/campaigns/${id}/targets`);
   },

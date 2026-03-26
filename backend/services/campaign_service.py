@@ -173,6 +173,16 @@ class CampaignService:
             await session.refresh(row)
             return _db_to_response(row)
 
+    async def delete_campaign(self, campaign_id: str) -> bool:
+        """Delete a campaign and all its data from the database."""
+        async with get_session() as session:
+            row = await session.get(DBCampaign, campaign_id)
+            if row is None:
+                return False
+            await session.delete(row)
+            await session.flush()
+            return True
+
     async def get_current_plan(
         self, campaign_id: str
     ) -> Optional[dict]:

@@ -58,7 +58,7 @@ class RunLaneService:
         execution_bundle_id: str,
         timeout_seconds: int = 1800,
         resource_profile: str = "light",
-        cpu_limit: str = "1",
+        cpu_limit: float = 1.0,
         memory_limit_mb: int = 1024,
         disk_limit_mb: int = 2048,
     ) -> RunLaneResponse:
@@ -72,7 +72,7 @@ class RunLaneService:
             status="queued",
             timeout_seconds=timeout_seconds,
             resource_profile=resource_profile,
-            cpu_limit=float(cpu_limit),
+            cpu_limit=cpu_limit,
             memory_limit_mb=memory_limit_mb,
             disk_limit_mb=disk_limit_mb,
         )

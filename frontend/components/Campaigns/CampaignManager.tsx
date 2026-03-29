@@ -94,7 +94,7 @@ export function CampaignManager({
         campaign_preset: preset,
         target_scope: targetScope || undefined,
         directed_targets: directedTargets ? directedTargets.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-        enabled_engines: enabledEngines,
+        enabled_engines: enabledEngines.length > 0 ? enabledEngines : undefined,
         max_parallel_lanes: maxParallelLanes,
         lm_provider: lmProvider,
         lm_model: lmModel,

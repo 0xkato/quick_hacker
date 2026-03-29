@@ -28,6 +28,9 @@ def replay_artifact(
 ) -> ReplayResult:
     """Replay an artifact candidate against the target.
 
+    For non-HTTP targets (native fuzz), replay is not yet supported.
+    Returns a non-reproduced result so these artifacts are not falsely confirmed.
+
     v1: For HTTP artifacts, re-send the request and check if same failure
     occurs.  The artifact_candidate dict is expected to have:
 
@@ -39,6 +42,15 @@ def replay_artifact(
 
     Returns a ReplayResult with reproduction statistics.
     """
+    # Non-HTTP targets (native fuzz) cannot be replayed via HTTP
+    if not base_url or not base_url.startswith(("http://", "https://")):
+        return ReplayResult(
+            reproduced=False,
+            stability_score=0.0,
+            attempts=0,
+            errors=["Replay not supported for non-HTTP targets"],
+        )
+
     method = artifact_candidate.get("method", "GET").upper()
     path = artifact_candidate.get("path", "/")
     expected_status = artifact_candidate.get("status_code")

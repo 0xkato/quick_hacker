@@ -84,6 +84,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """Initialize database tables."""
-    from .models import Base
+    import database.models  # noqa: F401 -- registers legacy tables on Base
+    import database.campaign_models  # noqa: F401 -- registers campaign tables on Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

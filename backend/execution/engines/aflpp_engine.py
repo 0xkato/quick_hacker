@@ -39,7 +39,7 @@ class AFLPPEngine(EngineInterface):
             "afl-fuzz",
             "-i", seed_dir,
             "-o", output_dir,
-            "-t", str(timeout_seconds * 1000),  # AFL timeout is per-exec in ms
+            "-t", "1000+",                         # Per-exec timeout in ms (+ = auto-calibrate)
             "-V", str(timeout_seconds),          # Total campaign time
             "--", harness_path,
         ]
@@ -119,16 +119,19 @@ class AFLPPEngine(EngineInterface):
                     key, val = line.split(":", 1)
                     key = key.strip()
                     val = val.strip()
-                    if key == "execs_done":
-                        metrics["total_execs"] = int(val)
-                    elif key == "saved_crashes":
-                        metrics["unique_crashes"] = int(val)
-                    elif key == "saved_hangs":
-                        metrics["unique_hangs"] = int(val)
-                    elif key == "corpus_count":
-                        metrics["corpus_size"] = int(val)
-                    elif key == "edges_found":
-                        metrics["edges_found"] = int(val)
-                    elif key == "execs_per_sec":
-                        metrics["exec_speed"] = float(val)
+                    try:
+                        if key == "execs_done":
+                            metrics["total_execs"] = int(val)
+                        elif key == "saved_crashes":
+                            metrics["unique_crashes"] = int(val)
+                        elif key == "saved_hangs":
+                            metrics["unique_hangs"] = int(val)
+                        elif key == "corpus_count":
+                            metrics["corpus_size"] = int(val)
+                        elif key == "edges_found":
+                            metrics["edges_found"] = int(val)
+                        elif key == "execs_per_sec":
+                            metrics["exec_speed"] = float(val)
+                    except (ValueError, TypeError):
+                        pass
         return metrics

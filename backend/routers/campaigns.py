@@ -97,11 +97,17 @@ async def start_campaign(
     auth_context: AuthContext = Depends(require_auth),
 ):
     """Start a campaign -- runs plan + compile phases."""
+    import logging
+    _log = logging.getLogger(__name__)
     try:
         from campaigns.controller import campaign_controller
         return await campaign_controller.start_campaign(campaign_id)
     except ValueError as e:
+        _log.error("[start_campaign] ValueError: %s", e, exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        _log.error("[start_campaign] Unexpected error: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{campaign_id}/lanes", response_model=list[LaneSpecResponse])

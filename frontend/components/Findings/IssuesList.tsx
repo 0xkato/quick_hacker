@@ -46,7 +46,7 @@ export function IssuesList({ issues, isLoading }: IssuesListProps) {
         <div key={issue.id} onClick={() => setSelectedIssue(issue)} className="p-3 border-b border-[var(--border-primary)] hover:bg-[var(--bg-secondary)] cursor-pointer">
           <div className="flex items-center gap-2 mb-1">
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${severityColor(issue.severity)}`}>
-              {issue.severity.toUpperCase()}
+              {(issue.severity ?? 'info').toUpperCase()}
             </span>
             <span className="text-[10px] text-[var(--text-muted)]">{dispositionLabel(issue.disposition)}</span>
           </div>

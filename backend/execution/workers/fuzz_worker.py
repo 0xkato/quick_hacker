@@ -123,7 +123,7 @@ async def execute_run_lane(
         await run_lane_service.update_run_status(
             run_lane_id,
             "running",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
 
         # 2. Docker target lifecycle (only if compose_path provided)
@@ -142,7 +142,7 @@ async def execute_run_lane(
                 await run_lane_service.update_run_status(
                     run_lane_id,
                     "failed",
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
                 )
                 return {
                     "run_lane_id": run_lane_id,
@@ -169,7 +169,7 @@ async def execute_run_lane(
             await run_lane_service.update_run_status(
                 run_lane_id,
                 "failed",
-                completed_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
             return {
                 "run_lane_id": run_lane_id,
@@ -329,7 +329,7 @@ async def execute_run_lane(
                         campaign_id=campaign_id,
                         issue_id=issue.id,
                         disposition=gating_result.disposition or "unknown",
-                        severity="medium",
+                        severity=analysis.get("severity_recommendation") or "medium",
                     )
 
         # 10. Update run status to COMPLETED or FAILED
@@ -337,7 +337,7 @@ async def execute_run_lane(
         await run_lane_service.update_run_status(
             run_lane_id,
             final_status,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
 
         # 10b. Post-run lifecycle: scheduler + completion + steering
@@ -359,7 +359,7 @@ async def execute_run_lane(
             await run_lane_service.update_run_status(
                 run_lane_id,
                 "failed",
-                completed_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
         except Exception:
             logger.exception("Failed to update run status after error")

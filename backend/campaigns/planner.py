@@ -1,10 +1,15 @@
 """Deterministic lane planner for v1 campaigns.
 
-Given targets extracted from an OpenAPI spec, assigns one Schemathesis lane
-per API route target.  No LM needed — this is a pure, deterministic mapping.
+Given targets, assigns one lane per target using the best engine for the
+target's kind and language.  No LM needed — this is a pure, deterministic
+mapping.  Targets are capped per preset to keep compilation tractable.
 """
 
 from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 LANE_BUDGET_PER_PRESET: dict[str, int] = {
     "quick": 60,
@@ -13,6 +18,18 @@ LANE_BUDGET_PER_PRESET: dict[str, int] = {
     "pro": 1800,
     "ultra": 3600,
     "evil": 7200,
+}
+
+# Max lanes per preset — prevents creating thousands of lanes for large repos.
+# Higher tiers get more lanes. Targets are sorted by priority_score so the
+# most promising targets are always included.
+MAX_LANES_PER_PRESET: dict[str, int] = {
+    "quick": 10,
+    "medium": 25,
+    "advanced": 50,
+    "pro": 100,
+    "ultra": 200,
+    "evil": 500,
 }
 
 
@@ -25,10 +42,8 @@ def _get(target, key, default=None):
 
 def _select_engine(target: object, campaign_preset: str) -> str:
     """Select the best engine for a target based on its kind and language."""
-    kind = str(_get(target, "kind", ""))
-    # Normalise enum values
-    if hasattr(kind, "value"):
-        kind = kind.value  # type: ignore[union-attr]
+    raw_kind = _get(target, "kind", "")
+    kind = raw_kind.value if hasattr(raw_kind, "value") else str(raw_kind)
     language = str(_get(target, "language", "")).lower()
 
     if kind == "api_route":
@@ -77,7 +92,11 @@ def plan_lanes_for_targets(
     ``lane_service.create_lane_specs_batch``.
     """
     budget = LANE_BUDGET_PER_PRESET.get(campaign_preset, 60)
+    max_lanes = MAX_LANES_PER_PRESET.get(campaign_preset, 50)
     lanes: list[dict] = []
+
+    # Sort by priority so the cap keeps the most promising targets
+    targets = sorted(targets, key=lambda t: _get(t, "priority_score", 0.0), reverse=True)
 
     for target in targets:
         engine = _select_engine(target, campaign_preset)
@@ -106,5 +125,12 @@ def plan_lanes_for_targets(
                 "status": "planned",
             }
         )
+
+        if len(lanes) >= max_lanes:
+            break
+
+    if len(lanes) < len(targets):
+        logger.info("Planned %d lanes from %d targets (capped at %d for %s preset)",
+                     len(lanes), len(targets), max_lanes, campaign_preset)
 
     return lanes

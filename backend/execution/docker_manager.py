@@ -83,12 +83,14 @@ class DockerNetworkManager:
         network_name = f"qh_{campaign_id}"
         logger.info("Removing Docker network: %s", network_name)
 
-        subprocess.run(
+        result = subprocess.run(
             ["docker", "network", "rm", network_name],
             capture_output=True,
             text=True,
-            check=True,
         )
+        if result.returncode != 0:
+            logger.warning("Network %s removal returned %d: %s",
+                           network_name, result.returncode, result.stderr.strip())
 
     # ------------------------------------------------------------------
     # Target stack lifecycle

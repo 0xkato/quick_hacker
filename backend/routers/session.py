@@ -78,7 +78,7 @@ async def pause_session(
     return {
         "status": "paused",
         "snapshot_path": snapshot_path,
-        "agents_paused": len(pausing_agents),
+        "agents_paused": len(snapshot_agents),
         "findings_saved": len(all_findings),
     }
 

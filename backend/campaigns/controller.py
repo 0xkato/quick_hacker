@@ -7,6 +7,7 @@ phase methods that transition a campaign from CREATED through RUNNING.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from campaigns.intake import detect_capability_profile, validate_support_contract
@@ -26,6 +27,8 @@ from services.seed_set_service import seed_set_service
 from services.target_service import target_service
 from storage.object_store import LocalFileStore
 from targets.extractors.multi_extractor import extract_all_targets
+
+logger = logging.getLogger(__name__)
 
 
 class CampaignController:
@@ -77,15 +80,19 @@ class CampaignController:
         targets = extract_all_targets(
             repo_path=repo_path,
             openapi_path=full_openapi_path,
-            languages=profile.languages,
+            languages=None,  # Always detect from search paths, not profile
             target_scope=target_scope,
             target_filters=target_filters,
             directed_targets=directed_targets,
         )
 
         # 6. Persist targets
+        logger.info("[plan] Campaign %s: extracted %d targets from %s",
+                     campaign_id, len(targets), target_scope or "full repo")
         if targets:
             await target_service.create_targets_batch(campaign_id, targets)
+        else:
+            logger.warning("[plan] Campaign %s: NO targets extracted", campaign_id)
 
         # 7. Transition status to EXTRACTING with started_at
         from datetime import datetime, timezone
@@ -95,7 +102,7 @@ class CampaignController:
         updated = await campaign_service.update_campaign_status(
             campaign_id,
             CampaignStatus.EXTRACTING.value,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
 
         # Emit WebSocket event
@@ -178,127 +185,137 @@ class CampaignController:
 
         total_lanes = len(planned_lanes)
         retired_count = 0
+        compiled_count = 0
 
-        for lane_dict in planned_lanes:
-            # 4a. Create lane spec
-            lane_spec = await lane_service.create_lane_spec(
-                target_id=lane_dict["target_id"],
-                engine=lane_dict["engine"],
-                structure_model=lane_dict["structure_model"],
-                input_producer=lane_dict["input_producer"],
-                feedback_models=lane_dict.get("feedback_models"),
-                oracle_packs=lane_dict.get("oracle_packs"),
-                budget_seconds=lane_dict.get("budget_seconds"),
-                seed_sources=lane_dict.get("seed_sources"),
-            )
+        logger.info("[compile] Campaign %s: compiling %d lanes", campaign_id, total_lanes)
 
-            # 4b. Get target info
-            target = await target_service.get_target(lane_dict["target_id"])
-
-            # 4c-d. Compile and validate harness with retry loop
-            attempt = 0
-            compiled = False
-            while attempt < max_failures and not compiled:
-                attempt += 1
-
-                # Get the engine for this lane
-                engine = lane_dict.get("engine", "schemathesis")
-
-                # Compile harness using the multi-engine compiler
-                harness_result = compile_harness(
-                    engine=engine,
-                    target={
-                        "entrypoint": target.entrypoint,
-                        "stateful": target.stateful,
-                    },
-                    repo_path=repo_path or "",
-                    openapi_url=openapi_filename,
-                    base_url="http://target:8080",
-                    lane_spec=lane_dict,
+        for lane_idx, lane_dict in enumerate(planned_lanes):
+            lane_spec = None
+            try:
+                # 4a. Create lane spec
+                lane_spec = await lane_service.create_lane_spec(
+                    target_id=lane_dict["target_id"],
+                    engine=lane_dict["engine"],
+                    structure_model=lane_dict["structure_model"],
+                    input_producer=lane_dict["input_producer"],
+                    feedback_models=lane_dict.get("feedback_models"),
+                    oracle_packs=lane_dict.get("oracle_packs"),
+                    budget_seconds=lane_dict.get("budget_seconds"),
+                    seed_sources=lane_dict.get("seed_sources"),
                 )
 
-                harness_code = harness_result["code"]
-                harness_language = harness_result.get("language", "python")
+                # 4b. Get target info
+                target = await target_service.get_target(lane_dict["target_id"])
+                if target is None:
+                    logger.warning("[compile] Target %s not found, retiring lane %s",
+                                   lane_dict["target_id"], lane_spec.id)
+                    await lane_service.update_lane_spec_status(lane_spec.id, "retired")
+                    retired_count += 1
+                    continue
 
-                validation = validate_harness(harness_code, language=harness_language)
+                # 4c-d. Compile and validate harness with retry loop
+                attempt = 0
+                compiled = False
+                while attempt < max_failures and not compiled:
+                    attempt += 1
 
-                if validation.passed:
-                    compiled = True
+                    engine = lane_dict.get("engine", "schemathesis")
 
-                    # 4e. Store harness code in artifact store
-                    ext_map = {
-                        "python": ".py", "c": ".c", "cpp": ".cpp",
-                        "java": ".java", "go": "_test.go", "rust": ".rs",
-                        "solidity": ".sol", "json": ".json",
-                        "config": ".conf", "sql": ".sql",
-                    }
-                    ext = ext_map.get(harness_language, ".txt")
-                    harness_ref = f"campaigns/{campaign_id}/harnesses/{lane_spec.id}{ext}"
-                    store.put(harness_ref, harness_code.encode("utf-8"))
-
-                    # Create harness record
-                    harness = await harness_service.create_harness(
-                        lane_spec_id=lane_spec.id,
-                        code_ref=harness_ref,
-                        validation_results=validation.gates,
+                    harness_result = compile_harness(
+                        engine=engine,
+                        target={
+                            "entrypoint": target.entrypoint,
+                            "language": target.language or "c",
+                            "stateful": target.stateful,
+                        },
+                        repo_path=repo_path or "",
+                        openapi_url=openapi_filename,
+                        base_url="http://target:8080",
+                        lane_spec=lane_dict,
                     )
 
-                    # Create oracle pack
-                    oracle_pack = await oracle_pack_service.create_oracle_pack(
-                        lane_spec_id=lane_spec.id,
-                        config={"packs": lane_dict.get("oracle_packs", [])},
-                    )
+                    harness_code = harness_result["code"]
+                    harness_language = harness_result.get("language", "python")
 
-                    # Create seed set
-                    seed_set = await seed_set_service.create_seed_set(
-                        lane_spec_id=lane_spec.id,
-                        sources=lane_dict.get("seed_sources", []),
-                    )
+                    validation = validate_harness(harness_code, language=harness_language)
 
-                    # Create execution bundle
-                    await execution_bundle_service.create_bundle(
-                        campaign_id=campaign_id,
-                        campaign_plan_revision=1,
-                        lane_spec_id=lane_spec.id,
-                        lane_spec_revision=lane_spec.revision,
-                        harness_id=harness["id"],
-                        harness_revision=harness.get("revision", 1),
-                        oracle_pack_id=oracle_pack["id"],
-                        oracle_pack_revision=oracle_pack.get("revision", 1),
-                        seed_set_id=seed_set["id"],
-                    )
+                    if validation.passed:
+                        compiled = True
 
-                    # Mark lane as validated
-                    await lane_service.update_lane_spec_status(
-                        lane_spec.id, "validated"
-                    )
-                else:
-                    if attempt < max_failures:
-                        # Log and retry (v1: same code, future: adjust based on diagnostics)
-                        import logging as _logging
-                        _logging.getLogger(__name__).warning(
-                            "[compile] Lane %s attempt %d failed: %s",
-                            lane_spec.id, attempt, getattr(validation, "errors", "unknown"),
+                        ext_map = {
+                            "python": ".py", "c": ".c", "cpp": ".cpp",
+                            "java": ".java", "go": "_test.go", "rust": ".rs",
+                            "solidity": ".sol", "json": ".json",
+                            "config": ".conf", "sql": ".sql",
+                        }
+                        ext = ext_map.get(harness_language, ".txt")
+                        harness_ref = f"campaigns/{campaign_id}/harnesses/{lane_spec.id}{ext}"
+                        store.put(harness_ref, harness_code.encode("utf-8"))
+
+                        harness = await harness_service.create_harness(
+                            lane_spec_id=lane_spec.id,
+                            code_ref=harness_ref,
+                            validation_results=validation.gates,
                         )
 
-            if not compiled:
-                # All attempts exhausted -- retire the lane
-                await lane_service.update_lane_spec_status(
-                    lane_spec.id, "retired"
-                )
-                retired_count += 1
+                        oracle_pack = await oracle_pack_service.create_oracle_pack(
+                            lane_spec_id=lane_spec.id,
+                            config={"packs": lane_dict.get("oracle_packs", [])},
+                        )
 
-                # Emit lane retired event
-                from observability.campaign_events import campaign_broadcaster
-                campaign_broadcaster.emit_lane_retired(
-                    campaign_id, lane_spec.id,
-                    f"Failed after {max_failures} attempts",
-                )
+                        seed_set = await seed_set_service.create_seed_set(
+                            lane_spec_id=lane_spec.id,
+                            sources=lane_dict.get("seed_sources", []),
+                        )
+
+                        await execution_bundle_service.create_bundle(
+                            campaign_id=campaign_id,
+                            campaign_plan_revision=1,
+                            lane_spec_id=lane_spec.id,
+                            lane_spec_revision=lane_spec.revision,
+                            harness_id=harness["id"],
+                            harness_revision=harness.get("revision", 1),
+                            oracle_pack_id=oracle_pack["id"],
+                            oracle_pack_revision=oracle_pack.get("revision", 1),
+                            seed_set_id=seed_set["id"],
+                        )
+
+                        await lane_service.update_lane_spec_status(
+                            lane_spec.id, "validated"
+                        )
+                        compiled_count += 1
+                    else:
+                        logger.warning(
+                            "[compile] Lane %s attempt %d/%d failed: %s",
+                            lane_spec.id, attempt, max_failures, validation.errors,
+                        )
+
+                if not compiled:
+                    await lane_service.update_lane_spec_status(
+                        lane_spec.id, "retired"
+                    )
+                    retired_count += 1
+
+                    from observability.campaign_events import campaign_broadcaster
+                    campaign_broadcaster.emit_lane_retired(
+                        campaign_id, lane_spec.id,
+                        f"Failed after {max_failures} attempts",
+                    )
+
+            except Exception:
+                lane_id = lane_spec.id if lane_spec else "unknown"
+                logger.exception("[compile] Unexpected error compiling lane %s", lane_id)
+                if lane_spec:
+                    await lane_service.update_lane_spec_status(lane_spec.id, "retired")
+                retired_count += 1
 
         # 5. Update campaign status
         from observability.campaign_events import campaign_broadcaster
 
-        if retired_count == total_lanes:
+        logger.info("[compile] Campaign %s: %d compiled, %d retired out of %d lanes",
+                     campaign_id, compiled_count, retired_count, total_lanes)
+
+        if compiled_count == 0:
             # All lanes retired
             updated = await campaign_service.update_campaign_status(
                 campaign_id,
@@ -442,7 +459,7 @@ class CampaignController:
         updated = await campaign_service.update_campaign_status(
             campaign_id,
             CampaignStatus.RUNNING.value,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
 
         # 5. Emit WebSocket event
@@ -477,8 +494,8 @@ class CampaignController:
 
         all_runs = []
         for bundle in bundles:
-            bundle_id = bundle.id if hasattr(bundle, "id") else bundle.get("id")
-            runs = await run_lane_service.list_runs(bundle_id)
+            lane_spec_id = bundle.lane_spec_id if hasattr(bundle, "lane_spec_id") else bundle.get("lane_spec_id")
+            runs = await run_lane_service.list_runs(lane_spec_id)
             all_runs.extend(runs)
 
         if not all_runs:
@@ -504,7 +521,7 @@ class CampaignController:
         result = await campaign_service.update_campaign_status(
             campaign_id,
             final_status,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
 
         campaign_broadcaster.emit_campaign_status(campaign_id, final_status)
@@ -577,7 +594,14 @@ class CampaignController:
     async def start_campaign(self, campaign_id: str) -> CampaignResponse:
         """Full pipeline: plan -> compile -> execute."""
         await self.plan_campaign(campaign_id)
-        await self.compile_campaign(campaign_id)
+        result = await self.compile_campaign(campaign_id)
+
+        # Don't proceed to execute if compilation failed all lanes
+        if result and result.status == CampaignStatus.FAILED:
+            logger.error("[start] Campaign %s failed during compilation: %s",
+                         campaign_id, result.error_message)
+            return result
+
         return await self.execute_campaign(campaign_id)
 
 

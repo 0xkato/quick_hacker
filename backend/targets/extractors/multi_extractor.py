@@ -86,12 +86,14 @@ def extract_all_targets(
         scope_dirs = [s.strip() for s in target_scope.split(",")]
         for scope_dir in scope_dirs:
             full_path = Path(repo_path) / scope_dir
+            logger.info("Checking scope dir: %r -> %s (exists=%s, is_dir=%s)",
+                        scope_dir, full_path, full_path.exists(), full_path.is_dir() if full_path.exists() else "N/A")
             if full_path.exists() and full_path.is_dir():
                 scoped_paths.append(str(full_path))
 
         if not scoped_paths:
             logger.warning(
-                "Target scope '%s' matched no directories in %s",
+                "Target scope %r matched no directories in %s",
                 target_scope,
                 repo_path,
             )
@@ -100,10 +102,9 @@ def extract_all_targets(
     search_paths: str | list[str] = scoped_paths if scoped_paths else repo_path
 
     # -----------------------------------------------------------------
-    # Auto-detect languages
+    # Auto-detect languages from actual search paths
     # -----------------------------------------------------------------
     if not languages:
-        # Detect from the scoped paths (or full repo)
         if isinstance(search_paths, list):
             all_langs: set[str] = set()
             for sp in search_paths:
@@ -126,9 +127,9 @@ def extract_all_targets(
     # Language-specific extractors
     # -----------------------------------------------------------------
     extractor_map = {
-        "c": lambda: extract_c_targets(search_paths, "c"),
-        "cpp": lambda: extract_c_targets(search_paths, "cpp"),
-        "c++": lambda: extract_c_targets(search_paths, "cpp"),
+        "c": lambda: extract_c_targets(search_paths, "c", repo_root=repo_path),
+        "cpp": lambda: extract_c_targets(search_paths, "cpp", repo_root=repo_path),
+        "c++": lambda: extract_c_targets(search_paths, "cpp", repo_root=repo_path),
         "python": lambda: extract_python_targets(search_paths),
         "solidity": lambda: extract_solidity_targets(search_paths),
         "go": lambda: extract_go_targets(search_paths),
@@ -138,14 +139,17 @@ def extract_all_targets(
         "typescript": lambda: extract_js_targets(search_paths),
     }
 
+    logger.info("Extracting targets for languages: %s from paths: %s", languages, search_paths)
+
     for lang in languages:
         extractor = extractor_map.get(lang.lower())
         if extractor:
             try:
                 lang_targets = extractor()
+                logger.info("  %s extractor found %d targets", lang, len(lang_targets))
                 targets.extend(lang_targets)
             except Exception:
-                pass
+                logger.exception("  %s extractor failed", lang)
 
     # -----------------------------------------------------------------
     # Apply filters
@@ -252,11 +256,12 @@ def _detect_languages(repo_path: str) -> list[str]:
         ".js": "javascript", ".ts": "typescript", ".mjs": "javascript",
     }
 
+    skip_dirs = {"node_modules", "vendor", ".git", "test", "tests", "build"}
     langs: set[str] = set()
     for f in p.rglob("*"):
         if f.is_file() and f.suffix in ext_to_lang:
-            rel = str(f.relative_to(p))
-            if not any(skip in rel for skip in ["node_modules", "vendor", ".git", "test"]):
+            parts = {part.lower() for part in f.relative_to(p).parts}
+            if not (skip_dirs & parts):
                 langs.add(ext_to_lang[f.suffix])
 
     return list(langs)

@@ -118,7 +118,7 @@ class ExecutionBundle(Base):
     )
     campaign_plan_revision = Column(Integer, nullable=True)
     lane_spec_id = Column(
-        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     lane_spec_revision = Column(Integer, nullable=True)
     harness_id = Column(
@@ -155,7 +155,7 @@ class RunLane(Base):
         String(64), ForeignKey("lane_specs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     execution_bundle_id = Column(
-        String(64), ForeignKey("execution_bundles.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("execution_bundles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status = Column(String(32), nullable=False, default="queued")
     started_at = Column(DateTime, nullable=True)

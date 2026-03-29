@@ -74,8 +74,12 @@ async def process_raw_artifact(
     # 4. Store evidence in object store
     evidence_data = candidate.get("evidence")
     if evidence_data is not None and object_store is not None:
+        import json as _json
         store_key = f"artifacts/{campaign_id}/{artifact.id}/evidence"
-        object_store.put(store_key, evidence_data)
+        if isinstance(evidence_data, bytes):
+            object_store.put(store_key, evidence_data)
+        else:
+            object_store.put(store_key, _json.dumps(evidence_data, default=str).encode())
 
     # 5. Return artifact dict if should_replay, else None
     if should_replay(bucket_key, bucket):

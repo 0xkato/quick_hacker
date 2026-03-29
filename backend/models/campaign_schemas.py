@@ -194,7 +194,7 @@ class ExecutionBundleResponse(BaseModel):
     campaign_id: str
     campaign_plan_revision: int | None = None
     lane_spec_id: str
-    lane_spec_revision: int
+    lane_spec_revision: int | None = None
     harness_id: str | None = None
     harness_revision: int | None = None
     oracle_pack_id: str | None = None

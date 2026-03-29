@@ -185,7 +185,7 @@ class ArtifactService:
                 session.add(row)
             else:
                 row.artifact_count = row.artifact_count + 1
-                row.last_seen_at = datetime.now(timezone.utc)
+                row.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
             await session.flush()
             await session.refresh(row)

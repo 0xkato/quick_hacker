@@ -83,7 +83,14 @@ class TargetService:
         campaign_id: str,
         targets: list[dict],
     ) -> list[TargetResponse]:
-        """Create multiple targets in a single transaction."""
+        """Create multiple targets in a single transaction.
+
+        Uses add_all + flush for bulk performance. Skips per-row refresh;
+        created_at is set client-side so we don't need server defaults.
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         db_targets = []
         for t in targets:
             db_target = DBTarget(
@@ -97,15 +104,13 @@ class TargetService:
                 actors=t.get("actors"),
                 reset_strategy=t.get("reset_strategy"),
                 priority_score=t.get("priority_score"),
+                created_at=now,
             )
             db_targets.append(db_target)
 
         async with get_session() as session:
-            for db_target in db_targets:
-                session.add(db_target)
+            session.add_all(db_targets)
             await session.flush()
-            for db_target in db_targets:
-                await session.refresh(db_target)
             return [_db_to_response(t) for t in db_targets]
 
     async def get_target(

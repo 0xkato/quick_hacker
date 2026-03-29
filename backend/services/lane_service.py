@@ -130,9 +130,15 @@ class LaneService:
         campaign_id: str | None = None,
         target_id: str | None = None,
     ) -> list[LaneSpecResponse]:
-        """List lane specs, optionally filtered by target_id."""
+        """List lane specs, optionally filtered by campaign_id or target_id."""
+        from database.campaign_models import Target as DBTarget
+
         async with get_session() as session:
             stmt = select(DBLaneSpec)
+            if campaign_id is not None:
+                stmt = stmt.join(DBTarget, DBLaneSpec.target_id == DBTarget.id).where(
+                    DBTarget.campaign_id == campaign_id
+                )
             if target_id is not None:
                 stmt = stmt.where(DBLaneSpec.target_id == target_id)
             stmt = stmt.order_by(DBLaneSpec.created_at.desc())

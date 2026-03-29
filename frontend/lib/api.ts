@@ -243,7 +243,8 @@ export const campaigns = {
     return request<Campaign>(`/api/campaigns/${id}/plan`, { method: 'POST' });
   },
   async start(id: string): Promise<Campaign> {
-    return request<Campaign>(`/api/campaigns/${id}/start`, { method: 'POST' });
+    // Campaign start runs plan+compile+execute — can take minutes for large repos
+    return request<Campaign>(`/api/campaigns/${id}/start`, { method: 'POST' }, 600000);
   },
   async pause(id: string): Promise<Campaign> {
     return request<Campaign>(`/api/campaigns/${id}/pause`, { method: 'POST' });

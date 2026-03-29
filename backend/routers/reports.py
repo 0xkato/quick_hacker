@@ -44,7 +44,7 @@ async def export_findings_report(
     if min_severity:
         severity_order = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 5}
         min_order = severity_order.get(min_severity.lower(), 999)
-        severity_filter = [s for s, o in severity_order.items() if o >= min_order]
+        severity_filter = [s for s, o in severity_order.items() if o <= min_order]
         query_parts.append(f"AND severity IN ({','.join([':sev_' + str(i) for i in range(len(severity_filter))])})")
         for i, sev in enumerate(severity_filter):
             params[f"sev_{i}"] = sev

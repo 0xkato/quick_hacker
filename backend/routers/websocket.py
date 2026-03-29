@@ -47,17 +47,20 @@ class ConnectionManager:
         if not self.active_connections:
             return
 
+        # Snapshot to avoid RuntimeError if connect/disconnect mutates the set
+        async with self._lock:
+            connections = set(self.active_connections)
+
         disconnected = set()
         message_str = json.dumps(message, default=str)
 
-        for connection in self.active_connections:
+        for connection in connections:
             try:
                 await connection.send_text(message_str)
             except Exception as e:
                 logger.debug(f"Broadcast failed for connection: {e}")
                 disconnected.add(connection)
 
-        # Clean up disconnected clients
         if disconnected:
             async with self._lock:
                 self.active_connections -= disconnected

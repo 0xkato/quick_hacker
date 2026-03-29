@@ -32,23 +32,14 @@ def _try_lm_enhancement(engine: str, target: dict, repo_path: str, result: dict)
 
     Mutates *result* in-place: on success sets ``code`` to the LM output and
     adds ``lm_generated = True``; on failure adds ``lm_generated = False``.
+
+    Currently disabled during synchronous compilation to avoid blocking
+    the HTTP request (each Claude CLI call takes up to 120s). LM
+    enhancement will be moved to an async background job.
     """
-    from lanes.lm_harness_generator import generate_harness_with_lm
-
-    lm_code = generate_harness_with_lm(
-        engine=engine,
-        target=target,
-        repo_path=repo_path,
-        template_code=result["code"],
-    )
-
-    if lm_code:
-        result["code"] = lm_code
-        result["lm_generated"] = True
-        logger.info("LM-generated harness for engine=%s target=%s", engine, target.get("entrypoint"))
-    else:
-        result["lm_generated"] = False
-
+    # Skip LM calls during bulk compilation — template harnesses pass
+    # validation and are sufficient for v1 execution.
+    result["lm_generated"] = False
     return result
 
 

@@ -46,7 +46,7 @@ class CapabilityProfile:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_COMPOSE_NAMES = ("docker-compose.yml", "compose.yaml")
+_COMPOSE_NAMES = ("docker-compose.yml", "docker-compose.yaml", "compose.yaml", "compose.yml")
 
 _OPENAPI_MARKERS = ("openapi", "swagger")
 
@@ -61,6 +61,13 @@ _EXTENSION_LANG_MAP: dict[str, str] = {
     ".rs": "rust",
     ".java": "java",
     ".rb": "ruby",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".sol": "solidity",
 }
 
 _PYTHON_FRAMEWORKS = {"fastapi": "fastapi", "django": "django", "flask": "flask"}
